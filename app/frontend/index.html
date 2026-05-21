@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Anomalo</title>
+    <link rel="icon" href="/static/icon.png" />
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <div class="app">
+      <aside class="sidebar">
+        <div class="brand">
+          <img src="/static/icon.png" alt="" class="brand-icon" />
+          <div>
+            <h1>Anomalo</h1>
+            <p id="connectionStatus">Disconnected</p>
+          </div>
+        </div>
+
+        <section class="panel">
+          <div class="panel-title">Agent State</div>
+          <div class="state-grid">
+            <div>
+              <span class="field-label">State</span>
+              <strong id="agentState" class="state-pill">Idle</strong>
+            </div>
+            <div>
+              <span class="field-label">Run</span>
+              <strong id="runId">none</strong>
+            </div>
+            <div>
+              <span class="field-label">Profile</span>
+              <strong id="promptProfile">default</strong>
+            </div>
+            <div>
+              <span class="field-label">Iteration</span>
+              <strong id="iterationCount">0</strong>
+            </div>
+          </div>
+          <div id="stateDetail" class="state-detail">Waiting for input.</div>
+        </section>
+
+        <section class="panel skill-panel">
+          <div class="panel-header">
+            <div class="panel-title">Session Skills</div>
+          </div>
+          <div id="skillStatus" class="memory-status">Loading skills...</div>
+          <div id="skillList" class="skill-list"></div>
+        </section>
+
+        <section class="panel skill-panel">
+          <div class="panel-header">
+            <div class="panel-title">Session MCP</div>
+          </div>
+          <div id="mcpStatus" class="memory-status">Loading MCP servers...</div>
+          <div id="mcpList" class="skill-list"></div>
+        </section>
+
+        <section class="panel memory-panel">
+          <div class="panel-header">
+            <div class="panel-title">Legacy AGENTS.md Memory</div>
+          </div>
+          <form id="memoryForm" class="memory-form">
+            <input id="memoryFile" type="file" accept=".md,text/markdown,text/plain" />
+            <button id="memoryUploadButton" class="secondary-button" type="submit">Upload</button>
+          </form>
+          <div id="memoryStatus" class="memory-status">No memory loaded.</div>
+          <pre id="memoryPreview" class="memory-preview"></pre>
+        </section>
+
+        <section class="panel context-panel">
+          <div class="panel-header">
+            <div class="panel-title">Context Assembly</div>
+            <button id="copyMessagesButton" class="secondary-button" type="button" disabled>
+              Copy Messages
+            </button>
+          </div>
+          <div id="contextStats" class="context-stats">No LLM request yet.</div>
+          <div id="contextSegments" class="context-segments"></div>
+          <div id="messageArray" class="message-array"></div>
+        </section>
+
+        <section class="panel prompt-panel">
+          <div class="panel-header">
+            <div class="panel-title">Raw LLM Request</div>
+            <button id="copyPromptButton" class="secondary-button" type="button" disabled>Copy</button>
+          </div>
+          <pre id="promptOutput" class="prompt-output">Loading prompt profile...</pre>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title">Tools</div>
+          <div id="toolList" class="tool-list"></div>
+        </section>
+
+        <section class="panel event-panel">
+          <div class="panel-title">Agent Events</div>
+          <div id="eventLog" class="event-log"></div>
+        </section>
+      </aside>
+
+      <main class="workspace">
+        <header class="run-header">
+          <div>
+            <span class="field-label">Current Output</span>
+            <h2 id="runTitle">Ready</h2>
+          </div>
+          <div id="runStatusBadge" class="run-status">Idle</div>
+        </header>
+
+        <section id="conversation" class="conversation">
+          <div class="empty-state">Send a message to start a run.</div>
+        </section>
+
+        <form id="chatForm" class="composer">
+          <textarea id="messageInput" rows="1" placeholder="Message Anomalo"></textarea>
+          <button id="sendButton" type="submit">Send</button>
+        </form>
+      </main>
+    </div>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
