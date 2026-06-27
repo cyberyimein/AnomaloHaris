@@ -1,4 +1,5 @@
 import json
+import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -12,6 +13,8 @@ from app.tools.base import ToolContext, ToolResult
 from app.tools.mcp_provider import MCPManager
 from app.tools.registry import ToolRegistry
 from app.tools.skills import SkillManager
+
+logger = logging.getLogger(__name__)
 
 
 class AgentRuntime:
@@ -33,6 +36,11 @@ class AgentRuntime:
 
     async def run(self, session_id: str, user_content: str) -> AsyncIterator[AgentEvent]:
         run_id = make_run_id()
+        logger.info(
+            "Agent run started: session_id=%s profile=%s",
+            session_id,
+            self.settings.prompt_profile,
+        )
         yield event("run.started", session_id, run_id)
 
         try:
@@ -41,13 +49,16 @@ class AgentRuntime:
                 self.settings.prompt_profile,
             )
         except Exception as exc:  # noqa: BLE001
+            logger.exception("Prompt loading failed for session_id=%s", session_id)
             yield event("run.error", session_id, run_id, error=str(exc))
             return
 
         memory_message = load_agent_memory_message(self.settings.agent_memory_path)
         memory_messages = [memory_message] if memory_message is not None else []
         skill_catalog_message = self.skills.skill_catalog_message()
-        skill_catalog_messages = [skill_catalog_message] if skill_catalog_message is not None else []
+        skill_catalog_messages = (
+            [skill_catalog_message] if skill_catalog_message is not None else []
+        )
         mcp_catalog_message = self.mcp.catalog_message()
         mcp_catalog_messages = [mcp_catalog_message] if mcp_catalog_message is not None else []
         history_messages = self.sessions.get_messages(session_id)
@@ -132,6 +143,11 @@ class AgentRuntime:
                             {"role": "assistant", "content": assistant_text},
                         )
                         yield event("message.done", session_id, run_id)
+                        logger.info(
+                            "Agent run finished: session_id=%s text=%s",
+                            session_id,
+                            final_assistant_text[:160],
+                        )
                         yield event(
                             "run.finished",
                             session_id,
@@ -140,12 +156,18 @@ class AgentRuntime:
                         )
                         return
             except Exception as exc:  # noqa: BLE001
+                logger.exception("LLM streaming failed for session_id=%s", session_id)
                 yield event("run.error", session_id, run_id, error=str(exc))
                 return
 
             if not tool_calls:
                 self.sessions.append(session_id, {"role": "assistant", "content": assistant_text})
                 yield event("message.done", session_id, run_id)
+                logger.info(
+                    "Agent run finished without tool calls: session_id=%s text=%s",
+                    session_id,
+                    final_assistant_text[:160],
+                )
                 yield event("run.finished", session_id, run_id, final_text=final_assistant_text)
                 return
 
@@ -175,6 +197,7 @@ class AgentRuntime:
                     tool=call.name,
                     arguments=call.arguments,
                 )
+                logger.info("Tool call started: session_id=%s tool=%s", session_id, call.name)
                 result = await self._call_tool_safely(call.name, call.arguments, tool_context)
                 self._apply_skill_state(session_id, result)
                 self._apply_mcp_state(session_id, result)
@@ -186,6 +209,12 @@ class AgentRuntime:
                     ok=result.ok,
                     content=result.content,
                     data=result.data,
+                )
+                logger.info(
+                    "Tool call finished: session_id=%s tool=%s ok=%s",
+                    session_id,
+                    call.name,
+                    result.ok,
                 )
                 loop_messages.append(
                     {

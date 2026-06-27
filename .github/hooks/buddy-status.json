@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "hooks": {
+    "userPromptSubmitted": [
+      {
+        "type": "command",
+        "bash": "./scripts/copilot_buddy_hook.py userPromptSubmitted",
+        "powershell": "python .\\scripts\\copilot_buddy_hook.py userPromptSubmitted",
+        "cwd": ".",
+        "timeoutSec": 5
+      }
+    ],
+    "preToolUse": [
+      {
+        "type": "command",
+        "bash": "./scripts/copilot_buddy_hook.py preToolUse",
+        "powershell": "python .\\scripts\\copilot_buddy_hook.py preToolUse",
+        "cwd": ".",
+        "timeoutSec": 5
+      }
+    ],
+    "permissionRequest": [
+      {
+        "type": "command",
+        "bash": "./scripts/copilot_buddy_hook.py permissionRequest",
+        "powershell": "python .\\scripts\\copilot_buddy_hook.py permissionRequest",
+        "cwd": ".",
+        "timeoutSec": 120
+      }
+    ],
+    "notification": [
+      {
+        "type": "command",
+        "bash": "./scripts/copilot_buddy_hook.py notification",
+        "powershell": "python .\\scripts\\copilot_buddy_hook.py notification",
+        "cwd": ".",
+        "timeoutSec": 5,
+        "matcher": "permission_prompt"
+      }
+    ],
+    "agentStop": [
+      {
+        "type": "command",
+        "bash": "./scripts/copilot_buddy_hook.py agentStop",
+        "powershell": "python .\\scripts\\copilot_buddy_hook.py agentStop",
+        "cwd": ".",
+        "timeoutSec": 5
+      }
+    ],
+    "sessionEnd": [
+      {
+        "type": "command",
+        "bash": "./scripts/copilot_buddy_hook.py sessionEnd",
+        "powershell": "python .\\scripts\\copilot_buddy_hook.py sessionEnd",
+        "cwd": ".",
+        "timeoutSec": 5
+      }
+    ],
+    "errorOccurred": [
+      {
+        "type": "command",
+        "bash": "./scripts/copilot_buddy_hook.py errorOccurred",
+        "powershell": "python .\\scripts\\copilot_buddy_hook.py errorOccurred",
+        "cwd": ".",
+        "timeoutSec": 5
+      }
+    ]
+  }
+}

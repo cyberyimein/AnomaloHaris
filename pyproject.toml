@@ -3,7 +3,7 @@ name = "anomalo"
 version = "0.1.0"
 description = "Personal FastAPI AI agent host with OpenRouter, tools, skills, MCP, and streaming chat."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12,<3.13"
 dependencies = [
   "fastapi>=0.115.0",
   "uvicorn[standard]>=0.30.0",
@@ -19,6 +19,19 @@ mcp = [
   "mcp>=1.0.0",
 ]
 
+audio = [
+  "faster-whisper>=1.1.0",
+  "kokoro>=0.7.4; python_version < '3.13'",
+  "misaki[zh]>=0.7.4; python_version < '3.13'",
+  "numpy>=1.26.0; python_version < '3.13'",
+  "piper-plus>=0.4.0",
+  "soundfile>=0.12.1",
+]
+
+buddy = [
+  "pyserial>=3.5",
+]
+
 dev = [
   "ruff>=0.8.0",
   "pytest>=8.3.0",
@@ -28,7 +41,7 @@ dev = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]

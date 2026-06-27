@@ -2,8 +2,20 @@ from functools import lru_cache
 
 from app.agent.runtime import AgentRuntime
 from app.agent.session import SessionStore
+from app.audio.base import TextToSpeechProvider
+from app.audio.providers import (
+    CosyVoiceTTSProvider,
+    FasterWhisperSTTProvider,
+    KokoroTTSProvider,
+    MacOSSayTTSProvider,
+    PiperPlusTTSProvider,
+)
+from app.audio.service import VoiceService
+from app.buddy.audio_bridge import BuddyAudioBridge
+from app.buddy.gateway import BuddyGateway
 from app.config import get_settings
 from app.llm.openai_client import OpenAIChatClient
+from app.tools.buddy import BuddyToolProvider
 from app.tools.local import CoreToolProvider
 from app.tools.mcp_provider import MCPManager, MCPProvider
 from app.tools.python_sandbox import PythonSandboxProvider
@@ -22,6 +34,7 @@ def get_tool_registry() -> ToolRegistry:
     return ToolRegistry(
         providers=[
             CoreToolProvider(),
+            BuddyToolProvider(get_buddy_gateway()),
             PythonSandboxProvider(settings),
             SkillProvider(settings.skills_dir),
             MCPProvider(settings.mcp_config_path, settings.mcp_timeout_seconds),
@@ -55,3 +68,51 @@ def get_skill_manager() -> SkillManager:
 def get_mcp_manager() -> MCPManager:
     return MCPManager(get_settings().mcp_config_path)
 
+
+@lru_cache
+def get_buddy_gateway() -> BuddyGateway:
+    return BuddyGateway(get_settings())
+
+
+@lru_cache
+def get_stt_provider() -> FasterWhisperSTTProvider:
+    settings = get_settings()
+    if settings.audio_stt_provider != "faster_whisper":
+        msg = f"Unsupported STT provider: {settings.audio_stt_provider}"
+        raise ValueError(msg)
+    return FasterWhisperSTTProvider(settings)
+
+
+@lru_cache
+def get_tts_provider() -> TextToSpeechProvider:
+    settings = get_settings()
+    if settings.audio_tts_provider == "piper_plus":
+        return PiperPlusTTSProvider(settings)
+    if settings.audio_tts_provider == "kokoro":
+        return KokoroTTSProvider(settings)
+    if settings.audio_tts_provider == "cosyvoice":
+        return CosyVoiceTTSProvider(settings)
+    if settings.audio_tts_provider == "say":
+        return MacOSSayTTSProvider(settings)
+    msg = f"Unsupported TTS provider: {settings.audio_tts_provider}"
+    raise ValueError(msg)
+
+
+@lru_cache
+def get_voice_service() -> VoiceService:
+    return VoiceService(
+        settings=get_settings(),
+        runtime=get_agent_runtime(),
+        buddy=get_buddy_gateway(),
+        stt=get_stt_provider(),
+        tts=get_tts_provider(),
+    )
+
+
+@lru_cache
+def get_buddy_audio_bridge() -> BuddyAudioBridge:
+    return BuddyAudioBridge(
+        get_settings(),
+        gateway=get_buddy_gateway(),
+        voice=get_voice_service(),
+    )
