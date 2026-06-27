@@ -38,7 +38,23 @@ class FakeTTSProvider:
 
 
 class FakeRuntime:
-    async def run(self, session_id: str, user_content: str):  # type: ignore[no-untyped-def]
+    def __init__(self) -> None:
+        self.calls: list[dict[str, str | None]] = []
+
+    async def run(
+        self,
+        session_id: str,
+        user_content: str,
+        *,
+        prompt_profile: str | None = None,
+    ):  # type: ignore[no-untyped-def]
+        self.calls.append(
+            {
+                "session_id": session_id,
+                "user_content": user_content,
+                "prompt_profile": prompt_profile,
+            }
+        )
         yield event("run.started", session_id, "run_1")
         yield event("message.delta", session_id, "run_1", content="好的")
         yield event("run.finished", session_id, "run_1", final_text=f"已处理: {user_content}")
@@ -65,7 +81,8 @@ async def test_voice_service_uses_transcript_language_for_reply_audio() -> None:
         audio_tts_default_voice="fallback-voice",
         audio_tts_default_voice_zh="zh-voice",
     )
-    service = VoiceService(settings=settings, runtime=FakeRuntime(), buddy=None, stt=stt, tts=tts)
+    runtime = FakeRuntime()
+    service = VoiceService(settings=settings, runtime=runtime, buddy=None, stt=stt, tts=tts)
 
     result = await service.chat(
         audio_bytes=b"audio",
@@ -77,6 +94,7 @@ async def test_voice_service_uses_transcript_language_for_reply_audio() -> None:
     assert result.session_id == "session_voice"
     assert result.transcript.text == "你好，打开客厅灯"
     assert result.final_text == "已处理: 你好，打开客厅灯"
+    assert runtime.calls[0]["prompt_profile"] == "buddy_voice"
     assert result.output_language == "zh"
     assert tts.calls[0]["language"] == "zh"
     assert tts.calls[0]["voice"] is None
@@ -87,7 +105,14 @@ async def test_voice_service_uses_transcript_language_for_reply_audio() -> None:
 @pytest.mark.asyncio
 async def test_voice_service_prefers_reply_text_language_for_audio() -> None:
     class EnglishReplyRuntime:
-        async def run(self, session_id: str, user_content: str):  # type: ignore[no-untyped-def]
+        async def run(
+            self,
+            session_id: str,
+            user_content: str,
+            *,
+            prompt_profile: str | None = None,
+        ):  # type: ignore[no-untyped-def]
+            del prompt_profile
             del user_content
             yield event("run.finished", session_id, "run_2", final_text="Handled successfully.")
 
@@ -110,7 +135,14 @@ async def test_voice_service_prefers_reply_text_language_for_audio() -> None:
 @pytest.mark.asyncio
 async def test_voice_service_sanitizes_reply_text_before_audio() -> None:
     class MarkdownReplyRuntime:
-        async def run(self, session_id: str, user_content: str):  # type: ignore[no-untyped-def]
+        async def run(
+            self,
+            session_id: str,
+            user_content: str,
+            *,
+            prompt_profile: str | None = None,
+        ):  # type: ignore[no-untyped-def]
+            del prompt_profile
             del session_id, user_content
             yield event(
                 "run.finished",

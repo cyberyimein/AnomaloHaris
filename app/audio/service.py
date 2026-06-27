@@ -116,9 +116,14 @@ class VoiceService:
         *,
         text: str,
         session_id: str | None = None,
+        prompt_profile: str | None = None,
     ) -> tuple[str, list[AgentEvent]]:
         actual_session_id = session_id or f"session_{uuid4().hex}"
-        return await self._run_agent(actual_session_id, text)
+        return await self._run_agent(
+            actual_session_id,
+            text,
+            prompt_profile=prompt_profile or self.settings.buddy_prompt_profile,
+        )
 
     async def chat(
         self,
@@ -131,6 +136,7 @@ class VoiceService:
         output_language: str | None = None,
         voice: str | None = None,
         prompt: str | None = None,
+        prompt_profile: str | None = None,
         include_audio: bool = True,
         sync_buddy: bool = False,
     ) -> VoiceChatResult:
@@ -147,7 +153,11 @@ class VoiceService:
             )
             if sync_buddy:
                 await self._buddy_state("thinking", "asking model")
-            final_text, events = await self._run_agent(actual_session_id, transcript.text)
+            final_text, events = await self._run_agent(
+                actual_session_id,
+                transcript.text,
+                prompt_profile=prompt_profile or self.settings.buddy_prompt_profile,
+            )
             resolved_output_language = (
                 normalize_language_code(output_language)
                 or infer_text_language(final_text)
@@ -178,10 +188,16 @@ class VoiceService:
                 await self._buddy_state("error", str(exc)[:64], require_connection=False)
             raise
 
-    async def _run_agent(self, session_id: str, message: str) -> tuple[str, list[AgentEvent]]:
+    async def _run_agent(
+        self,
+        session_id: str,
+        message: str,
+        *,
+        prompt_profile: str,
+    ) -> tuple[str, list[AgentEvent]]:
         events: list[AgentEvent] = []
         final_text = ""
-        async for item in self.runtime.run(session_id, message):
+        async for item in self.runtime.run(session_id, message, prompt_profile=prompt_profile):
             events.append(item)
             if item.type == "run.finished":
                 final_text = str(item.data.get("final_text") or "")

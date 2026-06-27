@@ -34,19 +34,26 @@ class AgentRuntime:
         self.tools = tools
         self.llm = llm
 
-    async def run(self, session_id: str, user_content: str) -> AsyncIterator[AgentEvent]:
+    async def run(
+        self,
+        session_id: str,
+        user_content: str,
+        *,
+        prompt_profile: str | None = None,
+    ) -> AsyncIterator[AgentEvent]:
         run_id = make_run_id()
+        profile_name = prompt_profile or self.settings.agent_prompt_profile
         logger.info(
             "Agent run started: session_id=%s profile=%s",
             session_id,
-            self.settings.prompt_profile,
+            profile_name,
         )
         yield event("run.started", session_id, run_id)
 
         try:
             prompt_messages = load_prompt_messages(
                 self.settings.prompts_config_path,
-                self.settings.prompt_profile,
+                profile_name,
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("Prompt loading failed for session_id=%s", session_id)
@@ -110,10 +117,10 @@ class AgentRuntime:
                     "llm.request",
                     session_id,
                     run_id,
-                    profile=self.settings.prompt_profile,
+                    profile=profile_name,
                     iteration=iteration,
                     context=_context_assembly(
-                        profile=self.settings.prompt_profile,
+                        profile=profile_name,
                         prompt_message_count=len(prompt_messages),
                         memory_message_count=len(memory_messages),
                         skill_catalog_message_count=len(skill_catalog_messages),

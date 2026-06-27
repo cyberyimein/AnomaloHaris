@@ -227,6 +227,32 @@ def test_buddy_audio_bridge_persists_debug_audio_files(tmp_path: Path) -> None:
     assert (tmp_path / "buddy-audio" / "sample.wav").read_bytes() == b"RIFF"
 
 
+def test_buddy_audio_bridge_skips_debug_audio_files_in_production(tmp_path: Path) -> None:
+    bridge = BuddyAudioBridge(
+        Settings(environment="production"),
+        gateway=FakeGateway(),  # type: ignore[arg-type]
+        voice=RetryChineseVoice(),  # type: ignore[arg-type]
+    )
+    bridge.settings.artifacts_dir = tmp_path  # type: ignore[misc]
+
+    bridge._persist_debug_audio("sample.wav", b"RIFF", archive=True)
+
+    assert not (tmp_path / "buddy-audio").exists()
+
+
+def test_buddy_audio_bridge_can_force_debug_audio_files_in_production(tmp_path: Path) -> None:
+    bridge = BuddyAudioBridge(
+        Settings(environment="production", buddy_audio_debug_storage="on"),
+        gateway=FakeGateway(),  # type: ignore[arg-type]
+        voice=RetryChineseVoice(),  # type: ignore[arg-type]
+    )
+    bridge.settings.artifacts_dir = tmp_path  # type: ignore[misc]
+
+    bridge._persist_debug_audio("sample.wav", b"RIFF")
+
+    assert (tmp_path / "buddy-audio" / "sample.wav").read_bytes() == b"RIFF"
+
+
 def test_buddy_audio_bridge_prefers_zh_over_unsupported_auto(tmp_path: Path) -> None:
     voice = GuardrailVoice()
     bridge = BuddyAudioBridge(

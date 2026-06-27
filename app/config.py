@@ -12,9 +12,11 @@ class Settings(BaseSettings):
         env_file=PROJECT_ROOT / ".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        populate_by_name=True,
     )
 
     app_title: str = Field(default="Anomalo", alias="ANOMALO_APP_TITLE")
+    environment: str = Field(default="development", alias="ANOMALO_ENV")
     site_url: str = Field(default="http://localhost:8000", alias="ANOMALO_SITE_URL")
 
     openrouter_api_key: str | None = Field(default=None, alias="OPENROUTER_API_KEY")
@@ -24,7 +26,9 @@ class Settings(BaseSettings):
     max_tool_iterations: int = Field(default=5, alias="MAX_TOOL_ITERATIONS")
     admin_token: str | None = Field(default=None, alias="ANOMALO_ADMIN_TOKEN")
     mcp_timeout_seconds: float = Field(default=8.0, alias="MCP_TIMEOUT_SECONDS")
-    prompt_profile: str = Field(default="default", alias="ANOMALO_PROMPT_PROFILE")
+    agent_prompt_profile: str = Field(default="agent", alias="ANOMALO_AGENT_PROMPT_PROFILE")
+    buddy_prompt_profile: str = Field(default="buddy_voice", alias="ANOMALO_BUDDY_PROMPT_PROFILE")
+    prompt_profile: str | None = Field(default=None, alias="ANOMALO_PROMPT_PROFILE")
     local_font_dir: Path | None = Field(default=None, alias="ANOMALO_LOCAL_FONT_DIR")
     audio_stt_provider: str = Field(default="faster_whisper", alias="ANOMALO_AUDIO_STT_PROVIDER")
     audio_tts_provider: str = Field(default="piper_plus", alias="ANOMALO_AUDIO_TTS_PROVIDER")
@@ -81,6 +85,10 @@ class Settings(BaseSettings):
     buddy_tcp_port: int = Field(default=8787, alias="ANOMALO_BUDDY_TCP_PORT")
     buddy_tcp_client_ip: str | None = Field(default=None, alias="ANOMALO_BUDDY_TCP_CLIENT_IP")
     buddy_event_buffer_size: int = Field(default=200, alias="ANOMALO_BUDDY_EVENT_BUFFER_SIZE")
+    buddy_audio_debug_storage: str = Field(
+        default="auto",
+        alias="ANOMALO_BUDDY_AUDIO_DEBUG_STORAGE",
+    )
     copilot_buddy_approval_timeout_seconds: float = Field(
         default=90.0,
         alias="ANOMALO_COPILOT_BUDDY_APPROVAL_TIMEOUT_SECONDS",
@@ -113,6 +121,23 @@ class Settings(BaseSettings):
     @property
     def frontend_assets_dir(self) -> Path:
         return self.frontend_dir / "assets"
+
+    @property
+    def normalized_environment(self) -> str:
+        return self.environment.strip().lower()
+
+    @property
+    def is_production(self) -> bool:
+        return self.normalized_environment in {"prod", "production", "deploy", "deployment"}
+
+    @property
+    def should_persist_buddy_debug_audio(self) -> bool:
+        mode = self.buddy_audio_debug_storage.strip().lower()
+        if mode in {"1", "true", "yes", "on", "enabled"}:
+            return True
+        if mode in {"0", "false", "no", "off", "disabled"}:
+            return False
+        return not self.is_production
 
     @property
     def mcp_config_path(self) -> Path:

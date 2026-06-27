@@ -11,8 +11,10 @@ router = APIRouter(prefix="/api", tags=["prompts"])
 @router.get("/prompts")
 async def prompts() -> dict[str, Any]:
     settings = get_settings()
-    profile = load_prompt_profile(settings.prompts_config_path, settings.prompt_profile)
+    profile = load_prompt_profile(settings.prompts_config_path, settings.agent_prompt_profile)
     return {
         **profile,
         "config_path": str(settings.prompts_config_path),
+        "agent_profile": settings.agent_prompt_profile,
+        "buddy_profile": settings.buddy_prompt_profile,
     }

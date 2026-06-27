@@ -76,8 +76,29 @@
           <p>Ask Anomalo to test an agent flow.</p>
         </div>
         <template v-for="(turn, index) in conversationTurns" :key="`${turn.role}-${index}`">
-          <article class="message-row" :class="`message-row-${turn.role}`">
-            <div v-if="turn.role !== 'user'" class="message-avatar">A</div>
+          <article
+            v-if="turn.role === 'activity'"
+            class="activity-row"
+            :class="[`activity-${turn.kind}`, `activity-${turn.status}`]"
+            aria-live="polite"
+          >
+            <span class="activity-icon" aria-hidden="true">
+              <LoaderCircle
+                v-if="turn.status === 'running'"
+                :size="18"
+                class="activity-spinner"
+              />
+              <AlertTriangle v-else-if="turn.status === 'error'" :size="18" />
+              <Wrench v-else-if="turn.kind === 'tool'" :size="18" />
+              <Search v-else-if="turn.kind === 'context'" :size="18" />
+              <CircleCheck v-else :size="18" />
+            </span>
+            <div class="activity-copy">
+              <div class="activity-title">{{ turn.title }}</div>
+              <div v-if="turn.body" class="activity-body">{{ turn.body }}</div>
+            </div>
+          </article>
+          <article v-else class="message-row" :class="`message-row-${turn.role}`">
             <div class="message-bubble" :class="`message-bubble-${turn.role}`">
               {{ turn.content }}
             </div>
@@ -165,20 +186,22 @@
         @submit.prevent="submitMessage"
       >
         <div class="composer-box">
-          <input
+          <textarea
             id="messageInput"
+            ref="messageInputEl"
             class="composer-input"
             v-model="messageInput"
-            type="text"
             placeholder="Message Anomalo"
+            rows="1"
+            @input="resizeComposer"
             @keydown="handleComposerKeydown"
-          />
+          ></textarea>
           <button
             id="sendButton"
             class="send-button"
             type="submit"
-            title="Send"
-            aria-label="Send"
+            title="Send with Alt+Enter"
+            aria-label="Send message"
             :disabled="sendDisabled"
           >
             <SendHorizontal :size="19" />
@@ -456,11 +479,15 @@
 <script setup>
 import {
   Activity,
+  AlertTriangle,
+  CircleCheck,
   Copy,
   Database,
   Layers3,
+  LoaderCircle,
   PanelRightOpen,
   RefreshCw,
+  Search,
   SendHorizontal,
   SlidersHorizontal,
   Upload,
@@ -488,7 +515,10 @@ const events = ref([]);
 const eventSequence = ref(0);
 const conversationTurns = ref([]);
 const activeAssistantIndex = ref(null);
+const activeThinkingActivityIndex = ref(null);
+const activeToolActivityIndexes = new Map();
 const conversationEl = ref(null);
+const messageInputEl = ref(null);
 const messageInput = ref("");
 
 const promptOutput = ref("Loading prompt profile...");
@@ -800,17 +830,29 @@ function submitMessage() {
 
   conversationTurns.value.push({ role: "user", content });
   messageInput.value = "";
-  activeAssistantIndex.value = conversationTurns.value.push({ role: "assistant", content: "" }) - 1;
+  void nextTick(resizeComposer);
+  activeAssistantIndex.value = null;
+  activeThinkingActivityIndex.value = null;
+  activeToolActivityIndexes.clear();
   setAgentState("Queued", "Message sent. Waiting for run start.");
   socket.value.send(JSON.stringify({ type: "user.message", content }));
   void scrollConversation();
 }
 
 function handleComposerKeydown(event) {
-  if (event.key === "Enter" && !event.shiftKey) {
+  if (event.key === "Enter" && event.altKey && !event.isComposing) {
     event.preventDefault();
     submitMessage();
   }
+}
+
+function resizeComposer() {
+  const input = messageInputEl.value;
+  if (!input) {
+    return;
+  }
+  input.style.height = "42px";
+  input.style.height = `${Math.min(input.scrollHeight, 132)}px`;
 }
 
 async function uploadMemory() {
@@ -873,9 +915,20 @@ function handleAgentEvent(event) {
     case "llm.request":
       renderLlmRequest(event.data.request, event.data.context, event.data.iteration);
       setAgentState("LLM Request", summarizeLlmRequest(event.data.request));
+      activeThinkingActivityIndex.value = addConversationActivity({
+        kind: "thinking",
+        status: "running",
+        title: "正在思考",
+        body: summarizeLlmRequest(event.data.request),
+      });
       addEventLog("llm.request", summarizeLlmRequest(event.data.request));
       break;
     case "message.delta":
+      updateConversationActivity(activeThinkingActivityIndex.value, {
+        status: "done",
+        title: "已开始回答",
+      });
+      activeThinkingActivityIndex.value = null;
       appendAssistantContent(event.data.content || "");
       setAgentState("Streaming", "Receiving assistant output.");
       break;
@@ -884,11 +937,31 @@ function handleAgentEvent(event) {
       setAgentState("Finalizing", "Assistant message completed.");
       break;
     case "tool.started":
+      activeAssistantIndex.value = null;
+      updateConversationActivity(activeThinkingActivityIndex.value, {
+        status: "done",
+        title: "已决定使用工具",
+      });
+      activeThinkingActivityIndex.value = null;
       setAgentState("Tool", event.data.tool || "Tool call started.");
+      activeToolActivityIndexes.set(
+        event.data.tool || "tool",
+        addConversationActivity({
+          kind: "tool",
+          status: "running",
+          title: `正在使用 ${event.data.tool || "工具"}`,
+          body: summarizeToolArguments(event.data.arguments),
+        }),
+      );
       addEventLog(`tool.started · ${event.data.tool}`, JSON.stringify(event.data.arguments || {}));
       break;
     case "tool.finished":
       setAgentState("Tool Result", event.data.tool || "Tool call finished.");
+      updateToolActivity(event.data.tool || "tool", {
+        status: "done",
+        title: `已使用 ${event.data.tool || "工具"}`,
+        body: summarizeToolResult(event.data.content),
+      });
       addEventLog(`tool.finished · ${event.data.tool}`, event.data.content || "");
       if (event.data.data?.skill_action) {
         void loadSkills();
@@ -900,17 +973,35 @@ function handleAgentEvent(event) {
       }
       break;
     case "tool.error":
+      updateToolActivity(event.data.tool || "tool", {
+        status: "error",
+        title: `${event.data.tool || "工具"} 失败`,
+        body: summarizeToolResult(event.data.content),
+      });
       setAgentState("Tool Error", event.data.content || "Tool call failed.");
       addEventLog(event.type, event.data.content || "tool error", true);
       break;
     case "run.error":
       runTitle.value = "Error";
       activeAssistantIndex.value = null;
+      updateConversationActivity(activeThinkingActivityIndex.value, {
+        status: "error",
+        title: "思考中断",
+        body: event.data.error || "Run error.",
+      });
+      activeThinkingActivityIndex.value = null;
+      activeToolActivityIndexes.clear();
       setAgentState("Error", event.data.error || "Run error.");
       addEventLog(event.type, event.data.error || "error", true);
       break;
     case "run.finished":
       runTitle.value = "Complete";
+      updateConversationActivity(activeThinkingActivityIndex.value, {
+        status: "done",
+        title: "已完成思考",
+      });
+      activeThinkingActivityIndex.value = null;
+      activeToolActivityIndexes.clear();
       setAgentState("Done", "Run finished.");
       addEventLog("run.finished", "done");
       void loadTools();
@@ -998,9 +1089,52 @@ function renderMcpServers(servers) {
   mcpStatus.value = `${activeCount} active · ${servers.length} available`;
 }
 
+function addConversationActivity({ kind, status, title, body = "" }) {
+  const index =
+    conversationTurns.value.push({
+      role: "activity",
+      kind,
+      status,
+      title,
+      body,
+    }) - 1;
+  void scrollConversation();
+  return index;
+}
+
+function updateConversationActivity(index, updates) {
+  if (typeof index !== "number") {
+    return;
+  }
+  const turn = conversationTurns.value[index];
+  if (!turn || turn.role !== "activity") {
+    return;
+  }
+  conversationTurns.value[index] = {
+    ...turn,
+    ...updates,
+  };
+  void scrollConversation();
+}
+
+function updateToolActivity(toolName, updates) {
+  const key = toolName || "tool";
+  const index = activeToolActivityIndexes.get(key);
+  if (typeof index === "number") {
+    updateConversationActivity(index, updates);
+    activeToolActivityIndexes.delete(key);
+    return;
+  }
+  addConversationActivity({
+    kind: "tool",
+    ...updates,
+  });
+}
+
 function appendAssistantContent(content) {
   if (activeAssistantIndex.value === null) {
-    activeAssistantIndex.value = conversationTurns.value.push({ role: "assistant", content: "" }) - 1;
+    activeAssistantIndex.value =
+      conversationTurns.value.push({ role: "assistant", content: "" }) - 1;
   }
   conversationTurns.value[activeAssistantIndex.value].content += content;
   void scrollConversation();
@@ -1112,6 +1246,28 @@ function summarizeLlmRequest(request) {
   const messageCount = request?.messages?.length || 0;
   const toolCount = request?.tools?.length || 0;
   return `${messageCount} messages · ${toolCount} tools · ${request?.model || "unknown model"}`;
+}
+
+function summarizeToolArguments(argumentsValue) {
+  if (!argumentsValue) {
+    return "";
+  }
+  if (typeof argumentsValue === "object" && Object.keys(argumentsValue).length === 0) {
+    return "";
+  }
+  return truncateInline(JSON.stringify(argumentsValue, null, 2), 180);
+}
+
+function summarizeToolResult(content) {
+  return truncateInline(content || "", 220);
+}
+
+function truncateInline(value, maxLength) {
+  const text = String(value).replace(/\s+/g, " ").trim();
+  if (text.length <= maxLength) {
+    return text;
+  }
+  return `${text.slice(0, maxLength - 1)}…`;
 }
 
 function summarizeBuddyEvent(event) {

@@ -44,6 +44,35 @@ To update the frontend served by FastAPI:
 npm run build
 ```
 
+## Apple container deployment
+
+The production container builds the Vue frontend once and lets FastAPI serve the generated
+`app/frontend` files. This avoids running Vite or a separate static-file server in deployment.
+
+Build and save an OCI archive with Apple `container`:
+
+```bash
+scripts/build_apple_container_image.sh
+```
+
+The script writes a `.tar` image archive and a sibling `.env` metadata file under
+`artifacts/container-images/`. Deploy that archive to a remote Mac over SSH:
+
+```bash
+REMOTE=user@mac-mini.local \
+ENV_FILE=deploy/anomalo.container.env.example \
+scripts/deploy_apple_container.sh artifacts/container-images/anomalo-<tag>-linux-arm64.env
+```
+
+Use a private env file for real secrets. The container example env uses TCP Buddy transport because
+serial passthrough needs host-specific container device configuration. It also avoids macOS `say`,
+which is unavailable inside the Linux container runtime.
+
+Deployment images default to `ANOMALO_ENV=production` and
+`ANOMALO_BUDDY_AUDIO_DEBUG_STORAGE=off`, so Buddy microphone test captures are not written to disk.
+For local diagnosis, use `ANOMALO_ENV=development` with the default
+`ANOMALO_BUDDY_AUDIO_DEBUG_STORAGE=auto`, or force the behavior with `on` / `off`.
+
 Without `OPENROUTER_API_KEY`, the app runs in local dev mode and returns a mock assistant response. Set the key in `.env` to use OpenRouter.
 
 ## Local fonts
@@ -234,6 +263,9 @@ When Buddy audio turns are active, the server now logs key milestones at `INFO`,
 - output audio send size
 - recoverable no-speech cases such as empty transcripts
 
+In development and test environments, Buddy input audio is also saved under
+`artifacts/buddy-audio/` for diagnosis. Production deployment disables those files by default.
+
 ## Prompts
 
 System-level prompts live in `config/prompts.yaml`. The runtime reads the configured profile on
@@ -249,12 +281,14 @@ profiles:
           You are Anomalo...
 ```
 
-Set `ANOMALO_PROMPT_PROFILE` in `.env` to switch profiles. The development frontend shows the
-configured prompt profile on load, then replaces it with the exact JSON request payload prepared
-for the LLM whenever a chat run reaches the model call.
+Set `ANOMALO_AGENT_PROMPT_PROFILE` in `.env` to switch the web Agent profile. The development
+frontend shows that configured Agent profile on load, then replaces it with the exact JSON request
+payload prepared for the LLM whenever a chat run reaches the model call.
 
-For Buddy voice turns, the recommended profile is `buddy_voice`. It keeps replies short,
-conversational, and speech-friendly instead of defaulting to narrow device-control behavior.
+Set `ANOMALO_BUDDY_PROMPT_PROFILE` separately for Buddy voice turns. The recommended Buddy profile
+is `buddy_voice`; it keeps replies short, conversational, and speech-friendly. Skills and MCP
+activation remain session-scoped and reusable, but Agent and Buddy identity/personality prompts are
+separate.
 
 ## Agent Memory
 

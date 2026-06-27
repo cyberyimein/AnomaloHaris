@@ -113,6 +113,7 @@ class BuddyAudioBridge:
                 self.voice.run_text(
                     text=transcript.text,
                     session_id=f"buddy_{uuid4().hex}",
+                    prompt_profile=self.settings.buddy_prompt_profile,
                 )
             )
             if not final_text.strip():
@@ -232,6 +233,8 @@ class BuddyAudioBridge:
         *,
         archive: bool = False,
     ) -> None:
+        if not self.settings.should_persist_buddy_debug_audio:
+            return
         debug_dir = self.settings.artifacts_dir / "buddy-audio"
         debug_dir.mkdir(parents=True, exist_ok=True)
         target = debug_dir / filename
