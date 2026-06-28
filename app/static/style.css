@@ -79,6 +79,7 @@
 html,
 body,
 #app {
+  height: 100%;
   min-height: 100%;
 }
 
@@ -89,6 +90,7 @@ body {
   font-family: var(--font-display);
   font-variation-settings: "opsz" 28;
   -webkit-font-smoothing: antialiased;
+  overflow: hidden;
   text-rendering: geometricPrecision;
 }
 
@@ -104,6 +106,8 @@ button {
 
 .app-shell {
   position: relative;
+  height: 100vh;
+  height: 100dvh;
   min-height: 100vh;
   overflow: hidden;
   background:
@@ -116,7 +120,9 @@ button {
 .chat-shell {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
-  min-height: 100vh;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .chat-topbar {
@@ -253,7 +259,8 @@ button {
   min-width: 0;
 }
 
-.connection-chip {
+.connection-chip,
+.credits-chip {
   display: inline-flex;
   align-items: center;
   gap: 7px;
@@ -262,6 +269,12 @@ button {
   font-family: var(--font-ui);
   font-size: 12px;
   white-space: nowrap;
+}
+
+.credits-chip {
+  max-width: 132px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .status-dot {
@@ -278,6 +291,10 @@ button {
 
 .error .status-dot {
   background: var(--danger);
+}
+
+.muted .status-dot {
+  background: var(--subtle);
 }
 
 .toolbar-button,
@@ -321,6 +338,11 @@ button {
   overflow: auto;
   padding: 48px clamp(18px, 5vw, 64px) 28px;
   scroll-behavior: smooth;
+  scrollbar-width: none;
+}
+
+.conversation::-webkit-scrollbar {
+  display: none;
 }
 
 .conversation > * {
@@ -337,6 +359,11 @@ button {
 .dashboard-view > * {
   width: min(960px, 100%);
   margin-inline: auto;
+}
+
+.stock-analysis-view {
+  min-height: 0;
+  overflow: auto;
 }
 
 .dashboard-hero {
@@ -652,6 +679,144 @@ button {
 .message-bubble-assistant:empty::before {
   color: var(--muted);
   content: "Waiting for model output...";
+}
+
+.markdown-body {
+  white-space: normal;
+}
+
+.markdown-body > :first-child {
+  margin-top: 0;
+}
+
+.markdown-body > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body p {
+  margin: 0 0 18px;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+  margin: 26px 0 12px;
+  color: var(--text);
+  font-weight: 520;
+  letter-spacing: 0;
+  line-height: 1.22;
+}
+
+.markdown-body h1 {
+  font-size: 28px;
+}
+
+.markdown-body h2 {
+  font-size: 24px;
+}
+
+.markdown-body h3 {
+  font-size: 20px;
+}
+
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+  font-size: 18px;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  margin: 0 0 18px;
+  padding-left: 1.35em;
+}
+
+.markdown-body li + li {
+  margin-top: 6px;
+}
+
+.markdown-body blockquote {
+  margin: 0 0 18px;
+  border-left: 3px solid rgba(203, 200, 191, 0.86);
+  padding: 1px 0 1px 16px;
+  color: var(--muted);
+}
+
+.markdown-body code {
+  border-radius: 6px;
+  background: var(--code);
+  color: var(--ink);
+  font-family: SFMono-Regular, Consolas, Liberation Mono, Menlo, monospace;
+  font-size: 0.86em;
+  padding: 0.14em 0.34em;
+}
+
+.markdown-body pre {
+  margin: 0 0 18px;
+  overflow: auto;
+  border-radius: 8px;
+  background: var(--code);
+  padding: 14px 16px;
+  scrollbar-width: none;
+}
+
+.markdown-body pre::-webkit-scrollbar {
+  display: none;
+}
+
+.markdown-body pre code {
+  display: block;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre;
+}
+
+.markdown-body a {
+  color: var(--accent);
+  text-decoration-color: rgba(37, 99, 235, 0.3);
+  text-underline-offset: 3px;
+}
+
+.markdown-table-wrap {
+  margin: 0 0 20px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.markdown-table-wrap::-webkit-scrollbar {
+  display: none;
+}
+
+.markdown-body table {
+  width: 100%;
+  min-width: 420px;
+  border-collapse: collapse;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.markdown-body th,
+.markdown-body td {
+  border-bottom: 1px solid rgba(227, 224, 216, 0.9);
+  padding: 9px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdown-body th {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.markdown-body td {
+  color: var(--muted);
 }
 
 .activity-row {

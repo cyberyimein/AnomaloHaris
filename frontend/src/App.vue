@@ -8,7 +8,7 @@
           </div>
           <div class="brand-copy">
             <h1>Anomalo</h1>
-            <p>Local agent host</p>
+            <p>Local harness</p>
           </div>
         </div>
 
@@ -29,9 +29,21 @@
           >
             Dashboard
           </button>
+          <button
+            class="nav-tab"
+            :class="{ active: activeView === 'stock-analysis' }"
+            type="button"
+            @click="setActiveView('stock-analysis')"
+          >
+            Stock Analysis
+          </button>
         </nav>
 
         <div class="header-actions">
+          <span class="credits-chip" :class="openrouterCreditsClass" :title="openrouterCreditsTitle">
+            <span class="status-dot" aria-hidden="true"></span>
+            {{ openrouterCreditsLabel }}
+          </span>
           <span id="connectionStatus" class="connection-chip" :class="connectionClass">
             <span class="status-dot" aria-hidden="true"></span>
             {{ connectionStatus }}
@@ -48,7 +60,7 @@
             <span>Inspector</span>
           </button>
           <button
-            v-else
+            v-else-if="activeView === 'dashboard'"
             class="toolbar-button"
             type="button"
             title="Refresh dashboard"
@@ -72,8 +84,8 @@
           <div class="empty-emblem" aria-hidden="true">
             <img :src="anomaloIconUrl" alt="" />
           </div>
-          <h2>Ready for a run</h2>
-          <p>Ask Anomalo to test an agent flow.</p>
+          <h2>Ready when you are</h2>
+          <p>Send a message to start.</p>
         </div>
         <template v-for="(turn, index) in conversationTurns" :key="`${turn.role}-${index}`">
           <article
@@ -99,14 +111,19 @@
             </div>
           </article>
           <article v-else class="message-row" :class="`message-row-${turn.role}`">
-            <div class="message-bubble" :class="`message-bubble-${turn.role}`">
+            <div
+              v-if="turn.role === 'assistant'"
+              class="message-bubble message-bubble-assistant markdown-body"
+              v-html="turn.htmlContent"
+            ></div>
+            <div v-else class="message-bubble" :class="`message-bubble-${turn.role}`">
               {{ turn.content }}
             </div>
           </article>
         </template>
       </section>
 
-      <section v-else class="dashboard-view" aria-label="StackChan dashboard">
+      <section v-else-if="activeView === 'dashboard'" class="dashboard-view" aria-label="StackChan dashboard">
         <div class="dashboard-hero">
           <span>StackChan Server</span>
           <h2>Dashboard</h2>
@@ -178,6 +195,12 @@
           </section>
         </div>
       </section>
+
+      <section
+        v-else-if="activeView === 'stock-analysis'"
+        class="stock-analysis-view"
+        aria-label="Stock Analysis"
+      ></section>
 
       <form
         v-if="activeView === 'agent'"
@@ -284,6 +307,42 @@
               <strong>{{ events.length }}</strong>
             </div>
           </div>
+        </details>
+
+        <details class="drawer-card">
+          <summary>
+            <span>OpenRouter Credits</span>
+            <button
+              class="mini-icon-button"
+              type="button"
+              title="Refresh OpenRouter credits"
+              aria-label="Refresh OpenRouter credits"
+              :disabled="openrouterCreditsRefreshInFlight"
+              @click.stop.prevent="refreshOpenRouterCredits"
+            >
+              <RefreshCw :size="15" />
+              <span>{{ openrouterCreditsRefreshLabel }}</span>
+            </button>
+          </summary>
+          <div class="state-grid">
+            <div>
+              <span class="field-label">Remaining</span>
+              <strong>{{ openrouterCreditsRemainingText }}</strong>
+            </div>
+            <div>
+              <span class="field-label">Total</span>
+              <strong>{{ openrouterCreditsTotalText }}</strong>
+            </div>
+            <div>
+              <span class="field-label">Used</span>
+              <strong>{{ openrouterCreditsUsedText }}</strong>
+            </div>
+            <div>
+              <span class="field-label">Updated</span>
+              <strong>{{ openrouterCreditsUpdatedText }}</strong>
+            </div>
+          </div>
+          <div class="panel-note">{{ openrouterCreditsMessage }}</div>
         </details>
 
         <details class="drawer-card">
@@ -506,6 +565,7 @@ const sendDisabled = ref(true);
 const socket = ref(null);
 const reconnectTimer = ref(null);
 const dashboardRefreshTimer = ref(null);
+const creditsRefreshTimer = ref(null);
 const shuttingDown = ref(false);
 const inspectorOpen = ref(false);
 const activeView = ref("agent");
@@ -517,9 +577,18 @@ const conversationTurns = ref([]);
 const activeAssistantIndex = ref(null);
 const activeThinkingActivityIndex = ref(null);
 const activeToolActivityIndexes = new Map();
+const markdownRenderTimers = new Map();
 const conversationEl = ref(null);
 const messageInputEl = ref(null);
 const messageInput = ref("");
+
+const MARKDOWN_RENDER_INTERVAL_MS = 160;
+const CREDITS_REFRESH_INTERVAL_MS = 82800000;
+
+const openrouterCredits = ref(null);
+const openrouterCreditsStatus = ref("loading");
+const openrouterCreditsMessage = ref("Loading OpenRouter credits...");
+const openrouterCreditsRefreshInFlight = ref(false);
 
 const promptOutput = ref("Loading prompt profile...");
 const latestPromptJson = ref("");
@@ -569,6 +638,59 @@ const normalizedAgentState = computed(() => normalizeState(agentState.value));
 const normalizedRunStatus = computed(() => normalizeState(runStatus.value));
 const activeSkillCount = computed(() => skills.value.filter((skill) => skill.active).length);
 const activeMcpCount = computed(() => mcpServers.value.filter((server) => server.active).length);
+const openrouterCreditsLabel = computed(() => {
+  const remaining = openrouterCredits.value?.remaining_credits;
+  if (openrouterCreditsStatus.value === "ready" || openrouterCreditsStatus.value === "stale") {
+    return typeof remaining === "number" ? `Credits $${remaining.toFixed(2)}` : "Credits ?";
+  }
+  if (openrouterCreditsStatus.value === "loading") {
+    return "Credits ...";
+  }
+  return "Credits --";
+});
+const openrouterCreditsClass = computed(() => {
+  if (openrouterCreditsStatus.value === "ready") {
+    return "ok";
+  }
+  if (openrouterCreditsStatus.value === "error") {
+    return "error";
+  }
+  return "muted";
+});
+const openrouterCreditsTitle = computed(() => {
+  const credits = openrouterCredits.value;
+  if (!credits) {
+    return openrouterCreditsMessage.value;
+  }
+  const parts = [openrouterCreditsMessage.value];
+  if (typeof credits.total_credits === "number") {
+    parts.push(`Total: $${credits.total_credits.toFixed(2)}`);
+  }
+  if (typeof credits.total_usage === "number") {
+    parts.push(`Used: $${credits.total_usage.toFixed(2)}`);
+  }
+  if (credits.updated_at) {
+    parts.push(`Updated: ${new Date(credits.updated_at).toLocaleString()}`);
+  }
+  return parts.join(" · ");
+});
+const openrouterCreditsRefreshLabel = computed(() =>
+  openrouterCreditsRefreshInFlight.value ? "Refreshing" : "Refresh",
+);
+const openrouterCreditsRemainingText = computed(() =>
+  formatCurrency(openrouterCredits.value?.remaining_credits),
+);
+const openrouterCreditsTotalText = computed(() =>
+  formatCurrency(openrouterCredits.value?.total_credits),
+);
+const openrouterCreditsUsedText = computed(() => formatCurrency(openrouterCredits.value?.total_usage));
+const openrouterCreditsUpdatedText = computed(() => {
+  const updatedAt = openrouterCredits.value?.updated_at;
+  if (!updatedAt) {
+    return "--";
+  }
+  return new Date(updatedAt).toLocaleString();
+});
 const buddyStatusLabel = computed(() => {
   if (!buddyStatus.value) {
     return "Unknown";
@@ -602,7 +724,11 @@ onMounted(() => {
   void loadMcpServers();
   void loadPromptProfile();
   void loadMemory();
+  void loadOpenRouterCredits();
   void refreshDashboard();
+  creditsRefreshTimer.value = setInterval(() => {
+    void loadOpenRouterCredits({ silent: true });
+  }, CREDITS_REFRESH_INTERVAL_MS);
   dashboardRefreshTimer.value = setInterval(() => {
     if (activeView.value === "dashboard" && !buddyActionInFlight.value) {
       void pollDashboard();
@@ -615,6 +741,8 @@ onBeforeUnmount(() => {
   document.removeEventListener("keydown", handleGlobalKeydown);
   clearTimeout(reconnectTimer.value);
   clearInterval(dashboardRefreshTimer.value);
+  clearInterval(creditsRefreshTimer.value);
+  clearMarkdownRenderTimers();
   socket.value?.close();
 });
 
@@ -731,6 +859,49 @@ async function loadMemory() {
   } catch (error) {
     memoryStatus.value = `Memory load failed: ${error}`;
   }
+}
+
+async function loadOpenRouterCredits({ silent = false, force = false } = {}) {
+  if (!silent) {
+    openrouterCreditsStatus.value = "loading";
+    openrouterCreditsMessage.value = "Loading OpenRouter credits...";
+  }
+
+  try {
+    const payload = await fetchJson(force ? "/api/openrouter/credits?force=true" : "/api/openrouter/credits");
+    openrouterCredits.value = payload.configured ? payload : null;
+    openrouterCreditsStatus.value = payload.status || "error";
+    openrouterCreditsMessage.value = openrouterCreditsMessageFor(payload);
+  } catch (error) {
+    openrouterCreditsStatus.value = "error";
+    openrouterCreditsMessage.value = `OpenRouter credits failed: ${formatError(error)}`;
+  }
+}
+
+async function refreshOpenRouterCredits() {
+  openrouterCreditsRefreshInFlight.value = true;
+  try {
+    await loadOpenRouterCredits({ force: true });
+  } finally {
+    openrouterCreditsRefreshInFlight.value = false;
+  }
+}
+
+function openrouterCreditsMessageFor(payload) {
+  if (payload.status === "ready") {
+    return payload.cached ? "OpenRouter credits cached." : "OpenRouter credits updated.";
+  }
+  if (payload.status === "stale") {
+    return payload.message || "OpenRouter credits are stale.";
+  }
+  if (payload.status === "config_missing") {
+    return payload.message || "OpenRouter management key is not configured.";
+  }
+  return payload.message || "OpenRouter credits unavailable.";
+}
+
+function formatCurrency(value) {
+  return typeof value === "number" ? `$${value.toFixed(2)}` : "--";
 }
 
 async function refreshDashboard() {
@@ -924,25 +1095,25 @@ function handleAgentEvent(event) {
       addEventLog("llm.request", summarizeLlmRequest(event.data.request));
       break;
     case "message.delta":
-      updateConversationActivity(activeThinkingActivityIndex.value, {
+      finishThinkingActivity({
         status: "done",
         title: "已开始回答",
       });
-      activeThinkingActivityIndex.value = null;
       appendAssistantContent(event.data.content || "");
       setAgentState("Streaming", "Receiving assistant output.");
       break;
     case "message.done":
+      flushMarkdownRender(activeAssistantIndex.value);
       activeAssistantIndex.value = null;
       setAgentState("Finalizing", "Assistant message completed.");
       break;
     case "tool.started":
+      flushMarkdownRender(activeAssistantIndex.value);
       activeAssistantIndex.value = null;
-      updateConversationActivity(activeThinkingActivityIndex.value, {
+      finishThinkingActivity({
         status: "done",
         title: "已决定使用工具",
       });
-      activeThinkingActivityIndex.value = null;
       setAgentState("Tool", event.data.tool || "Tool call started.");
       activeToolActivityIndexes.set(
         event.data.tool || "tool",
@@ -983,24 +1154,24 @@ function handleAgentEvent(event) {
       break;
     case "run.error":
       runTitle.value = "Error";
+      flushMarkdownRender(activeAssistantIndex.value);
       activeAssistantIndex.value = null;
-      updateConversationActivity(activeThinkingActivityIndex.value, {
+      finishThinkingActivity({
         status: "error",
         title: "思考中断",
         body: event.data.error || "Run error.",
       });
-      activeThinkingActivityIndex.value = null;
       activeToolActivityIndexes.clear();
       setAgentState("Error", event.data.error || "Run error.");
       addEventLog(event.type, event.data.error || "error", true);
       break;
     case "run.finished":
       runTitle.value = "Complete";
-      updateConversationActivity(activeThinkingActivityIndex.value, {
+      reconcileFinalAssistantContent(event.data.final_text || "");
+      finishThinkingActivity({
         status: "done",
         title: "已完成思考",
       });
-      activeThinkingActivityIndex.value = null;
       activeToolActivityIndexes.clear();
       setAgentState("Done", "Run finished.");
       addEventLog("run.finished", "done");
@@ -1117,6 +1288,31 @@ function updateConversationActivity(index, updates) {
   void scrollConversation();
 }
 
+function finishThinkingActivity(updates) {
+  if (typeof activeThinkingActivityIndex.value === "number") {
+    updateConversationActivity(activeThinkingActivityIndex.value, updates);
+    activeThinkingActivityIndex.value = null;
+    return;
+  }
+
+  const fallbackIndex = findLatestRunningThinkingActivityIndex();
+  if (typeof fallbackIndex === "number") {
+    updateConversationActivity(fallbackIndex, updates);
+  }
+  activeThinkingActivityIndex.value = null;
+}
+
+function findLatestRunningThinkingActivityIndex() {
+  const latestUserIndex = findLatestUserTurnIndex();
+  for (let index = conversationTurns.value.length - 1; index > latestUserIndex; index -= 1) {
+    const turn = conversationTurns.value[index];
+    if (turn?.role === "activity" && turn.kind === "thinking" && turn.status === "running") {
+      return index;
+    }
+  }
+  return null;
+}
+
 function updateToolActivity(toolName, updates) {
   const key = toolName || "tool";
   const index = activeToolActivityIndexes.get(key);
@@ -1134,10 +1330,146 @@ function updateToolActivity(toolName, updates) {
 function appendAssistantContent(content) {
   if (activeAssistantIndex.value === null) {
     activeAssistantIndex.value =
-      conversationTurns.value.push({ role: "assistant", content: "" }) - 1;
+      conversationTurns.value.push({ role: "assistant", content: "", htmlContent: "" }) - 1;
   }
   conversationTurns.value[activeAssistantIndex.value].content += content;
+  scheduleMarkdownRender(activeAssistantIndex.value);
   void scrollConversation();
+}
+
+function reconcileFinalAssistantContent(content) {
+  const finalContent = String(content || "");
+
+  if (typeof activeAssistantIndex.value === "number") {
+    if (finalContent) {
+      setAssistantContent(activeAssistantIndex.value, finalContent);
+    } else {
+      flushMarkdownRender(activeAssistantIndex.value);
+    }
+    activeAssistantIndex.value = null;
+    return;
+  }
+
+  if (!finalContent) {
+    return;
+  }
+
+  const currentAssistantIndex = findLatestAssistantTurnIndexAfterLatestUser();
+  if (typeof currentAssistantIndex === "number") {
+    const turn = conversationTurns.value[currentAssistantIndex];
+    if (turn.content === finalContent) {
+      flushMarkdownRender(currentAssistantIndex);
+      return;
+    }
+    if (!turn.content || finalContent.startsWith(turn.content)) {
+      setAssistantContent(currentAssistantIndex, finalContent);
+    } else {
+      flushMarkdownRender(currentAssistantIndex);
+    }
+    return;
+  }
+
+  conversationTurns.value.push({
+    role: "assistant",
+    content: finalContent,
+    htmlContent: renderMarkdown(finalContent),
+  });
+  void scrollConversation();
+}
+
+function findLatestAssistantTurnIndexAfterLatestUser() {
+  const latestUserIndex = findLatestUserTurnIndex();
+  for (let index = conversationTurns.value.length - 1; index > latestUserIndex; index -= 1) {
+    if (conversationTurns.value[index]?.role === "assistant") {
+      return index;
+    }
+  }
+  return null;
+}
+
+function findLatestUserTurnIndex() {
+  for (let index = conversationTurns.value.length - 1; index >= 0; index -= 1) {
+    if (conversationTurns.value[index]?.role === "user") {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function setAssistantContent(index, content) {
+  const turn = conversationTurns.value[index];
+  if (!turn || turn.role !== "assistant") {
+    return;
+  }
+
+  const timer = markdownRenderTimers.get(index);
+  if (timer) {
+    clearTimeout(timer);
+    markdownRenderTimers.delete(index);
+  }
+
+  conversationTurns.value[index] = {
+    ...turn,
+    content,
+    htmlContent: renderMarkdown(content),
+  };
+  void scrollConversation();
+}
+
+function scheduleMarkdownRender(index) {
+  if (typeof index !== "number" || markdownRenderTimers.has(index)) {
+    return;
+  }
+
+  const timer = setTimeout(() => {
+    markdownRenderTimers.delete(index);
+    renderConversationMarkdown(index);
+  }, markdownRenderDelay(index));
+  markdownRenderTimers.set(index, timer);
+}
+
+function flushMarkdownRender(index) {
+  if (typeof index !== "number") {
+    return;
+  }
+
+  const timer = markdownRenderTimers.get(index);
+  if (timer) {
+    clearTimeout(timer);
+    markdownRenderTimers.delete(index);
+  }
+  renderConversationMarkdown(index);
+}
+
+function clearMarkdownRenderTimers() {
+  for (const timer of markdownRenderTimers.values()) {
+    clearTimeout(timer);
+  }
+  markdownRenderTimers.clear();
+}
+
+function renderConversationMarkdown(index) {
+  const turn = conversationTurns.value[index];
+  if (!turn || turn.role !== "assistant") {
+    return;
+  }
+
+  conversationTurns.value[index] = {
+    ...turn,
+    htmlContent: renderMarkdown(turn.content),
+  };
+  void scrollConversation();
+}
+
+function markdownRenderDelay(index) {
+  const contentLength = conversationTurns.value[index]?.content?.length || 0;
+  if (contentLength > 16000) {
+    return 480;
+  }
+  if (contentLength > 6000) {
+    return 280;
+  }
+  return MARKDOWN_RENDER_INTERVAL_MS;
 }
 
 function renderLlmRequest(request, context, iteration) {
@@ -1161,7 +1493,7 @@ function renderLlmRequest(request, context, iteration) {
 
 function renderContextStats(request, context, messages) {
   contextStats.value = [
-    { label: "Messages", value: messages.length },
+    { label: "Prompt Parts", value: messages.length },
     { label: "Prompt", value: context?.prompt_message_count ?? 0 },
     { label: "Memory", value: context?.memory_message_count ?? 0 },
     { label: "Skills", value: context?.active_skill_count ?? 0 },
@@ -1210,6 +1542,253 @@ function summarizeMessageContent(message) {
   return parts.join("\n\n") || "(empty)";
 }
 
+function renderMarkdown(value) {
+  const text = String(value || "").replace(/\r\n?/g, "\n");
+  if (!text.trim()) {
+    return "";
+  }
+
+  const lines = text.split("\n");
+  const blocks = [];
+  let index = 0;
+
+  while (index < lines.length) {
+    const line = lines[index];
+    const trimmed = line.trim();
+
+    if (!trimmed) {
+      index += 1;
+      continue;
+    }
+
+    const fence = matchCodeFence(line);
+    if (fence) {
+      const codeLines = [];
+      index += 1;
+      while (index < lines.length && !lines[index].trim().startsWith(fence.marker)) {
+        codeLines.push(lines[index]);
+        index += 1;
+      }
+      if (index < lines.length) {
+        index += 1;
+      }
+      const languageClass = fence.language ? ` class="language-${escapeAttribute(fence.language)}"` : "";
+      blocks.push(`<pre><code${languageClass}>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+      continue;
+    }
+
+    const heading = line.match(/^(#{1,6})\s+(.+)$/);
+    if (heading) {
+      const level = heading[1].length;
+      blocks.push(`<h${level}>${renderInlineMarkdown(heading[2].trim())}</h${level}>`);
+      index += 1;
+      continue;
+    }
+
+    if (/^\s*>\s?/.test(line)) {
+      const quoteLines = [];
+      while (index < lines.length && /^\s*>\s?/.test(lines[index])) {
+        quoteLines.push(lines[index].replace(/^\s*>\s?/, ""));
+        index += 1;
+      }
+      blocks.push(`<blockquote>${renderMarkdown(quoteLines.join("\n"))}</blockquote>`);
+      continue;
+    }
+
+    if (isMarkdownTable(lines, index)) {
+      const table = renderMarkdownTable(lines, index);
+      blocks.push(table.html);
+      index = table.nextIndex;
+      continue;
+    }
+
+    const list = matchListItem(line);
+    if (list) {
+      const tag = list.ordered ? "ol" : "ul";
+      const items = [];
+      while (index < lines.length) {
+        const item = matchListItem(lines[index]);
+        if (!item || item.ordered !== list.ordered) {
+          break;
+        }
+        items.push(`<li>${renderInlineMarkdown(item.content.trim())}</li>`);
+        index += 1;
+      }
+      blocks.push(`<${tag}>${items.join("")}</${tag}>`);
+      continue;
+    }
+
+    const paragraphLines = [];
+    while (index < lines.length && lines[index].trim() && !isMarkdownBlockStart(lines, index)) {
+      paragraphLines.push(lines[index].trim());
+      index += 1;
+    }
+    if (paragraphLines.length) {
+      blocks.push(`<p>${renderInlineMarkdown(paragraphLines.join(" "))}</p>`);
+      continue;
+    }
+
+    blocks.push(`<p>${renderInlineMarkdown(trimmed)}</p>`);
+    index += 1;
+  }
+
+  return blocks.join("");
+}
+
+function renderInlineMarkdown(value) {
+  const codeTokens = [];
+  const linkTokens = [];
+  let html = String(value);
+
+  html = html.replace(/`([^`]+)`/g, (_match, code) => {
+    const token = `\u0000CODE${codeTokens.length}\u0000`;
+    codeTokens.push(`<code>${escapeHtml(code)}</code>`);
+    return token;
+  });
+
+  html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+|mailto:[^\s)]+)\)/g, (_match, label, url) => {
+    const token = `\u0000LINK${linkTokens.length}\u0000`;
+    linkTokens.push(
+      `<a href="${escapeAttribute(url)}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a>`,
+    );
+    return token;
+  });
+
+  html = escapeHtml(html);
+  html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  html = html.replace(/__([^_]+)__/g, "<strong>$1</strong>");
+  html = html.replace(/(^|[\s(])\*([^*\s][^*]*?)\*(?=[\s).,!?:;]|$)/g, "$1<em>$2</em>");
+  html = html.replace(/(^|[\s(])_([^_\s][^_]*?)_(?=[\s).,!?:;]|$)/g, "$1<em>$2</em>");
+
+  return html
+    .replace(/\u0000CODE(\d+)\u0000/g, (_match, tokenIndex) => codeTokens[Number(tokenIndex)] || "")
+    .replace(/\u0000LINK(\d+)\u0000/g, (_match, tokenIndex) => linkTokens[Number(tokenIndex)] || "");
+}
+
+function renderMarkdownTable(lines, startIndex) {
+  const headers = splitMarkdownTableRow(lines[startIndex]);
+  const alignments = splitMarkdownTableRow(lines[startIndex + 1]).map(tableAlignment);
+  const rows = [];
+  let index = startIndex + 2;
+
+  while (index < lines.length && lines[index].trim().includes("|")) {
+    rows.push(splitMarkdownTableRow(lines[index]));
+    index += 1;
+  }
+
+  const headerHtml = headers
+    .map((cell, cellIndex) => {
+      const attrs = tableCellAttributes(alignments[cellIndex]);
+      return `<th${attrs}>${renderInlineMarkdown(cell)}</th>`;
+    })
+    .join("");
+  const bodyHtml = rows
+    .map((row) => {
+      const cells = headers
+        .map((_, cellIndex) => {
+          const attrs = tableCellAttributes(alignments[cellIndex]);
+          return `<td${attrs}>${renderInlineMarkdown(row[cellIndex] || "")}</td>`;
+        })
+        .join("");
+      return `<tr>${cells}</tr>`;
+    })
+    .join("");
+
+  return {
+    html: `<div class="markdown-table-wrap"><table><thead><tr>${headerHtml}</tr></thead><tbody>${bodyHtml}</tbody></table></div>`,
+    nextIndex: index,
+  };
+}
+
+function isMarkdownBlockStart(lines, index) {
+  const line = lines[index] || "";
+  return (
+    Boolean(matchCodeFence(line)) ||
+    /^(#{1,6})\s+/.test(line) ||
+    /^\s*>\s?/.test(line) ||
+    Boolean(matchListItem(line)) ||
+    isMarkdownTable(lines, index)
+  );
+}
+
+function matchCodeFence(line) {
+  const match = line.trim().match(/^(```|~~~)\s*([A-Za-z0-9_-]+)?\s*$/);
+  if (!match) {
+    return null;
+  }
+  return {
+    marker: match[1],
+    language: match[2] || "",
+  };
+}
+
+function matchListItem(line) {
+  const unordered = line.match(/^\s*[-*+]\s+(.+)$/);
+  if (unordered) {
+    return { ordered: false, content: unordered[1] };
+  }
+  const ordered = line.match(/^\s*\d+[.)]\s+(.+)$/);
+  if (ordered) {
+    return { ordered: true, content: ordered[1] };
+  }
+  return null;
+}
+
+function isMarkdownTable(lines, index) {
+  if (index + 1 >= lines.length || !lines[index].includes("|")) {
+    return false;
+  }
+  const headers = splitMarkdownTableRow(lines[index]);
+  const divider = splitMarkdownTableRow(lines[index + 1]);
+  return headers.length > 1 && divider.length === headers.length && divider.every(isMarkdownTableDividerCell);
+}
+
+function splitMarkdownTableRow(line) {
+  let row = line.trim();
+  if (row.startsWith("|")) {
+    row = row.slice(1);
+  }
+  if (row.endsWith("|")) {
+    row = row.slice(0, -1);
+  }
+  return row.split("|").map((cell) => cell.trim());
+}
+
+function isMarkdownTableDividerCell(cell) {
+  return /^:?-{3,}:?$/.test(cell.trim());
+}
+
+function tableAlignment(cell) {
+  const value = cell.trim();
+  if (/^:-{3,}:$/.test(value)) {
+    return "center";
+  }
+  if (/^-{3,}:$/.test(value)) {
+    return "right";
+  }
+  if (/^:-{3,}$/.test(value)) {
+    return "left";
+  }
+  return "";
+}
+
+function tableCellAttributes(alignment) {
+  return alignment ? ` style="text-align: ${alignment}"` : "";
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function escapeAttribute(value) {
+  return escapeHtml(value).replaceAll("`", "&#96;");
+}
+
 function addEventLog(title, body, isError = false) {
   events.value.unshift({
     id: eventSequence.value++,
@@ -1245,7 +1824,7 @@ function setPromptOutput(value) {
 function summarizeLlmRequest(request) {
   const messageCount = request?.messages?.length || 0;
   const toolCount = request?.tools?.length || 0;
-  return `${messageCount} messages · ${toolCount} tools · ${request?.model || "unknown model"}`;
+  return `${messageCount} prompt parts · ${toolCount} tools · ${request?.model || "unknown model"}`;
 }
 
 function summarizeToolArguments(argumentsValue) {

@@ -9,7 +9,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=PROJECT_ROOT / ".env",
+        env_file=(
+            PROJECT_ROOT / "config" / "env.defaults",
+            PROJECT_ROOT / ".env",
+        ),
         env_file_encoding="utf-8",
         extra="ignore",
         populate_by_name=True,
@@ -20,6 +23,18 @@ class Settings(BaseSettings):
     site_url: str = Field(default="http://localhost:8000", alias="ANOMALO_SITE_URL")
 
     openrouter_api_key: str | None = Field(default=None, alias="OPENROUTER_API_KEY")
+    openrouter_management_api_key: str | None = Field(
+        default=None,
+        alias="OPENROUTER_MANAGEMENT_API_KEY",
+    )
+    openrouter_credits_cache_seconds: int = Field(
+        default=0,
+        alias="OPENROUTER_CREDITS_CACHE_SECONDS",
+    )
+    openrouter_credits_timeout_seconds: float = Field(
+        default=8.0,
+        alias="OPENROUTER_CREDITS_TIMEOUT_SECONDS",
+    )
     openai_base_url: str = Field(default="https://openrouter.ai/api/v1", alias="OPENAI_BASE_URL")
     openrouter_model: str = Field(default="openai/gpt-4o-mini", alias="OPENROUTER_MODEL")
     llm_temperature: float = Field(default=0.4, alias="LLM_TEMPERATURE")
