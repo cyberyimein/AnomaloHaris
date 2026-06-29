@@ -70,6 +70,15 @@ class BuddyVisionService:
             "detector_loaded": self._detector is not None,
             "score_threshold": self.settings.buddy_vision_score_threshold,
             "pause_ms": self.settings.buddy_vision_pause_ms,
+            "look": {
+                "enabled": self.settings.buddy_vision_look_enabled,
+                "max_yaw_degrees": self.settings.buddy_vision_look_max_yaw_degrees,
+                "max_pitch_degrees": self.settings.buddy_vision_look_max_pitch_degrees,
+                "speed": self.settings.buddy_vision_look_speed,
+                "deadband": self.settings.buddy_vision_look_deadband,
+                "invert_x": self.settings.buddy_vision_look_invert_x,
+                "invert_y": self.settings.buddy_vision_look_invert_y,
+            },
             "last_detection": self._last_detection,
         }
 
@@ -104,7 +113,7 @@ class BuddyVisionService:
         faces = [face for face in candidates if face.score >= threshold]
         face_detected = bool(faces)
         action = (
-            self._apply_face_detected_action()
+            self._apply_face_detected_action(faces, image)
             if apply_buddy_action and face_detected
             else None
         )
@@ -153,18 +162,22 @@ class BuddyVisionService:
         except Exception as exc:  # noqa: BLE001
             raise BuddyVisionProcessingError(f"Failed to decode Buddy vision image: {exc}") from exc
 
-    def _apply_face_detected_action(self) -> dict[str, Any]:
+    def _apply_face_detected_action(
+        self,
+        faces: list[BuddyFaceBox],
+        image: BuddyVisionImage,
+    ) -> dict[str, Any]:
         if not self.settings.buddy_vision_enabled:
             return {"applied": False, "reason": "buddy vision actions are disabled"}
         if not self.gateway.is_connected():
             return {"applied": False, "reason": "Buddy is not connected"}
 
         pause_ms = self.settings.buddy_vision_pause_ms
-        commands = [
-            f"ROAM PAUSE {pause_ms}",
-            "HOME",
-            "CB idle person nearby",
-        ]
+        look = self._look_command(faces, image)
+        commands = [f"ROAM PAUSE {pause_ms}"]
+        if look["command"]:
+            commands.append(str(look["command"]))
+        commands.append("CB idle person nearby")
         sent_commands: list[str] = []
         try:
             for command in commands:
@@ -172,7 +185,58 @@ class BuddyVisionService:
                 sent_commands.append(command)
         except BuddyConnectionError as exc:
             return {"applied": False, "commands": sent_commands, "error": str(exc)}
-        return {"applied": True, "commands": sent_commands, "pause_ms": pause_ms}
+        return {
+            "applied": True,
+            "commands": sent_commands,
+            "pause_ms": pause_ms,
+            "look": look,
+        }
+
+    def _look_command(
+        self,
+        faces: list[BuddyFaceBox],
+        image: BuddyVisionImage,
+    ) -> dict[str, Any]:
+        if not self.settings.buddy_vision_look_enabled:
+            return {"applied": False, "reason": "look is disabled", "command": None}
+        if not faces:
+            return {"applied": False, "reason": "no face target", "command": None}
+        if image.width <= 0 or image.height <= 0:
+            return {"applied": False, "reason": "invalid image size", "command": None}
+
+        target = max(faces, key=lambda face: (face.width * face.height, face.score))
+        center_x = target.x + target.width / 2
+        center_y = target.y + target.height / 2
+        offset_x = (center_x - image.width / 2) / (image.width / 2)
+        offset_y = (center_y - image.height / 2) / (image.height / 2)
+
+        yaw_axis = -offset_x if self.settings.buddy_vision_look_invert_x else offset_x
+        pitch_axis = offset_y if self.settings.buddy_vision_look_invert_y else -offset_y
+        deadband = max(0.0, min(1.0, self.settings.buddy_vision_look_deadband))
+        if abs(yaw_axis) < deadband:
+            yaw_axis = 0.0
+        if abs(pitch_axis) < deadband:
+            pitch_axis = 0.0
+
+        max_yaw_units = max(0, int(round(self.settings.buddy_vision_look_max_yaw_degrees * 10)))
+        max_pitch_units = max(
+            0,
+            int(round(self.settings.buddy_vision_look_max_pitch_degrees * 10)),
+        )
+        yaw = int(round(_clamp_axis(yaw_axis) * max_yaw_units))
+        pitch = int(round(_clamp_axis(pitch_axis) * max_pitch_units))
+        speed = max(0, int(self.settings.buddy_vision_look_speed))
+        command = f"LOOK {yaw} {pitch} {speed}" if yaw or pitch else None
+        return {
+            "applied": command is not None,
+            "command": command,
+            "yaw": yaw,
+            "pitch": pitch,
+            "speed": speed,
+            "offset_x": round(offset_x, 4),
+            "offset_y": round(offset_y, 4),
+            "target_face": target.as_dict(),
+        }
 
 
 class _MediaPipeBlazeFaceDetector:
@@ -226,3 +290,7 @@ class _MediaPipeBlazeFaceDetector:
 
 def _clamp(value: float) -> float:
     return max(0.0, min(1.0, value))
+
+
+def _clamp_axis(value: float) -> float:
+    return max(-1.0, min(1.0, value))

@@ -38,7 +38,7 @@ class FakeBuddyAudioBridge:
         return
 
 
-def test_buddy_vision_service_lazily_loads_detector_and_pauses_roaming() -> None:
+def test_buddy_vision_service_lazily_loads_detector_and_looks_at_face() -> None:
     gateway = FakeBuddyGateway(connected=True)
     factory_calls = 0
 
@@ -65,9 +65,35 @@ def test_buddy_vision_service_lazily_loads_detector_and_pauses_roaming() -> None
     assert factory_calls == 1
     assert gateway.commands == [
         "ROAM PAUSE 300000",
-        "HOME",
+        "LOOK -203 75 40",
         "CB idle person nearby",
     ]
+    assert result["action"]["look"]["applied"] is True
+    assert result["action"]["look"]["yaw"] == -203
+    assert result["action"]["look"]["pitch"] == 75
+
+
+def test_buddy_vision_service_skips_look_when_face_is_centered() -> None:
+    gateway = FakeBuddyGateway(connected=True)
+    service = BuddyVisionService(
+        Settings(ANOMALO_BUDDY_VISION_ENABLED=True),
+        gateway=gateway,  # type: ignore[arg-type]
+        detector_factory=lambda: FakeFaceDetector(
+            [BuddyFaceBox(x=140, y=100, width=40, height=40, score=0.82)]
+        ),
+        image_decoder=lambda _: BuddyVisionImage(pixels=object(), width=320, height=240),
+    )
+
+    result = service.detect_image(b"image-bytes", apply_buddy_action=True)
+
+    assert result["face_detected"] is True
+    assert gateway.commands == [
+        "ROAM PAUSE 300000",
+        "CB idle person nearby",
+    ]
+    assert result["action"]["look"]["applied"] is False
+    assert result["action"]["look"]["yaw"] == 0
+    assert result["action"]["look"]["pitch"] == 0
 
 
 def test_buddy_vision_service_filters_low_confidence_candidates() -> None:

@@ -267,6 +267,11 @@ ANOMALO_BUDDY_VISION_ENABLED=true
 ANOMALO_BUDDY_VISION_FRAME_TOKEN=<random-device-token>
 ANOMALO_BUDDY_VISION_SCORE_THRESHOLD=0.45
 ANOMALO_BUDDY_VISION_PAUSE_MS=300000
+ANOMALO_BUDDY_VISION_LOOK_ENABLED=true
+ANOMALO_BUDDY_VISION_LOOK_MAX_YAW_DEGREES=25
+ANOMALO_BUDDY_VISION_LOOK_MAX_PITCH_DEGREES=12
+ANOMALO_BUDDY_VISION_LOOK_SPEED=40
+ANOMALO_BUDDY_VISION_LOOK_DEADBAND=0.12
 ```
 
 The default provider is MediaPipe BlazeFace full-range (`ANOMALO_BUDDY_VISION_MODEL_SELECTION=1`).
@@ -277,12 +282,14 @@ If a face-like region is detected, Anomalo sends:
 
 ```text
 ROAM PAUSE <pause_ms>
-HOME
+LOOK <yaw> <pitch> <speed>
 CB idle person nearby
 ```
 
-The firmware still needs to support `ROAM PAUSE` for this to fully stop idle wandering; until then
-the host can only send the command and rely on firmware behavior.
+The `LOOK` target is computed from the largest detected face's center. If the face is already near
+the image center, Anomalo skips `LOOK` and only pauses roaming. The firmware still needs to support
+`ROAM PAUSE` for this to fully stop idle wandering; until then the host can only send the command
+and rely on firmware behavior.
 
 ## Buddy Audio Transport
 

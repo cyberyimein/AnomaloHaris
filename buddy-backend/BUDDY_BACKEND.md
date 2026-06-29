@@ -125,13 +125,18 @@ Buddy 设备侧上传低频摄像头帧的接口。和 `/detect` 使用同一个
 `ANOMALO_BUDDY_VISION_FRAME_TOKEN`，也可以通过
 `ANOMALO_BUDDY_VISION_FRAME_CLIENT_IP` / `ANOMALO_BUDDY_TCP_CLIENT_IP` 配置 Buddy 设备 IP。
 
-检测到任意人脸时，如果 `ANOMALO_BUDDY_VISION_ENABLED=true` 且 Buddy 已连接，服务端发送：
+检测到任意人脸时，如果 `ANOMALO_BUDDY_VISION_ENABLED=true` 且 Buddy 已连接，服务端会先暂停
+漫游，再用最大人脸框的中心点计算 `LOOK` 目标，让 Buddy 看向人脸：
 
 ```text
 ROAM PAUSE <ANOMALO_BUDDY_VISION_PAUSE_MS>
-HOME
+LOOK <yaw> <pitch> <ANOMALO_BUDDY_VISION_LOOK_SPEED>
 CB idle person nearby
 ```
+
+如果人脸已经接近画面中心，服务端会按 `ANOMALO_BUDDY_VISION_LOOK_DEADBAND` 跳过 `LOOK`，只
+暂停漫游。方向校准可用 `ANOMALO_BUDDY_VISION_LOOK_INVERT_X` 和
+`ANOMALO_BUDDY_VISION_LOOK_INVERT_Y`。
 
 当前服务端已按这个命令名发送；固件侧仍需要实现 `ROAM PAUSE` 才能彻底停止 idle wander。
 
@@ -183,7 +188,8 @@ Buddy 技能位于 `buddy-backend/skills`，由 agent 后端的多目录技能�
 - 审批 UI 能根据 `APPROVAL`/状态命令展示请求，并返回 `approval.response`。
 - 如实现低频视觉检测，按几分钟一次上传低分辨率帧到 `/api/buddy/vision/frame`，
   并携带 `X-Anomalo-Buddy-Vision-Token` 或确保设备 IP 匹配服务端配置。
-- 如希望检测到人脸后停止电机噪音，固件需要实现 `ROAM PAUSE <ms>` 并停止 idle wander。
+- 如希望检测到人脸后停止电机噪音并看向人脸，固件需要实现 `ROAM PAUSE <ms>` 停止
+  idle wander，并支持已有 `LOOK <yaw> <pitch> [speed]` 舵机指向命令。
 - 麦克风音频流能明确 start/stop，并发送完整 PCM 帧。
 - 播放 host 返回音频时，设备状态应能进入 speaking，播放结束后回到 idle。
 - 出错时发事件说明原因，避免只静默断线。

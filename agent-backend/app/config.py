@@ -124,6 +124,31 @@ class Settings(BaseSettings):
         alias="ANOMALO_BUDDY_VISION_DETECTOR_MIN_CONFIDENCE",
     )
     buddy_vision_pause_ms: int = Field(default=300000, alias="ANOMALO_BUDDY_VISION_PAUSE_MS")
+    buddy_vision_look_enabled: bool = Field(
+        default=True,
+        alias="ANOMALO_BUDDY_VISION_LOOK_ENABLED",
+    )
+    buddy_vision_look_max_yaw_degrees: float = Field(
+        default=25.0,
+        alias="ANOMALO_BUDDY_VISION_LOOK_MAX_YAW_DEGREES",
+    )
+    buddy_vision_look_max_pitch_degrees: float = Field(
+        default=12.0,
+        alias="ANOMALO_BUDDY_VISION_LOOK_MAX_PITCH_DEGREES",
+    )
+    buddy_vision_look_speed: int = Field(default=40, alias="ANOMALO_BUDDY_VISION_LOOK_SPEED")
+    buddy_vision_look_deadband: float = Field(
+        default=0.12,
+        alias="ANOMALO_BUDDY_VISION_LOOK_DEADBAND",
+    )
+    buddy_vision_look_invert_x: bool = Field(
+        default=False,
+        alias="ANOMALO_BUDDY_VISION_LOOK_INVERT_X",
+    )
+    buddy_vision_look_invert_y: bool = Field(
+        default=False,
+        alias="ANOMALO_BUDDY_VISION_LOOK_INVERT_Y",
+    )
     buddy_vision_frame_token: str | None = Field(
         default=None,
         alias="ANOMALO_BUDDY_VISION_FRAME_TOKEN",
