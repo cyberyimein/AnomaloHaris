@@ -17,13 +17,20 @@ The runtime is event based: the agent emits message deltas, tool start/result ev
 - FastAPI serves the built Vue frontend at `/`.
 - Local STT/TTS voice module plus buddy audio chat at `/api/audio/*`.
 
+## Repository Layout
+
+- `frontend/` — Vue + Vite frontend, including its own `package.json` and `.gitignore`.
+- `agent-backend/` — main FastAPI agent backend, config, agent skills, tests, Docker files, and deployment scripts.
+- `buddy-backend/` — Buddy gateway package, Buddy skills, Copilot hook bridge, protocol docs, and client alignment notes.
+- `stock-backend/` — reserved folder for future stock backend code.
+
 ## Run
 
 ```bash
 uv venv --python 3.12 --seed .venv
 source .venv/bin/activate
-pip install -e ".[audio,buddy,dev]"
-uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+pip install -e ".[audio,buddy,vision,dev]"
+PYTHONPATH=agent-backend:buddy-backend uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 Open http://localhost:8000.
@@ -31,8 +38,8 @@ Open http://localhost:8000.
 For frontend development, run the FastAPI server above and start Vite in another shell:
 
 ```bash
-npm install
-npm run dev
+npm --prefix frontend install
+npm --prefix frontend run dev
 ```
 
 Open http://127.0.0.1:5173. Vite proxies `/api`, `/ws`, `/static`, and `/health` to the FastAPI
@@ -41,27 +48,27 @@ server on port `8000`.
 To update the frontend served by FastAPI:
 
 ```bash
-npm run build
+npm --prefix frontend run build
 ```
 
 ## Apple container deployment
 
 The production container builds the Vue frontend once and lets FastAPI serve the generated
-`app/frontend` files. This avoids running Vite or a separate static-file server in deployment.
+`agent-backend/app/frontend` files. This avoids running Vite or a separate static-file server in deployment.
 
 Build and save an OCI archive with Apple `container`:
 
 ```bash
-scripts/build_apple_container_image.sh
+agent-backend/scripts/build_apple_container_image.sh
 ```
 
 The script writes a `.tar` image archive and a sibling `.env` metadata file under
-`artifacts/container-images/`. Deploy that archive to a remote Mac over SSH:
+`agent-backend/artifacts/container-images/`. Deploy that archive to a remote Mac over SSH:
 
 ```bash
 REMOTE=user@mac-mini.local \
-ENV_FILE=deploy/anomalo.container.env.example \
-scripts/deploy_apple_container.sh artifacts/container-images/anomalo-<tag>-linux-arm64.env
+ENV_FILE=agent-backend/deploy/anomalo.container.env.example \
+agent-backend/scripts/deploy_apple_container.sh agent-backend/artifacts/container-images/anomalo-<tag>-linux-arm64.env
 ```
 
 Use a private env file for real secrets. The container example env uses TCP Buddy transport because
@@ -73,7 +80,7 @@ Deployment images default to `ANOMALO_ENV=production` and
 For local diagnosis, use `ANOMALO_ENV=development` with the default
 `ANOMALO_BUDDY_AUDIO_DEBUG_STORAGE=auto`, or force the behavior with `on` / `off`.
 
-Without `OPENROUTER_API_KEY`, the app runs in local dev mode and returns a mock assistant response. Set the key in `.env` to use OpenRouter.
+Without `OPENROUTER_API_KEY`, the app runs in local dev mode and returns a mock assistant response. Set the key in root `.env` to use OpenRouter.
 
 ## Local fonts
 
@@ -168,7 +175,8 @@ Endpoints:
 
 ## Buddy Bridge
 
-Anomalo now includes a Call Buddy host adapter for the StackChan/CoreS3 firmware in `buddy/`.
+Anomalo now includes a Call Buddy host adapter for the StackChan/CoreS3 firmware in `buddy-backend/`.
+See `buddy-backend/BUDDY_BACKEND.md` for the Buddy backend structure and client alignment contract.
 
 When `ANOMALO_BUDDY_TRANSPORT=tcp`, app startup now auto-starts the Buddy TCP listener and the
 background Buddy audio bridge.
@@ -201,13 +209,18 @@ Management endpoints:
   `touch.listen_cancel`, `approval.response`, and `device.heartbeat`.
 - `POST /api/buddy/state` — send Buddy state transitions like `idle`, `thinking`, or `speaking`.
 - `POST /api/buddy/approval` — show a `CODEX APPROVAL` prompt and wait for the device response.
+- `POST /api/buddy/vision/detect` — multipart image upload, lazily loads BlazeFace and returns
+  face boxes without controlling Buddy unless `apply_buddy_action=true`.
+- `POST /api/buddy/vision/frame` — Buddy-oriented multipart frame upload; detects faces and, when
+  vision actions are enabled, pauses roaming on detection.
+- `GET /api/buddy/vision/status` — current lazy detector state and latest face detection result.
 - `POST /api/copilot/hooks/{event}` — bridge Copilot CLI hooks into Buddy states and approvals.
 
 Agent tools now include Buddy control primitives such as `buddy_set_state`,
 `buddy_request_approval`, `buddy_look`, and `buddy_set_led`.
 
 Copilot CLI hook support is wired in via `.github/hooks/buddy-status.json`. The repository hook
-commands call `scripts/copilot_buddy_hook.py`, which forwards `userPromptSubmitted`,
+commands call `buddy-backend/scripts/copilot_buddy_hook.py`, which forwards `userPromptSubmitted`,
 `preToolUse`, `notification`, `permissionRequest`, `agentStop`, `sessionEnd`, and
 `errorOccurred` payloads to the local Anomalo API.
 
@@ -227,6 +240,49 @@ Remote LLMs can also activate the built-in Buddy skills:
 - `buddy_presence` — high-level Buddy state, text, LED, and head movement
 - `buddy_approval` — human approval through Buddy tap/swipe
 - `buddy_events` — recent Buddy events and connection status
+
+## Buddy Low-Power Face Detection
+
+Buddy vision is server-side and lazy-loaded. The FastAPI process does not import or initialize
+MediaPipe at startup; the BlazeFace detector is loaded only when `/api/buddy/vision/detect` or
+`/api/buddy/vision/frame` receives an image.
+
+Install the optional runtime dependencies when this feature is enabled in a compatible Python
+environment:
+
+```bash
+pip install -e ".[audio,buddy,vision]"
+```
+
+The default Apple container build targets `linux/arm64` and intentionally installs only
+`audio,buddy`, because the MediaPipe package used for BlazeFace does not currently ship a
+Linux arm64 wheel in the lock file. Use the local macOS runtime, a compatible `linux/amd64`
+container, or override the image with a different vision provider before setting
+`INSTALL_EXTRAS=audio,buddy,vision`.
+
+Recommended low-power settings:
+
+```bash
+ANOMALO_BUDDY_VISION_ENABLED=true
+ANOMALO_BUDDY_VISION_FRAME_TOKEN=<random-device-token>
+ANOMALO_BUDDY_VISION_SCORE_THRESHOLD=0.45
+ANOMALO_BUDDY_VISION_PAUSE_MS=300000
+```
+
+The default provider is MediaPipe BlazeFace full-range (`ANOMALO_BUDDY_VISION_MODEL_SELECTION=1`).
+For non-realtime checks, have Buddy upload a low-resolution frame every few minutes to
+`/api/buddy/vision/frame` with `X-Anomalo-Buddy-Vision-Token` or configure
+`ANOMALO_BUDDY_VISION_FRAME_CLIENT_IP` / `ANOMALO_BUDDY_TCP_CLIENT_IP` for the Buddy device IP.
+If a face-like region is detected, Anomalo sends:
+
+```text
+ROAM PAUSE <pause_ms>
+HOME
+CB idle person nearby
+```
+
+The firmware still needs to support `ROAM PAUSE` for this to fully stop idle wandering; until then
+the host can only send the command and rely on firmware behavior.
 
 ## Buddy Audio Transport
 
@@ -264,11 +320,11 @@ When Buddy audio turns are active, the server now logs key milestones at `INFO`,
 - recoverable no-speech cases such as empty transcripts
 
 In development and test environments, Buddy input audio is also saved under
-`artifacts/buddy-audio/` for diagnosis. Production deployment disables those files by default.
+`agent-backend/artifacts/buddy-audio/` for diagnosis. Production deployment disables those files by default.
 
 ## Prompts
 
-System-level prompts live in `config/prompts.yaml`. The runtime reads the configured profile on
+System-level prompts live in `agent-backend/config/prompts.yaml`. The runtime reads the configured profile on
 each chat run, so edits to the YAML are picked up without restarting the app.
 
 ```yaml
@@ -293,7 +349,7 @@ separate.
 ## Agent Memory
 
 Upload `AGENTS.md` from the development frontend to save simple personal-agent memory at
-`config/AGENTS.md`. The runtime reads this file on every run and inserts it as a system message
+`agent-backend/config/AGENTS.md`. The runtime reads this file on every run and inserts it as a system message
 between the YAML prompt profile and session history. The Context Assembly panel shows the
 `AGENTS.md memory` segment when it is present.
 
@@ -302,17 +358,18 @@ between the YAML prompt profile and session history. The Context Assembly panel 
 Build the optional Python tool image:
 
 ```bash
-docker build -t anomalo-python:latest docker/python
+docker build -t anomalo-python:latest agent-backend/docker/python
 ```
 
 The tool runs with no network, CPU/memory limits, read-only container filesystem, and an execution timeout.
 
 ## Skill Layout
 
-Each skill lives under `skills/{skill_name}`:
+Agent skills live under `agent-backend/skills/{skill_name}`. Buddy skills live under
+`buddy-backend/skills/{skill_name}` and are loaded into the same runtime catalog.
 
 ```text
-skills/
+agent-backend/skills/
   calculator/
     SKILL.md
     tools.py
@@ -333,7 +390,7 @@ Instructions for the skill go here.
 
 ## MCP
 
-MCP servers are configured in `config/mcp_servers.yaml`. The management API can add or toggle server configs. Install MCP support with `pip install -e ".[mcp]"`. If the optional `mcp` package is installed, configured servers can expose tools through the registry.
+MCP servers are configured in `agent-backend/config/mcp_servers.yaml`. The management API can add or toggle server configs. Install MCP support with `pip install -e ".[mcp]"`. If the optional `mcp` package is installed, configured servers can expose tools through the registry.
 
 MCP loading is session-scoped and on demand. By default the model only sees the MCP catalog plus `mcp_activate` and `mcp_deactivate`. A server's actual tool schemas are only loaded after that server is activated for the current session, either from the frontend session picker or by calling `mcp_activate`. This keeps large MCP tool packs out of the prompt until they are needed.
 

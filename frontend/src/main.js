@@ -1,6 +1,6 @@
 import { createApp } from "vue";
 
-import "../../app/static/style.css";
+import "./style.css";
 import App from "./App.vue";
 
 const localFonts = document.createElement("link");

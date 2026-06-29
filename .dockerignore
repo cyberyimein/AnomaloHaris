@@ -9,10 +9,13 @@ __pycache__/
 *.egg-info/
 node_modules/
 frontend/node_modules/
+.vite/
+frontend/.vite/
 local-fonts/
 artifacts/
+agent-backend/artifacts/
+stock-backend/artifacts/
 data/
 dist/
 build/
 *.log
-

@@ -147,6 +147,32 @@
 
           <section class="dashboard-panel">
             <header>
+              <span>Admin Access</span>
+              <strong>{{ managementTokenStatus }}</strong>
+            </header>
+            <form class="management-token-form" @submit.prevent="saveManagementToken">
+              <input
+                v-model="managementTokenInput"
+                type="password"
+                autocomplete="off"
+                placeholder="Admin token"
+                aria-label="Admin token"
+              />
+              <button class="control-button" type="submit">Save</button>
+              <button
+                class="control-button"
+                type="button"
+                :disabled="!managementToken"
+                @click="clearManagementToken"
+              >
+                Clear
+              </button>
+            </form>
+            <p class="dashboard-note">{{ managementTokenHint }}</p>
+          </section>
+
+          <section class="dashboard-panel">
+            <header>
               <span>Manual Control</span>
               <strong>{{ buddyActionInFlight ? "Working" : "Ready" }}</strong>
             </header>
@@ -569,6 +595,9 @@ const creditsRefreshTimer = ref(null);
 const shuttingDown = ref(false);
 const inspectorOpen = ref(false);
 const activeView = ref("agent");
+const managementToken = ref(loadManagementToken());
+const managementTokenInput = ref(managementToken.value);
+const managementAccessRequired = ref(false);
 
 const tools = ref([]);
 const events = ref([]);
@@ -714,6 +743,19 @@ const buddyStatusCards = computed(() => {
     { label: "Events", value: String(status.recent_event_count ?? buddyEvents.value.length) },
   ];
 });
+const managementTokenStatus = computed(() => (managementToken.value ? "Token saved" : "Token missing"));
+const managementTokenHint = computed(() => {
+  if (managementAccessRequired.value && !managementToken.value) {
+    return "Remote dashboard access needs an admin token.";
+  }
+  if (managementAccessRequired.value) {
+    return "Saved token was rejected by the server.";
+  }
+  if (managementToken.value) {
+    return "Token saved in this browser.";
+  }
+  return "Set ANOMALO_ADMIN_TOKEN, then save it here.";
+});
 
 onMounted(() => {
   sendDisabled.value = true;
@@ -760,14 +802,67 @@ function setActiveView(view) {
   }
 }
 
+function loadManagementToken() {
+  return localStorage.getItem("anomalo.adminToken") || "";
+}
+
+function saveManagementToken() {
+  const nextToken = managementTokenInput.value.trim();
+  managementToken.value = nextToken;
+  managementAccessRequired.value = false;
+  if (nextToken) {
+    localStorage.setItem("anomalo.adminToken", nextToken);
+    buddyDashboardStatus.value = "Admin token saved.";
+  } else {
+    localStorage.removeItem("anomalo.adminToken");
+    buddyDashboardStatus.value = "Admin token cleared.";
+  }
+  if (activeView.value === "dashboard") {
+    void refreshDashboard();
+  }
+}
+
+function clearManagementToken() {
+  managementTokenInput.value = "";
+  saveManagementToken();
+}
+
 function loadSessionId() {
   const existing = localStorage.getItem("anomalo.session");
   if (existing) {
     return existing;
   }
-  const generated = `session_${crypto.randomUUID().replaceAll("-", "")}`;
+  const generated = createSessionId();
   localStorage.setItem("anomalo.session", generated);
   return generated;
+}
+
+function createSessionId() {
+  return `session_${createUuid().replaceAll("-", "")}`;
+}
+
+function createUuid() {
+  const cryptoApi = globalThis.crypto;
+  if (cryptoApi?.randomUUID) {
+    return cryptoApi.randomUUID();
+  }
+
+  if (cryptoApi?.getRandomValues) {
+    const bytes = new Uint8Array(16);
+    cryptoApi.getRandomValues(bytes);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    return [...bytes]
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("")
+      .replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/, "$1-$2-$3-$4-$5");
+  }
+
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (char) => {
+    const value = Math.floor(Math.random() * 16);
+    const nibble = char === "x" ? value : (value & 0x3) | 0x8;
+    return nibble.toString(16);
+  });
 }
 
 function connect() {
@@ -909,8 +1004,10 @@ async function refreshDashboard() {
   buddyDashboardStatus.value = "Refreshing Buddy dashboard...";
   try {
     await Promise.all([loadBuddyStatus(), loadBuddyEvents()]);
+    managementAccessRequired.value = false;
     buddyDashboardStatus.value = `Updated ${new Date().toLocaleTimeString()}`;
   } catch (error) {
+    markManagementAccessError(error);
     buddyDashboardStatus.value = `Dashboard refresh failed: ${formatError(error)}`;
   } finally {
     buddyActionInFlight.value = false;
@@ -920,8 +1017,10 @@ async function refreshDashboard() {
 async function pollDashboard() {
   try {
     await Promise.all([loadBuddyStatus(), loadBuddyEvents()]);
+    managementAccessRequired.value = false;
     buddyDashboardStatus.value = `Updated ${new Date().toLocaleTimeString()}`;
   } catch (error) {
+    markManagementAccessError(error);
     buddyDashboardStatus.value = `Dashboard refresh failed: ${formatError(error)}`;
   }
 }
@@ -968,8 +1067,10 @@ async function runBuddyAction(progressMessage, action) {
   try {
     await action();
     await loadBuddyEvents();
+    managementAccessRequired.value = false;
     buddyDashboardStatus.value = `Updated ${new Date().toLocaleTimeString()}`;
   } catch (error) {
+    markManagementAccessError(error);
     buddyDashboardStatus.value = formatError(error);
   } finally {
     buddyActionInFlight.value = false;
@@ -977,7 +1078,7 @@ async function runBuddyAction(progressMessage, action) {
 }
 
 async function fetchJson(url, options) {
-  const response = await fetch(url, options);
+  const response = await fetch(url, withManagementAccess(url, options));
   const text = await response.text();
   let payload = {};
   if (text) {
@@ -988,9 +1089,38 @@ async function fetchJson(url, options) {
     }
   }
   if (!response.ok) {
-    throw new Error(payload.detail || `${response.status} ${response.statusText}`);
+    const error = new Error(payload.detail || `${response.status} ${response.statusText}`);
+    error.status = response.status;
+    error.detail = payload.detail;
+    throw error;
   }
   return payload;
+}
+
+function withManagementAccess(url, options = {}) {
+  if (!requiresManagementAccess(url) || !managementToken.value) {
+    return options;
+  }
+  const headers = new Headers(options.headers || {});
+  headers.set("X-Anomalo-Admin-Token", managementToken.value);
+  return { ...options, headers };
+}
+
+function requiresManagementAccess(url) {
+  return url.startsWith("/api/buddy") || url.startsWith("/api/manage") || url.startsWith("/api/copilot-hooks");
+}
+
+function markManagementAccessError(error) {
+  if (isManagementAccessError(error)) {
+    managementAccessRequired.value = true;
+  }
+}
+
+function isManagementAccessError(error) {
+  return (
+    error?.status === 403 &&
+    String(error?.detail || error?.message || "").includes("Management API requires")
+  );
 }
 
 function submitMessage() {

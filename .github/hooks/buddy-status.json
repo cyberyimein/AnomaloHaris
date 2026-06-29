@@ -4,8 +4,8 @@
     "userPromptSubmitted": [
       {
         "type": "command",
-        "bash": "./scripts/copilot_buddy_hook.py userPromptSubmitted",
-        "powershell": "python .\\scripts\\copilot_buddy_hook.py userPromptSubmitted",
+        "bash": "./buddy-backend/scripts/copilot_buddy_hook.py userPromptSubmitted",
+        "powershell": "python .\\buddy-backend\\scripts\\copilot_buddy_hook.py userPromptSubmitted",
         "cwd": ".",
         "timeoutSec": 5
       }
@@ -13,8 +13,8 @@
     "preToolUse": [
       {
         "type": "command",
-        "bash": "./scripts/copilot_buddy_hook.py preToolUse",
-        "powershell": "python .\\scripts\\copilot_buddy_hook.py preToolUse",
+        "bash": "./buddy-backend/scripts/copilot_buddy_hook.py preToolUse",
+        "powershell": "python .\\buddy-backend\\scripts\\copilot_buddy_hook.py preToolUse",
         "cwd": ".",
         "timeoutSec": 5
       }
@@ -22,8 +22,8 @@
     "permissionRequest": [
       {
         "type": "command",
-        "bash": "./scripts/copilot_buddy_hook.py permissionRequest",
-        "powershell": "python .\\scripts\\copilot_buddy_hook.py permissionRequest",
+        "bash": "./buddy-backend/scripts/copilot_buddy_hook.py permissionRequest",
+        "powershell": "python .\\buddy-backend\\scripts\\copilot_buddy_hook.py permissionRequest",
         "cwd": ".",
         "timeoutSec": 120
       }
@@ -31,8 +31,8 @@
     "notification": [
       {
         "type": "command",
-        "bash": "./scripts/copilot_buddy_hook.py notification",
-        "powershell": "python .\\scripts\\copilot_buddy_hook.py notification",
+        "bash": "./buddy-backend/scripts/copilot_buddy_hook.py notification",
+        "powershell": "python .\\buddy-backend\\scripts\\copilot_buddy_hook.py notification",
         "cwd": ".",
         "timeoutSec": 5,
         "matcher": "permission_prompt"
@@ -41,8 +41,8 @@
     "agentStop": [
       {
         "type": "command",
-        "bash": "./scripts/copilot_buddy_hook.py agentStop",
-        "powershell": "python .\\scripts\\copilot_buddy_hook.py agentStop",
+        "bash": "./buddy-backend/scripts/copilot_buddy_hook.py agentStop",
+        "powershell": "python .\\buddy-backend\\scripts\\copilot_buddy_hook.py agentStop",
         "cwd": ".",
         "timeoutSec": 5
       }
@@ -50,8 +50,8 @@
     "sessionEnd": [
       {
         "type": "command",
-        "bash": "./scripts/copilot_buddy_hook.py sessionEnd",
-        "powershell": "python .\\scripts\\copilot_buddy_hook.py sessionEnd",
+        "bash": "./buddy-backend/scripts/copilot_buddy_hook.py sessionEnd",
+        "powershell": "python .\\buddy-backend\\scripts\\copilot_buddy_hook.py sessionEnd",
         "cwd": ".",
         "timeoutSec": 5
       }
@@ -59,8 +59,8 @@
     "errorOccurred": [
       {
         "type": "command",
-        "bash": "./scripts/copilot_buddy_hook.py errorOccurred",
-        "powershell": "python .\\scripts\\copilot_buddy_hook.py errorOccurred",
+        "bash": "./buddy-backend/scripts/copilot_buddy_hook.py errorOccurred",
+        "powershell": "python .\\buddy-backend\\scripts\\copilot_buddy_hook.py errorOccurred",
         "cwd": ".",
         "timeoutSec": 5
       }

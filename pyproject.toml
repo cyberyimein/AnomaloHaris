@@ -32,6 +32,12 @@ buddy = [
   "pyserial>=3.5",
 ]
 
+vision = [
+  "mediapipe>=0.10.20",
+  "numpy>=1.26.0; python_version < '3.13'",
+  "pillow>=10.4.0",
+]
+
 dev = [
   "ruff>=0.8.0",
   "pytest>=8.3.0",
@@ -46,6 +52,10 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
+[tool.pytest.ini_options]
+pythonpath = ["agent-backend", "buddy-backend"]
+testpaths = ["agent-backend/tests", "buddy-backend/tests"]
 
 [tool.setuptools.packages.find]
-include = ["app*"]
+where = ["agent-backend", "buddy-backend"]
+include = ["app*", "buddy_backend*"]
