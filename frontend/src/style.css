@@ -901,18 +901,94 @@ button {
 
 .composer-box {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: end;
   width: min(820px, 100%);
   margin: 0 auto;
   border: 1px solid rgba(203, 200, 191, 0.62);
   border-radius: 24px;
   background: rgba(255, 254, 253, 0.88);
-  padding: 7px 7px 7px 18px;
+  padding: 7px;
   box-shadow:
     0 20px 48px rgba(31, 32, 35, 0.08),
     inset 0 1px 0 rgba(255, 255, 255, 0.74);
   backdrop-filter: blur(18px);
+}
+
+.composer-actions {
+  position: relative;
+  display: inline-flex;
+  align-self: end;
+  flex: 0 0 auto;
+}
+
+.composer-action-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border: 1px solid transparent;
+  border-radius: 16px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    background 140ms ease,
+    color 140ms ease,
+    transform 140ms ease;
+}
+
+.composer-action-trigger:hover,
+.composer-action-trigger[aria-expanded="true"] {
+  background: var(--surface-muted);
+  color: var(--text);
+}
+
+.composer-action-drawer {
+  position: absolute;
+  bottom: calc(100% + 12px);
+  left: 0;
+  z-index: 20;
+  display: grid;
+  min-width: 178px;
+  border: 1px solid rgba(203, 200, 191, 0.72);
+  border-radius: 10px;
+  background: rgba(255, 254, 253, 0.96);
+  box-shadow: 0 18px 44px rgba(31, 32, 35, 0.16);
+  padding: 6px;
+  backdrop-filter: blur(18px);
+}
+
+.composer-action-item {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  min-height: 38px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  padding: 0 10px;
+  text-align: left;
+  transition:
+    background 140ms ease,
+    color 140ms ease;
+}
+
+.composer-action-item:hover {
+  background: var(--accent-soft);
+}
+
+.composer-action-item span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .composer-input {
@@ -929,7 +1005,7 @@ button {
   font-family: var(--font-display);
   font-size: 18px;
   font-weight: 450;
-  padding: 7px 8px 7px 0;
+  padding: 7px 8px;
   outline: none;
   line-height: 1.55;
   overflow: auto;
@@ -943,6 +1019,68 @@ button {
 
 .composer-input::placeholder {
   color: var(--subtle);
+}
+
+.send-button-wrap {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.send-button-wrap::before,
+.send-button-wrap::after {
+  position: absolute;
+  right: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease;
+}
+
+.send-button-wrap::before {
+  bottom: calc(100% + 5px);
+  right: 16px;
+  border: 5px solid transparent;
+  border-top-color: var(--ink);
+  content: "";
+  transform: translateY(4px);
+}
+
+.send-button-wrap::after {
+  bottom: calc(100% + 14px);
+  border-radius: 8px;
+  background: var(--ink);
+  box-shadow: 0 10px 26px rgba(31, 32, 35, 0.2);
+  color: #ffffff;
+  content: attr(data-tooltip);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  line-height: 1.2;
+  padding: 7px 9px;
+  transform: translateY(4px);
+  white-space: nowrap;
+}
+
+.send-button-wrap:hover::before,
+.send-button-wrap:hover::after,
+.send-button-wrap:focus-within::before,
+.send-button-wrap:focus-within::after {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.composer-drawer-enter-active,
+.composer-drawer-leave-active {
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease;
+}
+
+.composer-drawer-enter-from,
+.composer-drawer-leave-to {
+  opacity: 0;
+  transform: translateY(6px);
 }
 
 .send-button {

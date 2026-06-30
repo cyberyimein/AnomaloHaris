@@ -24,16 +24,20 @@ The runtime is event based: the agent emits message deltas, tool start/result ev
 - `buddy-backend/` — Buddy gateway package, Buddy skills, Copilot hook bridge, protocol docs, and client alignment notes.
 - `stock-backend/` — reserved folder for future stock backend code.
 
-## Run
+## Run Backend
 
 ```bash
+cd /Users/waynewong/code/Anomalo
 uv venv --python 3.12 --seed .venv
 source .venv/bin/activate
 pip install -e ".[audio,buddy,vision,dev]"
-PYTHONPATH=agent-backend:buddy-backend uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+PYTHONPATH=agent-backend:buddy-backend .venv/bin/python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-Open http://localhost:8000.
+Runtime configuration is centralized in the root `.env`. The split backend folders do not use
+separate `.env` files.
+
+Open http://127.0.0.1:8000.
 
 For frontend development, run the FastAPI server above and start Vite in another shell:
 
@@ -178,8 +182,9 @@ Endpoints:
 Anomalo now includes a Call Buddy host adapter for the StackChan/CoreS3 firmware in `buddy-backend/`.
 See `buddy-backend/BUDDY_BACKEND.md` for the Buddy backend structure and client alignment contract.
 
-When `ANOMALO_BUDDY_TRANSPORT=tcp`, app startup now auto-starts the Buddy TCP listener and the
-background Buddy audio bridge.
+When `ANOMALO_BUDDY_TRANSPORT=tcp`, app startup auto-starts the Buddy TCP listener. The Buddy
+voice AI bridge is disabled by default; set `ANOMALO_BUDDY_AUDIO_AI_ENABLED=true` only when you
+want microphone turns to run through STT -> AgentRuntime/LLM -> TTS.
 
 Configure the USB serial port if auto-detection is not enough:
 
@@ -198,6 +203,7 @@ ANOMALO_BUDDY_TRANSPORT=tcp
 ANOMALO_BUDDY_TCP_HOST=0.0.0.0
 ANOMALO_BUDDY_TCP_PORT=8787
 ANOMALO_BUDDY_TCP_CLIENT_IP=192.168.31.78
+ANOMALO_BUDDY_AUDIO_AI_ENABLED=false
 ```
 
 Management endpoints:
@@ -214,7 +220,7 @@ Management endpoints:
 - `POST /api/buddy/vision/frame` — Buddy-oriented multipart frame upload; detects faces and, when
   vision actions are enabled, pauses roaming on detection.
 - `GET /api/buddy/vision/status` — current lazy detector state and latest face detection result.
-- `POST /api/copilot/hooks/{event}` — bridge Copilot CLI hooks into Buddy states and approvals.
+- `POST /api/copilot/hooks/{event}` — bridge Copilot CLI hooks into Buddy states and optional approvals.
 
 Agent tools now include Buddy control primitives such as `buddy_set_state`,
 `buddy_request_approval`, `buddy_look`, and `buddy_set_led`.
@@ -244,7 +250,7 @@ Remote LLMs can also activate the built-in Buddy skills:
 ## Buddy Low-Power Face Detection
 
 Buddy vision is server-side and lazy-loaded. The FastAPI process does not import or initialize
-MediaPipe at startup; the BlazeFace detector is loaded only when `/api/buddy/vision/detect` or
+OpenCV at startup; the face detector is loaded only when `/api/buddy/vision/detect` or
 `/api/buddy/vision/frame` receives an image.
 
 Install the optional runtime dependencies when this feature is enabled in a compatible Python
@@ -254,27 +260,30 @@ environment:
 pip install -e ".[audio,buddy,vision]"
 ```
 
-The default Apple container build targets `linux/arm64` and intentionally installs only
-`audio,buddy`, because the MediaPipe package used for BlazeFace does not currently ship a
-Linux arm64 wheel in the lock file. Use the local macOS runtime, a compatible `linux/amd64`
-container, or override the image with a different vision provider before setting
-`INSTALL_EXTRAS=audio,buddy,vision`.
+The default provider is OpenCV Haar (`ANOMALO_BUDDY_VISION_PROVIDER=opencv_haar`). It is a
+small, CPU-only detector that is good enough for low-frequency "face-like region" checks and
+works in the Apple `linux/arm64` container. MediaPipe BlazeFace remains available as
+`ANOMALO_BUDDY_VISION_PROVIDER=mediapipe_blazeface` if a compatible MediaPipe build is
+installed manually, but current MediaPipe releases no longer expose the legacy API used by this
+provider and some macOS runs may fail during OpenGL initialization.
 
 Recommended low-power settings:
 
 ```bash
 ANOMALO_BUDDY_VISION_ENABLED=true
+ANOMALO_BUDDY_VISION_PROVIDER=opencv_haar
 ANOMALO_BUDDY_VISION_FRAME_TOKEN=<random-device-token>
 ANOMALO_BUDDY_VISION_SCORE_THRESHOLD=0.45
 ANOMALO_BUDDY_VISION_PAUSE_MS=300000
 ANOMALO_BUDDY_VISION_LOOK_ENABLED=true
 ANOMALO_BUDDY_VISION_LOOK_MAX_YAW_DEGREES=25
 ANOMALO_BUDDY_VISION_LOOK_MAX_PITCH_DEGREES=12
+ANOMALO_BUDDY_VISION_LOOK_CENTER_YAW=0
+ANOMALO_BUDDY_VISION_LOOK_CENTER_PITCH=260
 ANOMALO_BUDDY_VISION_LOOK_SPEED=40
 ANOMALO_BUDDY_VISION_LOOK_DEADBAND=0.12
 ```
 
-The default provider is MediaPipe BlazeFace full-range (`ANOMALO_BUDDY_VISION_MODEL_SELECTION=1`).
 For non-realtime checks, have Buddy upload a low-resolution frame every few minutes to
 `/api/buddy/vision/frame` with `X-Anomalo-Buddy-Vision-Token` or configure
 `ANOMALO_BUDDY_VISION_FRAME_CLIENT_IP` / `ANOMALO_BUDDY_TCP_CLIENT_IP` for the Buddy device IP.
@@ -285,6 +294,9 @@ ROAM PAUSE <pause_ms>
 LOOK <yaw> <pitch> <speed>
 CB idle person nearby
 ```
+
+`LOOK` uses absolute servo targets. The default center is `yaw=0`, `pitch=260`;
+the detected face offset is added to that center before the command is sent.
 
 The `LOOK` target is computed from the largest detected face's center. If the face is already near
 the image center, Anomalo skips `LOOK` and only pauses roaming. The firmware still needs to support
@@ -305,17 +317,19 @@ Anomalo now:
 
 - parses Buddy `audio.input` binary frames in the TCP gateway,
 - queues completed microphone turns when Buddy stops listening,
-- runs those turns through STT -> AgentRuntime/LLM -> TTS in a background bridge,
+- runs those turns through STT -> AgentRuntime/LLM -> TTS only when
+  `ANOMALO_BUDDY_AUDIO_AI_ENABLED=true`,
 - converts reply audio for Buddy speaker playback, and
 - streams `audio.output` frames back to the device.
 
-Practical test flow:
+Practical voice-AI test flow:
 
 1. Start Anomalo on the Mac mini.
-2. Confirm `/api/buddy/status` shows `listening:true` and then `connected:true`.
-3. Tap Buddy to enter listening mode.
-4. Speak a short English or Chinese utterance.
-5. Wait for Buddy to switch from `listening` -> `thinking` -> `speaking` -> `idle`.
+2. Set `ANOMALO_BUDDY_AUDIO_AI_ENABLED=true`.
+3. Confirm `/api/buddy/status` shows `listening:true` and then `connected:true`.
+4. Tap Buddy to enter listening mode.
+5. Speak a short English or Chinese utterance.
+6. Wait for Buddy to switch from `listening` -> `thinking` -> `speaking` -> `idle`.
 
 When Buddy audio turns are active, the server now logs key milestones at `INFO`, including:
 

@@ -102,13 +102,17 @@ class Settings(BaseSettings):
     buddy_tcp_port: int = Field(default=8787, alias="ANOMALO_BUDDY_TCP_PORT")
     buddy_tcp_client_ip: str | None = Field(default=None, alias="ANOMALO_BUDDY_TCP_CLIENT_IP")
     buddy_event_buffer_size: int = Field(default=200, alias="ANOMALO_BUDDY_EVENT_BUFFER_SIZE")
+    buddy_audio_ai_enabled: bool = Field(
+        default=False,
+        alias="ANOMALO_BUDDY_AUDIO_AI_ENABLED",
+    )
     buddy_audio_debug_storage: str = Field(
         default="auto",
         alias="ANOMALO_BUDDY_AUDIO_DEBUG_STORAGE",
     )
     buddy_vision_enabled: bool = Field(default=False, alias="ANOMALO_BUDDY_VISION_ENABLED")
     buddy_vision_provider: str = Field(
-        default="mediapipe_blazeface",
+        default="opencv_haar",
         alias="ANOMALO_BUDDY_VISION_PROVIDER",
     )
     buddy_vision_model_selection: int = Field(
@@ -135,6 +139,14 @@ class Settings(BaseSettings):
     buddy_vision_look_max_pitch_degrees: float = Field(
         default=12.0,
         alias="ANOMALO_BUDDY_VISION_LOOK_MAX_PITCH_DEGREES",
+    )
+    buddy_vision_look_center_yaw: int = Field(
+        default=0,
+        alias="ANOMALO_BUDDY_VISION_LOOK_CENTER_YAW",
+    )
+    buddy_vision_look_center_pitch: int = Field(
+        default=260,
+        alias="ANOMALO_BUDDY_VISION_LOOK_CENTER_PITCH",
     )
     buddy_vision_look_speed: int = Field(default=40, alias="ANOMALO_BUDDY_VISION_LOOK_SPEED")
     buddy_vision_look_deadband: float = Field(

@@ -56,12 +56,11 @@ class BuddyVisionService:
     ) -> None:
         self.settings = settings
         self.gateway = gateway
-        self._detector_factory = detector_factory or (
-            lambda: _MediaPipeBlazeFaceDetector(settings)
-        )
+        self._detector_factory = detector_factory or (lambda: _create_face_detector(settings))
         self._image_decoder = image_decoder or self._decode_image
         self._detector: BuddyFaceDetector | None = None
         self._last_detection: dict[str, Any] | None = None
+        self._roam_paused_by_vision = False
 
     def status(self) -> dict[str, Any]:
         return {
@@ -74,6 +73,8 @@ class BuddyVisionService:
                 "enabled": self.settings.buddy_vision_look_enabled,
                 "max_yaw_degrees": self.settings.buddy_vision_look_max_yaw_degrees,
                 "max_pitch_degrees": self.settings.buddy_vision_look_max_pitch_degrees,
+                "center_yaw": self.settings.buddy_vision_look_center_yaw,
+                "center_pitch": self.settings.buddy_vision_look_center_pitch,
                 "speed": self.settings.buddy_vision_look_speed,
                 "deadband": self.settings.buddy_vision_look_deadband,
                 "invert_x": self.settings.buddy_vision_look_invert_x,
@@ -112,11 +113,13 @@ class BuddyVisionService:
         inference_ms = round((time.perf_counter() - started) * 1000, 2)
         faces = [face for face in candidates if face.score >= threshold]
         face_detected = bool(faces)
-        action = (
-            self._apply_face_detected_action(faces, image)
-            if apply_buddy_action and face_detected
-            else None
-        )
+        action = None
+        if apply_buddy_action:
+            action = (
+                self._apply_face_detected_action(faces, image)
+                if face_detected
+                else self._apply_no_face_action()
+            )
 
         result = {
             "face_detected": face_detected,
@@ -185,12 +188,29 @@ class BuddyVisionService:
                 sent_commands.append(command)
         except BuddyConnectionError as exc:
             return {"applied": False, "commands": sent_commands, "error": str(exc)}
+        self._roam_paused_by_vision = True
         return {
             "applied": True,
             "commands": sent_commands,
             "pause_ms": pause_ms,
             "look": look,
         }
+
+    def _apply_no_face_action(self) -> dict[str, Any]:
+        if not self.settings.buddy_vision_enabled:
+            return {"applied": False, "reason": "buddy vision actions are disabled"}
+        if not self._roam_paused_by_vision:
+            return {"applied": False, "reason": "roam was not paused by vision"}
+        if not self.gateway.is_connected():
+            return {"applied": False, "reason": "Buddy is not connected"}
+
+        command = "ROAM RESUME"
+        try:
+            self.gateway.send_raw_command(command)
+        except BuddyConnectionError as exc:
+            return {"applied": False, "commands": [], "error": str(exc)}
+        self._roam_paused_by_vision = False
+        return {"applied": True, "commands": [command]}
 
     def _look_command(
         self,
@@ -223,15 +243,19 @@ class BuddyVisionService:
             0,
             int(round(self.settings.buddy_vision_look_max_pitch_degrees * 10)),
         )
-        yaw = int(round(_clamp_axis(yaw_axis) * max_yaw_units))
-        pitch = int(round(_clamp_axis(pitch_axis) * max_pitch_units))
+        yaw_delta = int(round(_clamp_axis(yaw_axis) * max_yaw_units))
+        pitch_delta = int(round(_clamp_axis(pitch_axis) * max_pitch_units))
+        yaw = int(self.settings.buddy_vision_look_center_yaw) + yaw_delta
+        pitch = int(self.settings.buddy_vision_look_center_pitch) + pitch_delta
         speed = max(0, int(self.settings.buddy_vision_look_speed))
-        command = f"LOOK {yaw} {pitch} {speed}" if yaw or pitch else None
+        command = f"LOOK {yaw} {pitch} {speed}" if yaw_delta or pitch_delta else None
         return {
             "applied": command is not None,
             "command": command,
             "yaw": yaw,
             "pitch": pitch,
+            "yaw_delta": yaw_delta,
+            "pitch_delta": pitch_delta,
             "speed": speed,
             "offset_x": round(offset_x, 4),
             "offset_y": round(offset_y, 4),
@@ -248,18 +272,35 @@ class _MediaPipeBlazeFaceDetector:
         except ImportError as exc:
             raise BuddyVisionConfigurationError(
                 "Buddy vision requires MediaPipe BlazeFace. Install with "
-                '`pip install -e ".[vision]"` in the Anomalo environment.'
+                '`pip install mediapipe` in the Anomalo environment, or use '
+                "`ANOMALO_BUDDY_VISION_PROVIDER=opencv_haar`."
             ) from exc
 
-        if settings.buddy_vision_provider != "mediapipe_blazeface":
+        if _normalize_provider(settings.buddy_vision_provider) != "mediapipe_blazeface":
             raise BuddyVisionConfigurationError(
                 f"Unsupported Buddy vision provider: {settings.buddy_vision_provider}"
             )
 
-        self._face_detection = mp.solutions.face_detection.FaceDetection(
-            model_selection=settings.buddy_vision_model_selection,
-            min_detection_confidence=settings.buddy_vision_detector_min_confidence,
-        )
+        try:
+            face_detection = mp.solutions.face_detection
+        except AttributeError as exc:
+            raise BuddyVisionConfigurationError(
+                "Installed MediaPipe does not expose the legacy BlazeFace API. Use "
+                "`ANOMALO_BUDDY_VISION_PROVIDER=opencv_haar`, or install a MediaPipe "
+                "version that still provides `mediapipe.solutions.face_detection`."
+            ) from exc
+
+        try:
+            self._face_detection = face_detection.FaceDetection(
+                model_selection=settings.buddy_vision_model_selection,
+                min_detection_confidence=settings.buddy_vision_detector_min_confidence,
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise BuddyVisionConfigurationError(
+                "Failed to initialize MediaPipe BlazeFace. Use "
+                "`ANOMALO_BUDDY_VISION_PROVIDER=opencv_haar` for the low-power "
+                "server-side detector."
+            ) from exc
 
     def detect(self, image: BuddyVisionImage) -> list[BuddyFaceBox]:
         results = self._face_detection.process(image.pixels)
@@ -286,6 +327,194 @@ class _MediaPipeBlazeFaceDetector:
                 )
             )
         return faces
+
+
+class _OpenCvHaarFaceDetector:
+    provider = "opencv_haar"
+    _cascade_files = (
+        "haarcascade_frontalface_default.xml",
+        "haarcascade_frontalface_alt2.xml",
+        "haarcascade_profileface.xml",
+    )
+
+    def __init__(self, settings: Settings) -> None:
+        del settings
+        try:
+            import cv2
+        except ImportError as exc:
+            raise BuddyVisionConfigurationError(
+                "Buddy vision requires OpenCV for the opencv_haar provider. Install with "
+                '`pip install -e ".[vision]"` in the Anomalo environment.'
+            ) from exc
+
+        classifiers = []
+        for cascade_file in self._cascade_files:
+            cascade_path = cv2.data.haarcascades + cascade_file
+            classifier = cv2.CascadeClassifier(cascade_path)
+            if not classifier.empty():
+                classifiers.append((cascade_file, classifier))
+        if not classifiers:
+            raise BuddyVisionConfigurationError(
+                f"Failed to load OpenCV face cascades from: {cv2.data.haarcascades}"
+            )
+        self._cv2 = cv2
+        self._classifiers = classifiers
+
+    def detect(self, image: BuddyVisionImage) -> list[BuddyFaceBox]:
+        gray = self._cv2.cvtColor(image.pixels, self._cv2.COLOR_RGB2GRAY)
+        scan_gray, scan_scale = self._scaled_scan_image(gray, image)
+        min_size = max(24, min(scan_gray.shape[:2]) // 18)
+        faces = self._detect_with_parameters(
+            scan_gray,
+            scan_scale,
+            image,
+            min_size=min_size,
+            min_neighbors=3,
+            scale_factor=1.06,
+            score=1.0,
+        )
+        if faces:
+            return _dedupe_faces(faces)
+
+        relaxed_min_size = max(18, min(scan_gray.shape[:2]) // 24)
+        relaxed_faces = self._detect_with_parameters(
+            scan_gray,
+            scan_scale,
+            image,
+            min_size=relaxed_min_size,
+            min_neighbors=1,
+            scale_factor=1.03,
+            score=0.5,
+        )
+        return _dedupe_faces(relaxed_faces)
+
+    def _detect_with_parameters(
+        self,
+        scan_gray: Any,
+        scan_scale: float,
+        image: BuddyVisionImage,
+        *,
+        min_size: int,
+        min_neighbors: int,
+        scale_factor: float,
+        score: float,
+    ) -> list[BuddyFaceBox]:
+        faces: list[BuddyFaceBox] = []
+        for scan_image, mirrored in (
+            (scan_gray, False),
+            (self._cv2.flip(scan_gray, 1), True),
+        ):
+            for _name, classifier in self._classifiers:
+                rectangles = classifier.detectMultiScale(
+                    scan_image,
+                    scaleFactor=scale_factor,
+                    minNeighbors=min_neighbors,
+                    minSize=(min_size, min_size),
+                )
+                faces.extend(
+                    self._face_box_from_scaled_rect(
+                        rectangle,
+                        scan_scale,
+                        image,
+                        mirrored=mirrored,
+                        score=score,
+                    )
+                    for rectangle in rectangles
+                )
+        return [face for face in faces if face.width > 0 and face.height > 0]
+
+    def _scaled_scan_image(
+        self,
+        gray: Any,
+        image: BuddyVisionImage,
+    ) -> tuple[Any, float]:
+        min_dimension = min(image.width, image.height)
+        if min_dimension < 180:
+            scale = 3.0
+        elif min_dimension < 320:
+            scale = 2.0
+        else:
+            scale = 1.0
+        if scale == 1.0:
+            return gray, scale
+        resized = self._cv2.resize(
+            gray,
+            None,
+            fx=scale,
+            fy=scale,
+            interpolation=self._cv2.INTER_LINEAR,
+        )
+        return resized, scale
+
+    def _face_box_from_scaled_rect(
+        self,
+        rectangle: Any,
+        scan_scale: float,
+        image: BuddyVisionImage,
+        *,
+        mirrored: bool,
+        score: float,
+    ) -> BuddyFaceBox:
+        x, y, width, height = rectangle
+        scaled_x = int(round(float(x) / scan_scale))
+        scaled_y = int(round(float(y) / scan_scale))
+        scaled_width = int(round(float(width) / scan_scale))
+        scaled_height = int(round(float(height) / scan_scale))
+        if mirrored:
+            scaled_x = image.width - scaled_x - scaled_width
+        x_min = max(0, min(image.width, scaled_x))
+        y_min = max(0, min(image.height, scaled_y))
+        x_max = max(0, min(image.width, scaled_x + scaled_width))
+        y_max = max(0, min(image.height, scaled_y + scaled_height))
+        return BuddyFaceBox(
+            x=x_min,
+            y=y_min,
+            width=x_max - x_min,
+            height=y_max - y_min,
+            score=score,
+        )
+
+
+def _create_face_detector(settings: Settings) -> BuddyFaceDetector:
+    provider = _normalize_provider(settings.buddy_vision_provider)
+    if provider == "opencv_haar":
+        return _OpenCvHaarFaceDetector(settings)
+    if provider == "mediapipe_blazeface":
+        return _MediaPipeBlazeFaceDetector(settings)
+    raise BuddyVisionConfigurationError(
+        "Unsupported Buddy vision provider: "
+        f"{settings.buddy_vision_provider}. Supported providers: opencv_haar, "
+        "mediapipe_blazeface."
+    )
+
+
+def _normalize_provider(provider: str) -> str:
+    return provider.strip().lower()
+
+
+def _dedupe_faces(faces: list[BuddyFaceBox]) -> list[BuddyFaceBox]:
+    ordered_faces = sorted(faces, key=lambda face: face.width * face.height, reverse=True)
+    kept: list[BuddyFaceBox] = []
+    for face in ordered_faces:
+        if all(_intersection_over_union(face, existing) < 0.35 for existing in kept):
+            kept.append(face)
+    return kept
+
+
+def _intersection_over_union(left: BuddyFaceBox, right: BuddyFaceBox) -> float:
+    left_x2 = left.x + left.width
+    left_y2 = left.y + left.height
+    right_x2 = right.x + right.width
+    right_y2 = right.y + right.height
+    intersection_width = max(0, min(left_x2, right_x2) - max(left.x, right.x))
+    intersection_height = max(0, min(left_y2, right_y2) - max(left.y, right.y))
+    intersection = intersection_width * intersection_height
+    if intersection <= 0:
+        return 0.0
+    left_area = left.width * left.height
+    right_area = right.width * right.height
+    union = left_area + right_area - intersection
+    return intersection / union if union else 0.0
 
 
 def _clamp(value: float) -> float:

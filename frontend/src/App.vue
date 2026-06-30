@@ -235,6 +235,31 @@
         @submit.prevent="submitMessage"
       >
         <div class="composer-box">
+          <div ref="composerActionsEl" class="composer-actions">
+            <button
+              class="composer-action-trigger"
+              type="button"
+              title="More actions"
+              aria-label="More actions"
+              aria-controls="composerActionDrawer"
+              :aria-expanded="composerActionsOpen"
+              @click="composerActionsOpen = !composerActionsOpen"
+            >
+              <Plus :size="19" />
+            </button>
+            <Transition name="composer-drawer">
+              <div
+                v-if="composerActionsOpen"
+                id="composerActionDrawer"
+                class="composer-action-drawer"
+              >
+                <button class="composer-action-item" type="button" @click="startNewConversation">
+                  <RefreshCw :size="16" />
+                  <span>New Chat</span>
+                </button>
+              </div>
+            </Transition>
+          </div>
           <textarea
             id="messageInput"
             ref="messageInputEl"
@@ -245,16 +270,17 @@
             @input="resizeComposer"
             @keydown="handleComposerKeydown"
           ></textarea>
-          <button
-            id="sendButton"
-            class="send-button"
-            type="submit"
-            title="Send with Alt+Enter"
-            aria-label="Send message"
-            :disabled="sendDisabled"
-          >
-            <SendHorizontal :size="19" />
-          </button>
+          <span class="send-button-wrap" :data-tooltip="sendShortcutTooltip" :title="sendShortcutTooltip">
+            <button
+              id="sendButton"
+              class="send-button"
+              type="submit"
+              :aria-label="`Send message (${SEND_SHORTCUT})`"
+              :disabled="sendDisabled"
+            >
+              <SendHorizontal :size="19" />
+            </button>
+          </span>
         </div>
       </form>
     </main>
@@ -571,6 +597,7 @@ import {
   Layers3,
   LoaderCircle,
   PanelRightOpen,
+  Plus,
   RefreshCw,
   Search,
   SendHorizontal,
@@ -583,7 +610,10 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 
 import anomaloIconUrl from "./assets/anomalo-shrimp.png";
 
-const sessionId = loadSessionId();
+const SEND_SHORTCUT = "Alt+Enter";
+const sendShortcutTooltip = SEND_SHORTCUT;
+
+const sessionId = ref(loadSessionId());
 
 const connectionStatus = ref("Disconnected");
 const connectionClass = ref("error");
@@ -594,6 +624,7 @@ const dashboardRefreshTimer = ref(null);
 const creditsRefreshTimer = ref(null);
 const shuttingDown = ref(false);
 const inspectorOpen = ref(false);
+const composerActionsOpen = ref(false);
 const activeView = ref("agent");
 const managementToken = ref(loadManagementToken());
 const managementTokenInput = ref(managementToken.value);
@@ -608,6 +639,7 @@ const activeThinkingActivityIndex = ref(null);
 const activeToolActivityIndexes = new Map();
 const markdownRenderTimers = new Map();
 const conversationEl = ref(null);
+const composerActionsEl = ref(null);
 const messageInputEl = ref(null);
 const messageInput = ref("");
 
@@ -760,6 +792,7 @@ const managementTokenHint = computed(() => {
 onMounted(() => {
   sendDisabled.value = true;
   document.addEventListener("keydown", handleGlobalKeydown);
+  document.addEventListener("pointerdown", handleGlobalPointerdown);
   connect();
   void loadTools();
   void loadSkills();
@@ -781,6 +814,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   shuttingDown.value = true;
   document.removeEventListener("keydown", handleGlobalKeydown);
+  document.removeEventListener("pointerdown", handleGlobalPointerdown);
   clearTimeout(reconnectTimer.value);
   clearInterval(dashboardRefreshTimer.value);
   clearInterval(creditsRefreshTimer.value);
@@ -791,12 +825,24 @@ onBeforeUnmount(() => {
 function handleGlobalKeydown(event) {
   if (event.key === "Escape") {
     inspectorOpen.value = false;
+    composerActionsOpen.value = false;
   }
+}
+
+function handleGlobalPointerdown(event) {
+  if (!composerActionsOpen.value) {
+    return;
+  }
+  if (composerActionsEl.value?.contains(event.target)) {
+    return;
+  }
+  composerActionsOpen.value = false;
 }
 
 function setActiveView(view) {
   activeView.value = view;
   inspectorOpen.value = false;
+  composerActionsOpen.value = false;
   if (view === "dashboard") {
     void refreshDashboard();
   }
@@ -867,7 +913,7 @@ function createUuid() {
 
 function connect() {
   const protocol = location.protocol === "https:" ? "wss" : "ws";
-  const nextSocket = new WebSocket(`${protocol}://${location.host}/ws/chat/${sessionId}`);
+  const nextSocket = new WebSocket(`${protocol}://${location.host}/ws/chat/${sessionId.value}`);
   socket.value = nextSocket;
 
   nextSocket.addEventListener("open", () => {
@@ -893,6 +939,9 @@ function connect() {
   });
 
   nextSocket.addEventListener("message", (message) => {
+    if (socket.value !== nextSocket) {
+      return;
+    }
     try {
       handleAgentEvent(JSON.parse(message.data));
     } catch (error) {
@@ -902,9 +951,13 @@ function connect() {
 }
 
 async function loadTools() {
+  const currentSessionId = sessionId.value;
   try {
-    const response = await fetch(`/api/tools?session_id=${encodeURIComponent(sessionId)}`);
+    const response = await fetch(`/api/tools?session_id=${encodeURIComponent(currentSessionId)}`);
     const data = await response.json();
+    if (sessionId.value !== currentSessionId) {
+      return;
+    }
     tools.value = data.tools || [];
   } catch (error) {
     addEventLog("tools.error", String(error), true);
@@ -912,9 +965,13 @@ async function loadTools() {
 }
 
 async function loadSkills() {
+  const currentSessionId = sessionId.value;
   try {
-    const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/skills`);
+    const response = await fetch(`/api/sessions/${encodeURIComponent(currentSessionId)}/skills`);
     const data = await response.json();
+    if (sessionId.value !== currentSessionId) {
+      return;
+    }
     renderSkills(data.skills || []);
   } catch (error) {
     skillStatus.value = `Skill load failed: ${error}`;
@@ -922,9 +979,13 @@ async function loadSkills() {
 }
 
 async function loadMcpServers() {
+  const currentSessionId = sessionId.value;
   try {
-    const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/mcp`);
+    const response = await fetch(`/api/sessions/${encodeURIComponent(currentSessionId)}/mcp`);
     const data = await response.json();
+    if (sessionId.value !== currentSessionId) {
+      return;
+    }
     renderMcpServers(data.servers || []);
   } catch (error) {
     mcpStatus.value = `MCP load failed: ${error}`;
@@ -1140,6 +1201,55 @@ function submitMessage() {
   void scrollConversation();
 }
 
+function startNewConversation() {
+  composerActionsOpen.value = false;
+  clearTimeout(reconnectTimer.value);
+  clearMarkdownRenderTimers();
+
+  const previousSocket = socket.value;
+  socket.value = null;
+  previousSocket?.close();
+
+  const nextSessionId = createSessionId();
+  sessionId.value = nextSessionId;
+  localStorage.setItem("anomalo.session", nextSessionId);
+
+  resetConversationState();
+  connectionStatus.value = "Connecting";
+  connectionClass.value = "muted";
+  sendDisabled.value = true;
+  connect();
+  void loadTools();
+  void loadSkills();
+  void loadMcpServers();
+  void nextTick(() => messageInputEl.value?.focus());
+}
+
+function resetConversationState() {
+  messageInput.value = "";
+  conversationTurns.value = [];
+  activeAssistantIndex.value = null;
+  activeThinkingActivityIndex.value = null;
+  activeToolActivityIndexes.clear();
+  events.value = [];
+  eventSequence.value = 0;
+  runId.value = "none";
+  runTitle.value = "Ready";
+  iterationCount.value = "0";
+  latestMessagesJson.value = "";
+  copyMessagesDisabled.value = true;
+  contextStats.value = [];
+  contextSegments.value = [];
+  contextMessages.value = [];
+  tools.value = [];
+  skills.value = [];
+  mcpServers.value = [];
+  skillStatus.value = "Loading skills...";
+  mcpStatus.value = "Loading MCP servers...";
+  setAgentState("Idle", "New conversation ready.");
+  void nextTick(resizeComposer);
+}
+
 function handleComposerKeydown(event) {
   if (event.key === "Enter" && event.altKey && !event.isComposing) {
     event.preventDefault();
@@ -1320,7 +1430,7 @@ async function updateSessionSkills() {
   const activeSkills = skills.value.filter((skill) => skill.active).map((skill) => skill.name);
 
   try {
-    const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/skills`, {
+    const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId.value)}/skills`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ active_skills: activeSkills }),
@@ -1347,7 +1457,7 @@ async function updateSessionMcpServers() {
     .map((server) => server.name);
 
   try {
-    const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/mcp`, {
+    const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId.value)}/mcp`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ active_servers: activeServers }),

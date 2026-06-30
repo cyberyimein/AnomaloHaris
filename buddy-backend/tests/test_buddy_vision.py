@@ -1,7 +1,14 @@
+import pytest
 from app.api.security import require_management_access
 from app.config import Settings
 from app.main import create_app
-from buddy_backend.vision import BuddyFaceBox, BuddyVisionImage, BuddyVisionService
+from buddy_backend.vision import (
+    BuddyFaceBox,
+    BuddyVisionConfigurationError,
+    BuddyVisionImage,
+    BuddyVisionService,
+    _OpenCvHaarFaceDetector,
+)
 from buddy_backend.vision_api import require_buddy_vision_frame_access
 from fastapi.testclient import TestClient
 
@@ -38,6 +45,146 @@ class FakeBuddyAudioBridge:
         return
 
 
+def test_buddy_vision_defaults_to_opencv_haar_provider() -> None:
+    assert Settings().buddy_vision_provider == "opencv_haar"
+
+
+def test_buddy_vision_rejects_unsupported_provider() -> None:
+    service = BuddyVisionService(
+        Settings(ANOMALO_BUDDY_VISION_PROVIDER="unknown_provider"),
+        gateway=FakeBuddyGateway(),  # type: ignore[arg-type]
+        image_decoder=lambda _: BuddyVisionImage(pixels=object(), width=320, height=240),
+    )
+
+    with pytest.raises(BuddyVisionConfigurationError, match="Unsupported Buddy vision provider"):
+        service.detect_image(b"image-bytes")
+
+
+def test_opencv_haar_detector_upscales_low_resolution_frames() -> None:
+    import numpy as np
+
+    class FakeCv2:
+        COLOR_RGB2GRAY = 1
+        INTER_LINEAR = 2
+
+        def __init__(self) -> None:
+            self.resize_calls: list[tuple[float, float]] = []
+            self.flip_calls = 0
+
+        def cvtColor(self, pixels: object, color: int) -> object:
+            del pixels, color
+            return np.zeros((120, 160), dtype=np.uint8)
+
+        def resize(
+            self,
+            image: object,
+            size: object,
+            *,
+            fx: float,
+            fy: float,
+            interpolation: int,
+        ) -> object:
+            del image, size, interpolation
+            self.resize_calls.append((fx, fy))
+            return np.zeros((360, 480), dtype=np.uint8)
+
+        def flip(self, image: object, flip_code: int) -> object:
+            del flip_code
+            self.flip_calls += 1
+            return image
+
+    class FakeClassifier:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def detectMultiScale(
+            self,
+            image: object,
+            **kwargs: object,
+        ) -> list[tuple[int, int, int, int]]:
+            self.calls.append({"shape": image.shape, **kwargs})  # type: ignore[attr-defined]
+            return [(30, 45, 60, 60)] if len(self.calls) == 1 else []
+
+    detector = _OpenCvHaarFaceDetector.__new__(_OpenCvHaarFaceDetector)
+    fake_cv2 = FakeCv2()
+    fake_classifier = FakeClassifier()
+    detector._cv2 = fake_cv2
+    detector._classifiers = [("fake.xml", fake_classifier)]
+
+    faces = detector.detect(
+        BuddyVisionImage(
+            pixels=np.zeros((120, 160, 3), dtype=np.uint8),
+            width=160,
+            height=120,
+        )
+    )
+
+    assert fake_cv2.resize_calls == [(3.0, 3.0)]
+    assert fake_cv2.flip_calls == 1
+    assert fake_classifier.calls[0]["shape"] == (360, 480)
+    assert fake_classifier.calls[0]["minNeighbors"] == 3
+    assert faces == [BuddyFaceBox(x=10, y=15, width=20, height=20, score=1.0)]
+
+
+def test_opencv_haar_detector_uses_relaxed_scan_when_strict_scan_misses() -> None:
+    import numpy as np
+
+    class FakeCv2:
+        COLOR_RGB2GRAY = 1
+        INTER_LINEAR = 2
+
+        def cvtColor(self, pixels: object, color: int) -> object:
+            del pixels, color
+            return np.zeros((120, 160), dtype=np.uint8)
+
+        def resize(
+            self,
+            image: object,
+            size: object,
+            *,
+            fx: float,
+            fy: float,
+            interpolation: int,
+        ) -> object:
+            del image, size, fx, fy, interpolation
+            return np.zeros((360, 480), dtype=np.uint8)
+
+        def flip(self, image: object, flip_code: int) -> object:
+            del flip_code
+            return image
+
+    class FakeClassifier:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def detectMultiScale(
+            self,
+            image: object,
+            **kwargs: object,
+        ) -> list[tuple[int, int, int, int]]:
+            del image
+            self.calls.append(dict(kwargs))
+            if kwargs["minNeighbors"] == 1 and len(self.calls) == 3:
+                return [(30, 45, 60, 60)]
+            return []
+
+    detector = _OpenCvHaarFaceDetector.__new__(_OpenCvHaarFaceDetector)
+    fake_classifier = FakeClassifier()
+    detector._cv2 = FakeCv2()
+    detector._classifiers = [("fake.xml", fake_classifier)]
+
+    faces = detector.detect(
+        BuddyVisionImage(
+            pixels=np.zeros((120, 160, 3), dtype=np.uint8),
+            width=160,
+            height=120,
+        )
+    )
+
+    assert [call["minNeighbors"] for call in fake_classifier.calls] == [3, 3, 1, 1]
+    assert faces == [BuddyFaceBox(x=10, y=15, width=20, height=20, score=0.5)]
+
+
 def test_buddy_vision_service_lazily_loads_detector_and_looks_at_face() -> None:
     gateway = FakeBuddyGateway(connected=True)
     factory_calls = 0
@@ -55,6 +202,7 @@ def test_buddy_vision_service_lazily_loads_detector_and_looks_at_face() -> None:
     )
 
     assert service.status()["detector_loaded"] is False
+    assert service.status()["look"]["center_pitch"] == 260
     assert factory_calls == 0
 
     result = service.detect_image(b"image-bytes", apply_buddy_action=True)
@@ -65,12 +213,14 @@ def test_buddy_vision_service_lazily_loads_detector_and_looks_at_face() -> None:
     assert factory_calls == 1
     assert gateway.commands == [
         "ROAM PAUSE 300000",
-        "LOOK -203 75 40",
+        "LOOK -203 335 40",
         "CB idle person nearby",
     ]
     assert result["action"]["look"]["applied"] is True
     assert result["action"]["look"]["yaw"] == -203
-    assert result["action"]["look"]["pitch"] == 75
+    assert result["action"]["look"]["pitch"] == 335
+    assert result["action"]["look"]["yaw_delta"] == -203
+    assert result["action"]["look"]["pitch_delta"] == 75
 
 
 def test_buddy_vision_service_skips_look_when_face_is_centered() -> None:
@@ -93,7 +243,28 @@ def test_buddy_vision_service_skips_look_when_face_is_centered() -> None:
     ]
     assert result["action"]["look"]["applied"] is False
     assert result["action"]["look"]["yaw"] == 0
-    assert result["action"]["look"]["pitch"] == 0
+    assert result["action"]["look"]["pitch"] == 260
+
+
+def test_buddy_vision_service_resumes_roam_when_face_disappears() -> None:
+    gateway = FakeBuddyGateway(connected=True)
+    detector = FakeFaceDetector([BuddyFaceBox(x=10, y=20, width=40, height=50, score=0.82)])
+    service = BuddyVisionService(
+        Settings(ANOMALO_BUDDY_VISION_ENABLED=True),
+        gateway=gateway,  # type: ignore[arg-type]
+        detector_factory=lambda: detector,
+        image_decoder=lambda _: BuddyVisionImage(pixels=object(), width=320, height=240),
+    )
+
+    service.detect_image(b"image-bytes", apply_buddy_action=True)
+    detector.faces = []
+    gateway.commands.clear()
+
+    result = service.detect_image(b"image-bytes", apply_buddy_action=True)
+
+    assert result["face_detected"] is False
+    assert gateway.commands == ["ROAM RESUME"]
+    assert result["action"] == {"applied": True, "commands": ["ROAM RESUME"]}
 
 
 def test_buddy_vision_service_filters_low_confidence_candidates() -> None:

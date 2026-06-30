@@ -23,6 +23,8 @@ from app.api import (
 from app.config import get_settings
 from app.container import get_buddy_audio_bridge, get_buddy_gateway
 
+logger = logging.getLogger(__name__)
+
 
 def _configure_logging() -> None:
     root_logger = logging.getLogger()
@@ -36,14 +38,19 @@ async def _lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     del app
     settings = get_settings()
     gateway = get_buddy_gateway()
-    audio_bridge = get_buddy_audio_bridge()
+    audio_bridge = None
     if settings.buddy_transport.strip().lower() == "tcp":
         gateway.connect()
-    audio_bridge.start()
+    if settings.buddy_audio_ai_enabled:
+        audio_bridge = get_buddy_audio_bridge()
+        audio_bridge.start()
+    else:
+        logger.info("Buddy audio AI bridge disabled; skipping STT/LLM/TTS startup.")
     try:
         yield
     finally:
-        audio_bridge.stop()
+        if audio_bridge is not None:
+            audio_bridge.stop()
         try:
             gateway.disconnect()
         except (BuddyConfigurationError, BuddyConnectionError):
