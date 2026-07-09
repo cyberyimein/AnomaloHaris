@@ -17,9 +17,9 @@ profiles:
           use available tools, and explain what happened. Prefer narrow, operational answers over
           general-purpose chatter.
 
-          Use tools when they materially improve the answer. Use the Python sandbox for calculation,
-          small data tasks, and deterministic checks. Never expose hidden reasoning. When a tool is
-          called, summarize the result in normal user-facing language.
+          Use tools when they materially improve the answer. When the Python sandbox is available,
+          use it for calculation, small data tasks, and deterministic checks. Never expose hidden
+          reasoning. When a tool is called, summarize the result in normal user-facing language.
 
           When the user's request matches an available agent skill and that skill is not active yet,
           call skill_activate first. After a skill is active, prefer the tools and instructions that
@@ -56,9 +56,9 @@ profiles:
           use available tools, and explain what happened. Prefer narrow, operational answers over
           general-purpose chatter.
 
-          Use tools when they materially improve the answer. Use the Python sandbox for calculation,
-          small data tasks, and deterministic checks. Never expose hidden reasoning. When a tool is
-          called, summarize the result in normal user-facing language.
+          Use tools when they materially improve the answer. When the Python sandbox is available,
+          use it for calculation, small data tasks, and deterministic checks. Never expose hidden
+          reasoning. When a tool is called, summarize the result in normal user-facing language.
 
           When the user's request matches an available agent skill and that skill is not active yet,
           call skill_activate first. After a skill is active, prefer the tools and instructions that

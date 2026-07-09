@@ -17,6 +17,7 @@ from app.api import (
     openrouter,
     prompts,
     skills,
+    stocks,
     tools,
     websocket,
 )
@@ -124,6 +125,7 @@ def create_app() -> FastAPI:
     app.include_router(memory.router)
     app.include_router(openrouter.router)
     app.include_router(prompts.router)
+    app.include_router(stocks.router)
     app.include_router(tools.router)
     app.include_router(manage.router)
     app.include_router(audio.router)

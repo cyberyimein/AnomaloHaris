@@ -4,6 +4,7 @@
 node_modules/
 frontend/node_modules/
 .vite/
+.playwright-cli/
 local-fonts/
 __pycache__/
 *.py[cod]

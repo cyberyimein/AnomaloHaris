@@ -190,6 +190,7 @@ class Settings(BaseSettings):
         default="anomalo-python:latest",
         alias="PYTHON_SANDBOX_IMAGE",
     )
+    python_sandbox_enabled: bool = Field(default=True, alias="PYTHON_SANDBOX_ENABLED")
     python_sandbox_timeout_seconds: int = Field(
         default=10,
         alias="PYTHON_SANDBOX_TIMEOUT_SECONDS",

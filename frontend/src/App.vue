@@ -71,6 +71,18 @@
             <RefreshCw :size="17" />
             <span>Refresh</span>
           </button>
+          <button
+            v-else-if="activeView === 'stock-analysis'"
+            class="toolbar-button"
+            type="button"
+            title="Refresh stock analysis"
+            aria-label="Refresh stock analysis"
+            :disabled="stockRefreshInFlight"
+            @click="refreshStockReport"
+          >
+            <RefreshCw :size="17" />
+            <span>Refresh</span>
+          </button>
         </div>
       </header>
 
@@ -226,7 +238,510 @@
         v-else-if="activeView === 'stock-analysis'"
         class="stock-analysis-view"
         aria-label="Stock Analysis"
-      ></section>
+      >
+        <div class="stock-shell">
+          <header class="stock-page-header">
+            <div>
+              <span class="stock-kicker">Stock Analysis</span>
+              <h2>{{ stockHeadline }}</h2>
+              <p>{{ stockReportSubhead }}</p>
+            </div>
+            <div class="stock-run-meta">
+              <span>Generated</span>
+              <strong>{{ stockGeneratedAtText }}</strong>
+              <span>Received</span>
+              <strong>{{ stockReceivedAtText }}</strong>
+            </div>
+          </header>
+
+          <div v-if="stockStatus === 'loading'" class="stock-empty-panel">
+            <LoaderCircle :size="22" class="activity-spinner" />
+            <strong>Loading stock report</strong>
+            <span>{{ stockStatusMessage }}</span>
+          </div>
+
+          <div v-else-if="!stockReport" class="stock-empty-panel">
+            <Database :size="26" />
+            <strong>No stock report loaded</strong>
+            <span>{{ stockStatusMessage }}</span>
+            <code>POST /api/stocks/reports</code>
+          </div>
+
+          <template v-else>
+            <div class="stock-mode-tabs" role="tablist" aria-label="Stock analysis sections">
+              <button
+                v-for="tab in stockSectionTabs"
+                :key="tab.id"
+                class="stock-mode-tab"
+                :class="{ active: stockActiveSection === tab.id }"
+                type="button"
+                role="tab"
+                :aria-selected="stockActiveSection === tab.id"
+                @click="stockActiveSection = tab.id"
+              >
+                <span>{{ tab.label }}</span>
+                <strong>{{ tab.value }}</strong>
+              </button>
+            </div>
+
+            <section
+              v-if="stockActiveSection === 'market'"
+              class="stock-tab-panel market-tab-panel"
+              aria-label="Market context"
+            >
+              <section class="market-brief-grid" aria-label="Market context summary">
+                <article class="market-overview-panel" :data-tone="scoreTone(stockMarketContext?.risk_score)">
+                  <div class="market-score">
+                    <span>Market score</span>
+                    <strong>{{ formatSignedNumber(stockMarketContext?.risk_score) }}</strong>
+                  </div>
+                  <div class="market-summary-copy">
+                    <span class="stock-kicker">Market read</span>
+                    <strong>{{ titleLabel(stockMarketContext?.regime) }}</strong>
+                    <p>{{ stockMarketSummary }}</p>
+                  </div>
+                </article>
+
+                <div class="market-definition-grid">
+                  <article
+                    v-for="metric in marketMetricCards"
+                    :key="metric.label"
+                    class="market-definition-card"
+                    :data-tone="metric.tone"
+                  >
+                    <header>
+                      <span>{{ metric.label }}</span>
+                      <span class="info-anchor">
+                        <button class="info-button" type="button" :aria-label="`${metric.label} explanation`">
+                          <Info :size="14" />
+                        </button>
+                        <span class="info-popover" role="tooltip">
+                          <strong>{{ metric.meaning }}</strong>
+                          <em>{{ metric.reading }}</em>
+                        </span>
+                      </span>
+                    </header>
+                    <strong>{{ metric.value }}</strong>
+                  </article>
+                </div>
+              </section>
+
+              <section class="market-group-grid" aria-label="Market groups">
+                <article
+                  v-for="group in stockMarketGroups"
+                  :key="group.key"
+                  class="market-group"
+                  :data-tone="scoreTone(group.score)"
+                >
+                  <header>
+                    <div>
+                      <span>{{ group.definition.wording }}</span>
+                      <strong>{{ titleLabel(group.label) }}</strong>
+                    </div>
+                    <div class="market-group-actions">
+                      <b>{{ formatSignedNumber(group.score) }}</b>
+                      <span class="info-anchor">
+                        <button
+                          class="info-button"
+                          type="button"
+                          :aria-label="`${group.definition.wording} explanation`"
+                        >
+                          <Info :size="14" />
+                        </button>
+                        <span class="info-popover" role="tooltip">
+                          <strong>{{ group.definition.meaning }}</strong>
+                          <em>{{ group.definition.reading }}</em>
+                        </span>
+                      </span>
+                    </div>
+                  </header>
+                  <div class="group-meter" aria-hidden="true">
+                    <span :style="{ width: `${scoreWidth(group.score)}%` }"></span>
+                  </div>
+                  <div class="group-meta">
+                    <span>Coverage {{ formatScaledPercent(group.coverage, 0, false) }}</span>
+                    <span>{{ group.available_symbols }}/{{ group.configured_symbols }} symbols</span>
+                  </div>
+                  <div class="group-symbols">
+                    <span
+                      v-for="driver in group.displayDrivers"
+                      :key="driver.symbol"
+                      :data-tone="scoreTone(driver.score)"
+                      :title="driver.meaning"
+                    >
+                      {{ compactSymbol(driver.symbol) }}
+                      <b>{{ formatSignedNumber(driver.score, 0) }}</b>
+                    </span>
+                  </div>
+                </article>
+              </section>
+
+              <section
+                v-if="marketIntelligenceList.length || marketScenarioCards.length"
+                class="judgment-grid market-judgment-grid"
+                aria-label="Market judgment"
+              >
+                <article v-if="marketIntelligenceList.length" class="judgment-panel">
+                  <header>
+                    <span>Key intelligence</span>
+                    <strong>{{ marketStanceLabel }}</strong>
+                  </header>
+                  <ul class="judgment-list">
+                    <li v-for="item in marketIntelligenceList" :key="item">{{ item }}</li>
+                  </ul>
+                </article>
+
+                <article v-if="marketScenarioCards.length" class="judgment-panel">
+                  <header>
+                    <span>Market scenarios</span>
+                    <strong>{{ marketScenarioCards.length }}</strong>
+                  </header>
+                  <div class="scenario-grid">
+                    <article
+                      v-for="scenario in marketScenarioCards"
+                      :key="scenario.case || scenario.label"
+                      class="scenario-card"
+                      :data-direction="scenario.direction"
+                    >
+                      <span>{{ scenario.label || titleLabel(scenario.case) }}</span>
+                      <strong>{{ scenario.trigger }}</strong>
+                      <p>{{ scenario.meaning }}</p>
+                    </article>
+                  </div>
+                </article>
+              </section>
+
+              <section class="market-context-grid" aria-label="Market notes and score guide">
+                <article class="market-notes-panel">
+                  <header>
+                    <span>Context notes</span>
+                    <strong>{{ marketNoteList.length }}</strong>
+                  </header>
+                  <ul>
+                    <li v-for="note in marketNoteList" :key="note">{{ note }}</li>
+                  </ul>
+                </article>
+
+                <article class="market-guide-panel">
+                  <header>
+                    <span>Score guide</span>
+                    <strong>{{ marketRiskBand }}</strong>
+                  </header>
+                  <div class="guide-row" v-for="row in marketGuideRows" :key="row.range">
+                    <b>{{ row.range }}</b>
+                    <span class="guide-label">{{ row.label }}</span>
+                    <span class="info-anchor">
+                      <button class="info-button" type="button" :aria-label="`${row.label} explanation`">
+                        <Info :size="14" />
+                      </button>
+                      <span class="info-popover" role="tooltip">
+                        <strong>{{ row.label }}</strong>
+                        <em>{{ row.description }}</em>
+                      </span>
+                    </span>
+                  </div>
+                </article>
+              </section>
+            </section>
+
+            <section
+              v-else
+              class="stock-tab-panel stocks-tab-panel"
+              aria-label="Stock setup workspace"
+            >
+              <div class="stock-stat-grid stock-queue-stats">
+                <article
+                  v-for="card in stockQueueSummaryCards"
+                  :key="card.label"
+                  class="stock-stat"
+                  :data-tone="card.tone"
+                >
+                  <span>{{ card.label }}</span>
+                  <strong>{{ card.value }}</strong>
+                  <em>{{ card.detail }}</em>
+                </article>
+              </div>
+
+              <section class="stock-workspace" aria-label="Stock setup workspace">
+                <aside class="stock-list-panel">
+                  <header>
+                    <div>
+                      <span class="stock-kicker">Attention queue</span>
+                      <strong>{{ filteredStockRows.length }} / {{ stockRows.length }}</strong>
+                    </div>
+                    <Activity :size="18" />
+                  </header>
+
+                  <div class="stock-segments" aria-label="Filter stock bucket">
+                    <button
+                      v-for="filter in stockBucketFilters"
+                      :key="filter.id"
+                      class="stock-segment"
+                      :class="{ active: stockBucketFilter === filter.id }"
+                      type="button"
+                      @click="setStockBucketFilter(filter.id)"
+                    >
+                      <span>{{ filter.label }}</span>
+                      <b>{{ filter.count }}</b>
+                    </button>
+                  </div>
+
+                  <div class="stock-row-list">
+                    <button
+                      v-for="stock in filteredStockRows"
+                      :key="stock.symbol"
+                      class="stock-row"
+                      :class="{ active: selectedStock?.symbol === stock.symbol }"
+                      type="button"
+                      @click="selectedStockSymbol = stock.symbol"
+                    >
+                      <span class="stock-row-main">
+                        <strong>{{ compactSymbol(stock.symbol) }}</strong>
+                        <em>{{ stock.name || stock.symbol }}</em>
+                      </span>
+                      <span class="stock-row-score" :data-tone="scoreTone(stock.attention_score)">
+                        {{ formatNumber(stock.attention_score, 1) }}
+                      </span>
+                      <span class="stock-row-meta">
+                        Gap {{ formatPercent(stock.premarket?.gap_pct) }} · Move
+                        {{ formatPercent(stock.options?.expected_move_pct, 2, false) }}
+                      </span>
+                      <ChevronRight :size="16" />
+                    </button>
+                  </div>
+                </aside>
+
+                <section v-if="selectedStock" class="stock-detail-panel" aria-label="Selected stock detail">
+                  <header class="stock-detail-header">
+                  <div>
+                    <span class="stock-kicker">Selected setup</span>
+                    <h3>
+                      {{ compactSymbol(selectedStock.symbol) }}
+                      <small>{{ selectedStock.name }}</small>
+                      </h3>
+                    </div>
+                    <span class="bucket-pill" :data-bucket="selectedStock.bucket">
+                      {{ bucketLabel(selectedStock.bucket) }}
+                    </span>
+                  </header>
+
+                  <section v-if="selectedStockJudgment?.headline" class="stock-judgment-summary">
+                    <span>{{ stanceLabel(selectedStockJudgment.stance) }}</span>
+                    <p>{{ selectedStockJudgment.headline }}</p>
+                  </section>
+
+                  <div class="setup-strip">
+                    <span
+                      v-for="tag in selectedSetupTags"
+                      :key="`${selectedStock.symbol}-${tag.tag}`"
+                      class="setup-pill"
+                      :data-severity="tag.severity"
+                      :title="tag.reason"
+                    >
+                      {{ tag.label || tag.tag }}
+                    </span>
+                  </div>
+
+                  <div class="stock-detail-metrics">
+                    <article
+                      v-for="metric in selectedStockMetrics"
+                      :key="metric.label"
+                      :data-tone="metric.tone"
+                    >
+                      <span>{{ metric.label }}</span>
+                      <strong>{{ metric.value }}</strong>
+                      <em>{{ metric.detail }}</em>
+                    </article>
+                  </div>
+
+                  <section
+                    v-if="selectedJudgmentKeyPoints.length || selectedJudgmentScenarios.length"
+                    class="judgment-grid stock-judgment-grid"
+                    aria-label="Stock judgment"
+                  >
+                    <article v-if="selectedJudgmentKeyPoints.length" class="judgment-panel">
+                      <header>
+                        <span>Key points</span>
+                        <strong>{{ selectedJudgmentKeyPoints.length }}</strong>
+                      </header>
+                      <ul class="judgment-list compact">
+                        <li v-for="point in selectedJudgmentKeyPoints" :key="point">{{ point }}</li>
+                      </ul>
+                    </article>
+
+                    <article v-if="selectedJudgmentScenarios.length" class="judgment-panel">
+                      <header>
+                        <span>Scenarios</span>
+                        <strong>{{ selectedJudgmentScenarios.length }}</strong>
+                      </header>
+                      <div class="scenario-grid compact">
+                        <article
+                          v-for="scenario in selectedJudgmentScenarios"
+                          :key="scenario.case || scenario.label"
+                          class="scenario-card"
+                          :data-direction="scenario.direction"
+                        >
+                          <span>{{ scenario.label || titleLabel(scenario.case) }}</span>
+                          <strong>{{ scenario.trigger }}</strong>
+                          <p>{{ scenario.meaning }}</p>
+                        </article>
+                      </div>
+                    </article>
+                  </section>
+
+                  <section class="stock-section-block">
+                    <header>
+                      <span>Price levels</span>
+                      <strong>{{ selectedStock.technicals?.trend || "unknown trend" }}</strong>
+                    </header>
+                    <div
+                      class="level-track"
+                      role="group"
+                      :aria-label="priceLevelSummary(selectedStock)"
+                    >
+                      <span
+                        class="level-zone support"
+                        :style="levelZoneStyle(selectedStock, 'support_zone')"
+                        :aria-label="levelZoneTitle(selectedStock, 'support_zone')"
+                        :data-tooltip="levelZoneTitle(selectedStock, 'support_zone')"
+                        tabindex="0"
+                      ></span>
+                      <span
+                        class="level-zone resistance"
+                        :style="levelZoneStyle(selectedStock, 'resistance_zone')"
+                        :aria-label="levelZoneTitle(selectedStock, 'resistance_zone')"
+                        :data-tooltip="levelZoneTitle(selectedStock, 'resistance_zone')"
+                        tabindex="0"
+                      ></span>
+                      <span
+                        class="level-marker last"
+                        :style="levelMarkerStyle(selectedStock, selectedStock.last_price)"
+                        :aria-label="levelMarkerTitle(selectedStock, 'last')"
+                        :data-tooltip="levelMarkerTitle(selectedStock, 'last')"
+                        tabindex="0"
+                      >
+                        <span class="level-marker-dot" aria-hidden="true"></span>
+                      </span>
+                      <span
+                        v-if="selectedStock.premarket?.price"
+                        class="level-marker premarket"
+                        :style="levelMarkerStyle(selectedStock, selectedStock.premarket.price)"
+                        :aria-label="levelMarkerTitle(selectedStock, 'premarket')"
+                        :data-tooltip="levelMarkerTitle(selectedStock, 'premarket')"
+                        tabindex="0"
+                      >
+                        <span class="level-marker-dot" aria-hidden="true"></span>
+                      </span>
+                    </div>
+                    <div class="level-labels">
+                      <span>Support {{ formatZone(selectedStock.levels?.support_zone) }}</span>
+                      <span>Last {{ formatPrice(selectedStock.last_price) }}</span>
+                      <span>Resistance {{ formatZone(selectedStock.levels?.resistance_zone) }}</span>
+                    </div>
+                  </section>
+
+                  <section class="stock-section-block">
+                    <header>
+                      <span>Technicals</span>
+                      <strong>{{ selectedTechnicalReadSummary || "EMA · RSI · Bollinger" }}</strong>
+                    </header>
+                    <div v-if="selectedTechnicalReadCards.length" class="technical-read-grid">
+                      <article v-for="read in selectedTechnicalReadCards" :key="read.label">
+                        <span>{{ read.label }}</span>
+                        <strong>{{ read.title }}</strong>
+                        <p>{{ read.summary }}</p>
+                      </article>
+                    </div>
+                    <div class="technical-grid">
+                      <article
+                        v-for="meter in selectedTechnicalMeters"
+                        :key="meter.label"
+                        class="technical-meter"
+                        :data-tone="meter.tone"
+                      >
+                        <div>
+                          <span>{{ meter.label }}</span>
+                          <strong>{{ meter.display }}</strong>
+                        </div>
+                        <div class="mini-meter" aria-hidden="true">
+                          <span :style="{ width: `${meter.fill}%` }"></span>
+                        </div>
+                      </article>
+                    </div>
+                  </section>
+
+                  <section v-if="selectedStock.options" class="stock-section-block">
+                    <header>
+                      <span>Options tape</span>
+                      <strong>{{ selectedOptionRead?.label || selectedStock.options.nearest_expiry || "nearest expiry" }}</strong>
+                    </header>
+                    <div v-if="selectedOptionRead" class="option-summary-panel">
+                      <p>{{ selectedOptionRead.summary }}</p>
+                      <div v-if="selectedOptionRead.risk_labels?.length" class="option-risk-labels">
+                        <span v-for="label in selectedOptionRead.risk_labels" :key="label">{{ label }}</span>
+                      </div>
+                    </div>
+                    <div class="option-metric-grid">
+                      <article v-for="metric in selectedOptionMetrics" :key="metric.label">
+                        <span>{{ metric.label }}</span>
+                        <strong>{{ metric.value }}</strong>
+                      </article>
+                    </div>
+                    <div
+                      v-if="selectedOptionRead?.display_contracts !== false && selectedStock.options.unusual_activity?.length"
+                      class="option-flow-table"
+                    >
+                      <div class="option-flow-row option-flow-head">
+                        <span>Contract</span>
+                        <span>Type</span>
+                        <span>Vol/OI</span>
+                      </div>
+                      <div
+                        v-for="contract in selectedStock.options.unusual_activity.slice(0, 5)"
+                        :key="contract.symbol"
+                        class="option-flow-row"
+                      >
+                        <span>{{ compactOptionSymbol(contract.symbol) }}</span>
+                        <span :data-option-type="contract.type">{{ contract.type }}</span>
+                        <span>{{ formatNumber(contract.volume_oi_ratio, 2) }}</span>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section v-else class="stock-section-block muted">
+                    <header>
+                      <span>Options tape</span>
+                      <strong>No option data</strong>
+                    </header>
+                    <p>This symbol did not include an options block in the latest report.</p>
+                  </section>
+
+                  <section class="stock-notes-grid">
+                    <div>
+                      <header>Reasons</header>
+                      <ul>
+                        <li v-for="reason in selectedStock.reasons || []" :key="reason">{{ reason }}</li>
+                      </ul>
+                    </div>
+                    <div>
+                      <header>Confirmation</header>
+                      <ul v-if="selectedStock.setups?.confirmation_needed?.length">
+                        <li
+                          v-for="item in selectedStock.setups.confirmation_needed"
+                          :key="item"
+                        >
+                          {{ item }}
+                        </li>
+                      </ul>
+                      <p v-else>No confirmation checklist in this report.</p>
+                    </div>
+                  </section>
+                </section>
+              </section>
+            </section>
+          </template>
+        </div>
+      </section>
 
       <form
         v-if="activeView === 'agent'"
@@ -591,9 +1106,11 @@
 import {
   Activity,
   AlertTriangle,
+  ChevronRight,
   CircleCheck,
   Copy,
   Database,
+  Info,
   Layers3,
   LoaderCircle,
   PanelRightOpen,
@@ -695,6 +1212,15 @@ const buddyStateActions = [
   { state: "stop", label: "Stop" },
 ];
 
+const stockReport = ref(null);
+const stockReportReceivedAt = ref(null);
+const stockStatus = ref("idle");
+const stockStatusMessage = ref("No stock report loaded yet.");
+const stockRefreshInFlight = ref(false);
+const selectedStockSymbol = ref("");
+const stockBucketFilter = ref("all");
+const stockActiveSection = ref("market");
+
 const normalizedAgentState = computed(() => normalizeState(agentState.value));
 const normalizedRunStatus = computed(() => normalizeState(runStatus.value));
 const activeSkillCount = computed(() => skills.value.filter((skill) => skill.active).length);
@@ -788,6 +1314,323 @@ const managementTokenHint = computed(() => {
   }
   return "Set ANOMALO_ADMIN_TOKEN, then save it here.";
 });
+const stockRows = computed(() => {
+  const rows = Array.isArray(stockReport.value?.stocks) ? stockReport.value.stocks : [];
+  return [...rows].sort((left, right) => {
+    const rightScore = numericValue(right.attention_score) ?? Number.NEGATIVE_INFINITY;
+    const leftScore = numericValue(left.attention_score) ?? Number.NEGATIVE_INFINITY;
+    return rightScore - leftScore;
+  });
+});
+const stockMarketContext = computed(() => stockReport.value?.market_context || {});
+const marketJudgment = computed(() => stockMarketContext.value?.judgment || null);
+const stockMarketGroups = computed(() => {
+  const groups = stockMarketContext.value?.groups || {};
+  const reads = marketJudgment.value?.reads || {};
+  return Object.entries(groups).map(([key, group]) => {
+    const read = reads[key] || {};
+    const displayDrivers = marketGroupDrivers(read, group);
+    return {
+      key,
+      name: marketGroupName(key),
+      definition: marketGroupDefinition(key),
+      ...group,
+      label: read.label || group.label,
+      score: numericValue(read.score) ?? group.score,
+      summary: read.summary || group.notes?.[0] || "",
+      displayDrivers,
+    };
+  });
+});
+const selectedStock = computed(() => {
+  if (!stockRows.value.length) {
+    return null;
+  }
+  return stockRows.value.find((stock) => stock.symbol === selectedStockSymbol.value) || stockRows.value[0];
+});
+const selectedStockJudgment = computed(() => selectedStock.value?.judgment || null);
+const selectedSetupTags = computed(() => selectedStock.value?.setups?.tags || []);
+const stockHeadline = computed(() => {
+  if (!stockReport.value) {
+    return "Stock Analysis";
+  }
+  if (stockActiveSection.value === "market") {
+    return `大盘 · ${titleLabel(stockMarketContext.value?.regime)}`;
+  }
+  return `个股 · ${stockRows.value.length} setups`;
+});
+const stockReportSubhead = computed(() => {
+  if (!stockReport.value) {
+    return "Waiting for the first JSON report from the analysis service.";
+  }
+  const mode = stockReport.value.data_mode ? `Mode ${stockReport.value.data_mode}` : "Live report";
+  const warnings = Array.isArray(stockReport.value.warnings) ? stockReport.value.warnings.length : 0;
+  if (stockActiveSection.value === "market") {
+    return `${mode} · ${warnings} warnings · 大盘指标附带定义和读法`;
+  }
+  return `${mode} · ${warnings} warnings · 按 attention score 排序`;
+});
+const stockGeneratedAtText = computed(() => formatDateTime(stockReport.value?.generated_at));
+const stockReceivedAtText = computed(() => formatDateTime(stockReportReceivedAt.value));
+const stockMarketSummary = computed(() => {
+  const headline = marketJudgment.value?.headline;
+  if (headline) {
+    return headline;
+  }
+  const notes = Array.isArray(stockMarketContext.value?.notes) ? stockMarketContext.value.notes : [];
+  if (notes.length) {
+    return notes.slice(0, 3).join(" · ");
+  }
+  return "Market context is available, but this report did not include summary notes.";
+});
+const marketStanceLabel = computed(() => stanceLabel(marketJudgment.value?.stance));
+const marketIntelligenceList = computed(() => {
+  const intelligence = marketJudgment.value?.key_intelligence;
+  if (Array.isArray(intelligence) && intelligence.length) {
+    return intelligence.slice(0, 6);
+  }
+  return marketNoteList.value;
+});
+const marketScenarioCards = computed(() => {
+  const scenarios = marketJudgment.value?.scenarios;
+  return Array.isArray(scenarios) ? scenarios.slice(0, 5) : [];
+});
+const stockSectionTabs = computed(() => [
+  {
+    id: "market",
+    label: "大盘",
+    value: titleLabel(stockMarketContext.value?.regime),
+    detail: `Score ${formatSignedNumber(stockMarketContext.value?.risk_score)}`,
+  },
+  {
+    id: "stocks",
+    label: "个股",
+    value: String(stockRows.value.length),
+    detail: `${stockRows.value.filter((stock) => stock.bucket === "observe").length} observe`,
+  },
+]);
+const marketRiskBand = computed(() => {
+  const score = numericValue(stockMarketContext.value?.risk_score);
+  if (score === null) {
+    return "Unknown";
+  }
+  if (score > 20) {
+    return "Supportive";
+  }
+  if (score < -20) {
+    return "Hostile";
+  }
+  return "Mixed";
+});
+const marketMetricCards = computed(() => [
+  {
+    label: "Market score",
+    value: formatSignedNumber(stockMarketContext.value?.risk_score),
+    meaning: "综合市场压力分，范围是 -100 到 +100。",
+    reading: "> +20 偏进攻；< -20 偏防守；中间区域按 mixed 处理。",
+    tone: scoreTone(stockMarketContext.value?.risk_score),
+  },
+  {
+    label: "Market mood",
+    value: titleLabel(stockMarketContext.value?.regime),
+    meaning: "今天的大盘姿态，不是个股方向预测。",
+    reading: "risk_on 偏进攻，risk_off 偏防守，mixed 表示没有清晰大盘信号。",
+    tone: scoreTone(stockMarketContext.value?.risk_score),
+  },
+  {
+    label: "Data coverage",
+    value: formatScaledPercent(stockMarketContext.value?.confidence, 0, false),
+    meaning: "数据覆盖率，不是预测置信度。",
+    reading: "100% 表示配置的代理指标都返回了数据；低覆盖率时分数可信度下降。",
+    tone: "neutral",
+  },
+]);
+const marketGuideRows = [
+  {
+    range: "> +20",
+    label: "Supportive",
+    description: "大盘背景支持进攻，个股信号更容易被放大。",
+  },
+  {
+    range: "-20 to +20",
+    label: "Mixed",
+    description: "没有明确大盘方向，优先看个股自己的 setup 和确认。",
+  },
+  {
+    range: "< -20",
+    label: "Hostile",
+    description: "大盘压力偏高，反弹和突破需要更强确认。",
+  },
+];
+const marketNoteList = computed(() => {
+  const notes = Array.isArray(stockMarketContext.value?.notes) ? stockMarketContext.value.notes : [];
+  return notes.slice(0, 4);
+});
+const stockQueueSummaryCards = computed(() => [
+  {
+    label: "Observe",
+    value: String(stockRows.value.filter((stock) => stock.bucket === "observe").length),
+    detail: "active watchlist",
+    tone: "positive",
+  },
+  {
+    label: "Avg move",
+    value: formatPercent(averageExpectedMove.value, 2, false),
+    detail: "nearest expiry",
+    tone: "warning",
+  },
+  {
+    label: "Top attention",
+    value: formatNumber(stockRows.value[0]?.attention_score, 1),
+    detail: compactSymbol(stockRows.value[0]?.symbol),
+    tone: scoreTone(stockRows.value[0]?.attention_score),
+  },
+  {
+    label: "With options",
+    value: String(stockRows.value.filter((stock) => stock.options).length),
+    detail: "option tape loaded",
+    tone: "neutral",
+  },
+]);
+const averageExpectedMove = computed(() => {
+  const moves = stockRows.value
+    .map((stock) => numericValue(stock.options?.expected_move_pct))
+    .filter((value) => value !== null);
+  if (!moves.length) {
+    return null;
+  }
+  return moves.reduce((total, value) => total + value, 0) / moves.length;
+});
+const stockBucketFilters = computed(() => {
+  const counts = new Map();
+  for (const stock of stockRows.value) {
+    const bucket = stock.bucket || "unbucketed";
+    counts.set(bucket, (counts.get(bucket) || 0) + 1);
+  }
+  const filters = [{ id: "all", label: "All", count: stockRows.value.length }];
+  for (const [bucket, count] of [...counts.entries()].sort()) {
+    filters.push({ id: bucket, label: bucketLabel(bucket), count });
+  }
+  return filters;
+});
+const filteredStockRows = computed(() => {
+  if (stockBucketFilter.value === "all") {
+    return stockRows.value;
+  }
+  return stockRows.value.filter((stock) => (stock.bucket || "unbucketed") === stockBucketFilter.value);
+});
+const selectedStockMetrics = computed(() => {
+  const stock = selectedStock.value;
+  if (!stock) {
+    return [];
+  }
+  return [
+    {
+      label: "Attention",
+      value: formatNumber(stock.attention_score, 1),
+      detail: "score",
+      tone: scoreTone(stock.attention_score),
+    },
+    {
+      label: "Last",
+      value: formatPrice(stock.last_price),
+      detail: `Prev ${formatPrice(stock.previous_close)}`,
+      tone: scoreTone(stock.technicals?.daily_change_pct),
+    },
+    {
+      label: "Premarket",
+      value: formatPrice(stock.premarket?.price),
+      detail: formatPercent(stock.premarket?.gap_pct),
+      tone: scoreTone(stock.premarket?.gap_pct),
+    },
+    {
+      label: "Expected move",
+      value: formatPercent(stock.options?.expected_move_pct, 2, false),
+      detail: stock.options?.nearest_expiry || "no expiry",
+      tone: "warning",
+    },
+  ];
+});
+const selectedJudgmentKeyPoints = computed(() => {
+  const points = selectedStockJudgment.value?.key_points;
+  return Array.isArray(points) ? points.slice(0, 6) : [];
+});
+const selectedJudgmentScenarios = computed(() => {
+  const scenarios = selectedStockJudgment.value?.scenarios;
+  return Array.isArray(scenarios) ? scenarios.slice(0, 4) : [];
+});
+const selectedTechnicalReadCards = computed(() => {
+  const read = selectedStockJudgment.value?.technical_read || {};
+  return [
+    {
+      label: "EMA state",
+      title: read.ema?.label,
+      summary: read.ema?.summary,
+    },
+    {
+      label: "Bollinger state",
+      title: read.bollinger?.label,
+      summary: read.bollinger?.summary,
+    },
+    {
+      label: "Level state",
+      title: read.levels?.label,
+      summary: read.levels?.summary,
+    },
+  ].filter((item) => item.title || item.summary);
+});
+const selectedTechnicalReadSummary = computed(() =>
+  selectedTechnicalReadCards.value
+    .map((item) => item.title)
+    .filter(Boolean)
+    .slice(0, 3)
+    .join(" · "),
+);
+const selectedOptionRead = computed(() => selectedStockJudgment.value?.option_read || null);
+const selectedTechnicalMeters = computed(() => {
+  const technicals = selectedStock.value?.technicals || {};
+  const bollinger = technicals.bollinger || {};
+  return [
+    {
+      label: "RSI 14",
+      display: formatNumber(technicals.rsi14, 1),
+      fill: clampNumber(numericValue(technicals.rsi14) ?? 0, 0, 100),
+      tone: rsiTone(technicals.rsi14),
+    },
+    {
+      label: "Bollinger %B",
+      display: formatNumber(bollinger.percent_b, 2),
+      fill: clampNumber((numericValue(bollinger.percent_b) ?? 0) * 100, 0, 100),
+      tone: scoreTone((numericValue(bollinger.percent_b) ?? 0.5) - 0.5),
+    },
+    {
+      label: "ATR %",
+      display: formatPercent(technicals.atr_pct, 2, false),
+      fill: clampNumber((numericValue(technicals.atr_pct) ?? 0) * 5, 0, 100),
+      tone: "warning",
+    },
+    {
+      label: "Vol / 20D",
+      display: formatNumber(technicals.volume_vs_20d, 2),
+      fill: clampNumber((numericValue(technicals.volume_vs_20d) ?? 0) * 100, 0, 100),
+      tone: "neutral",
+    },
+  ];
+});
+const selectedOptionMetrics = computed(() => {
+  const options = selectedStock.value?.options;
+  if (!options) {
+    return [];
+  }
+  return [
+    { label: "ATM", value: formatPrice(options.atm_strike) },
+    { label: "Straddle", value: formatPrice(options.atm_straddle_mid) },
+    { label: "Avg IV", value: formatScaledPercent(options.average_iv, 0, false) },
+    { label: "P/C volume", value: formatNumber(options.put_call_volume_ratio, 2) },
+    { label: "P/C OI", value: formatNumber(options.put_call_oi_ratio, 2) },
+    { label: "Skew", value: formatScaledPercent(options.skew_put_minus_call_iv, 1) },
+  ];
+});
 
 onMounted(() => {
   sendDisabled.value = true;
@@ -800,6 +1643,7 @@ onMounted(() => {
   void loadPromptProfile();
   void loadMemory();
   void loadOpenRouterCredits();
+  void loadStockReport({ silent: true });
   void refreshDashboard();
   creditsRefreshTimer.value = setInterval(() => {
     void loadOpenRouterCredits({ silent: true });
@@ -845,6 +1689,9 @@ function setActiveView(view) {
   composerActionsOpen.value = false;
   if (view === "dashboard") {
     void refreshDashboard();
+  }
+  if (view === "stock-analysis" && stockStatus.value !== "ready") {
+    void loadStockReport();
   }
 }
 
@@ -1043,6 +1890,54 @@ async function refreshOpenRouterCredits() {
   }
 }
 
+async function loadStockReport({ silent = false } = {}) {
+  if (!silent) {
+    stockStatus.value = "loading";
+    stockStatusMessage.value = "Fetching the latest stock analysis report.";
+  }
+
+  try {
+    const payload = await fetchJson("/api/stocks/reports/latest");
+    stockReportReceivedAt.value = payload.received_at || null;
+    if (payload.report) {
+      stockReport.value = payload.report;
+      stockStatus.value = "ready";
+      stockStatusMessage.value = `Loaded ${payload.stock_count ?? stockRows.value.length} stock setups.`;
+      if (!selectedStockSymbol.value || !stockRows.value.some((stock) => stock.symbol === selectedStockSymbol.value)) {
+        selectedStockSymbol.value = stockRows.value[0]?.symbol || "";
+      }
+      return;
+    }
+
+    stockReport.value = null;
+    selectedStockSymbol.value = "";
+    stockStatus.value = "empty";
+    stockStatusMessage.value = "Send a JSON report to the REST endpoint to populate this view.";
+  } catch (error) {
+    stockStatus.value = "error";
+    stockStatusMessage.value = `Stock report load failed: ${formatError(error)}`;
+    stockReport.value = null;
+  }
+}
+
+async function refreshStockReport() {
+  stockRefreshInFlight.value = true;
+  try {
+    await loadStockReport();
+  } finally {
+    stockRefreshInFlight.value = false;
+  }
+}
+
+function setStockBucketFilter(filterId) {
+  stockBucketFilter.value = filterId;
+  const visibleRows =
+    filterId === "all" ? stockRows.value : stockRows.value.filter((stock) => (stock.bucket || "unbucketed") === filterId);
+  if (!visibleRows.some((stock) => stock.symbol === selectedStockSymbol.value)) {
+    selectedStockSymbol.value = visibleRows[0]?.symbol || stockRows.value[0]?.symbol || "";
+  }
+}
+
 function openrouterCreditsMessageFor(payload) {
   if (payload.status === "ready") {
     return payload.cached ? "OpenRouter credits cached." : "OpenRouter credits updated.";
@@ -1058,6 +1953,301 @@ function openrouterCreditsMessageFor(payload) {
 
 function formatCurrency(value) {
   return typeof value === "number" ? `$${value.toFixed(2)}` : "--";
+}
+
+function numericValue(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+function formatNumber(value, digits = 1) {
+  const numberValue = numericValue(value);
+  return numberValue === null ? "--" : numberValue.toFixed(digits);
+}
+
+function formatSignedNumber(value, digits = 1) {
+  const numberValue = numericValue(value);
+  if (numberValue === null) {
+    return "--";
+  }
+  return `${numberValue > 0 ? "+" : ""}${numberValue.toFixed(digits)}`;
+}
+
+function formatPercent(value, digits = 2, signed = true) {
+  const numberValue = numericValue(value);
+  if (numberValue === null) {
+    return "--";
+  }
+  const prefix = signed && numberValue > 0 ? "+" : "";
+  return `${prefix}${numberValue.toFixed(digits)}%`;
+}
+
+function formatScaledPercent(value, digits = 0, signed = true) {
+  const numberValue = numericValue(value);
+  if (numberValue === null) {
+    return "--";
+  }
+  return formatPercent(numberValue * 100, digits, signed);
+}
+
+function formatPrice(value) {
+  const numberValue = numericValue(value);
+  return numberValue === null ? "--" : numberValue.toFixed(numberValue >= 100 ? 2 : 2);
+}
+
+function formatDateTime(value) {
+  if (!value) {
+    return "--";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+  return date.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function titleLabel(value) {
+  if (!value) {
+    return "--";
+  }
+  return String(value)
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function compactSymbol(symbol) {
+  return String(symbol || "--").replace(/^US\./, "");
+}
+
+function compactOptionSymbol(symbol) {
+  return String(symbol || "--").replace(/^US\./, "");
+}
+
+function stanceLabel(stance) {
+  const labels = {
+    cautious_selective: "谨慎筛选",
+    defensive: "防守",
+    low_priority: "低优先级",
+    neutral_wait_for_confirmation: "等待确认",
+    observe_for_confirmation: "观察确认",
+  };
+  return labels[stance] || titleLabel(stance || "Wait for confirmation");
+}
+
+function bucketLabel(bucket) {
+  const labels = {
+    ignore: "Ignore",
+    observe: "Observe",
+    trade: "Trade",
+    watch: "Watch",
+    unbucketed: "Unbucketed",
+  };
+  return labels[bucket] || titleLabel(bucket);
+}
+
+function marketGroupName(key) {
+  const labels = {
+    equity: "Equity",
+    volatility: "Volatility",
+    macro: "Macro",
+    sector: "Sector",
+  };
+  return labels[key] || titleLabel(key);
+}
+
+function marketGroupDefinition(key) {
+  const definitions = {
+    equity: {
+      wording: "Index tape",
+      meaning: "SPY、QQQ、IWM 组成的指数方向代理。",
+      reading: "分数偏弱说明宽基指数拖累风险偏好；分数偏强说明指数背景更支持个股进攻。",
+    },
+    volatility: {
+      wording: "Fear gauge",
+      meaning: "VIX 类波动率压力代理。",
+      reading: "负分通常表示波动率上升或正在压制风险偏好。",
+    },
+    macro: {
+      wording: "Macro pressure",
+      meaning: "美元、债券、黄金、原油等宏观输入。",
+      reading: "负分说明宏观环境可能正在压制成长股或风险资产。",
+    },
+    sector: {
+      wording: "Sector health",
+      meaning: "当前关注板块的主题健康度。",
+      reading: "对 INTC、MRVL、DRAM 这类标的，半导体/存储板块背景可能比 SPY 更重要。",
+    },
+  };
+  return definitions[key] || {
+    wording: marketGroupName(key),
+    meaning: "Market proxy group.",
+    reading: "Use the score as a directional context input, not a standalone trade signal.",
+  };
+}
+
+function marketGroupDrivers(read, group) {
+  if (Array.isArray(read?.drivers) && read.drivers.length) {
+    return read.drivers.slice(0, 4);
+  }
+  if (read?.components && typeof read.components === "object") {
+    return Object.values(read.components).slice(0, 4);
+  }
+  if (Array.isArray(group?.symbols)) {
+    return group.symbols.slice(0, 4);
+  }
+  return [];
+}
+
+function scoreTone(value) {
+  const numberValue = numericValue(value);
+  if (numberValue === null) {
+    return "neutral";
+  }
+  if (numberValue >= 10) {
+    return "positive";
+  }
+  if (numberValue <= -10) {
+    return "negative";
+  }
+  return "neutral";
+}
+
+function rsiTone(value) {
+  const numberValue = numericValue(value);
+  if (numberValue === null) {
+    return "neutral";
+  }
+  if (numberValue <= 35) {
+    return "positive";
+  }
+  if (numberValue >= 70) {
+    return "negative";
+  }
+  return "neutral";
+}
+
+function scoreWidth(value) {
+  const numberValue = numericValue(value) ?? 0;
+  return clampNumber(Math.abs(numberValue), 0, 100);
+}
+
+function clampNumber(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function formatZone(zone) {
+  if (!zone) {
+    return "--";
+  }
+  return `${formatPrice(zone.low)}-${formatPrice(zone.high)}`;
+}
+
+function priceLevelSummary(stock) {
+  if (!stock) {
+    return "Price level map";
+  }
+  const parts = [
+    `Support ${formatZone(stock.levels?.support_zone)}`,
+    `Last ${formatPrice(stock.last_price)}`,
+  ];
+  if (stock.premarket?.price) {
+    parts.push(`Premarket ${formatPrice(stock.premarket.price)} (${formatPercent(stock.premarket.gap_pct)})`);
+  }
+  parts.push(`Resistance ${formatZone(stock.levels?.resistance_zone)}`);
+  return parts.join(" · ");
+}
+
+function levelZoneTitle(stock, zoneKey) {
+  const zoneLabels = {
+    support_zone: "Support zone",
+    resistance_zone: "Resistance zone",
+  };
+  const zone = stock?.levels?.[zoneKey];
+  const value = formatZone(zone);
+  if (zoneKey === "support_zone") {
+    return `${zoneLabels[zoneKey]} ${value}: 可能出现买盘的位置；观察价格能否守住，跌破则支撑失效。`;
+  }
+  return `${zoneLabels[zoneKey] || "Price zone"} ${value}: 可能出现卖压的位置；观察价格是突破还是受阻回落。`;
+}
+
+function levelMarkerTitle(stock, marker) {
+  if (marker === "premarket") {
+    return `Premarket ${formatPrice(stock?.premarket?.price)} (${formatPercent(stock?.premarket?.gap_pct)}): 盘前价格，蓝线表示开盘前相对昨收的位置。`;
+  }
+  return `Last ${formatPrice(stock?.last_price)}: 最近常规交易参考价，黑线表示当前价在支撑/压力区间中的位置。`;
+}
+
+function formatOptionReadMetric(metric) {
+  if (!metric) {
+    return "--";
+  }
+  const value = formatNumber(metric.value, metric.unit === "ratio" ? 2 : 1);
+  if (metric.unit === "%") {
+    return `${value}%`;
+  }
+  if (metric.unit === "ratio") {
+    return value;
+  }
+  return metric.unit ? `${value} ${metric.unit}` : value;
+}
+
+function levelMarkerStyle(stock, value) {
+  return { "--position": `${levelPosition(stock, value)}%` };
+}
+
+function levelZoneStyle(stock, zoneKey) {
+  const zone = stock?.levels?.[zoneKey];
+  if (!zone) {
+    return { "--start": "0%", "--width": "0%" };
+  }
+  const low = levelPosition(stock, zone.low);
+  const high = levelPosition(stock, zone.high);
+  return {
+    "--start": `${Math.min(low, high)}%`,
+    "--width": `${Math.max(Math.abs(high - low), 1)}%`,
+  };
+}
+
+function levelPosition(stock, value) {
+  const numberValue = numericValue(value);
+  const values = levelValues(stock);
+  if (numberValue === null || values.length < 2) {
+    return 50;
+  }
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  if (max <= min) {
+    return 50;
+  }
+  return clampNumber(((numberValue - min) / (max - min)) * 100, 0, 100);
+}
+
+function levelValues(stock) {
+  const levels = stock?.levels || {};
+  const zones = [levels.support_zone, levels.resistance_zone];
+  return [
+    stock?.last_price,
+    stock?.previous_close,
+    stock?.premarket?.price,
+    levels.yesterday_high,
+    levels.yesterday_low,
+    levels.last_week_high,
+    levels.last_week_low,
+    levels.recent_high,
+    levels.recent_low,
+    ...zones.flatMap((zone) => (zone ? [zone.low, zone.high] : [])),
+  ].flatMap((value) => {
+    const numberValue = numericValue(value);
+    return numberValue === null ? [] : [numberValue];
+  });
 }
 
 async function refreshDashboard() {

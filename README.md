@@ -66,6 +66,10 @@ Build and save an OCI archive with Apple `container`:
 agent-backend/scripts/build_apple_container_image.sh
 ```
 
+Production image builds install the Buddy control backend only by default, without STT/TTS
+model dependencies. If Buddy voice AI is re-enabled later, build with
+`INSTALL_EXTRAS=audio,buddy`.
+
 The script writes a `.tar` image archive and a sibling `.env` metadata file under
 `agent-backend/artifacts/container-images/`. Deploy that archive to a remote Mac over SSH:
 
@@ -76,8 +80,7 @@ agent-backend/scripts/deploy_apple_container.sh agent-backend/artifacts/containe
 ```
 
 Use a private env file for real secrets. The container example env uses TCP Buddy transport because
-serial passthrough needs host-specific container device configuration. It also avoids macOS `say`,
-which is unavailable inside the Linux container runtime.
+serial passthrough needs host-specific container device configuration.
 
 Deployment images default to `ANOMALO_ENV=production` and
 `ANOMALO_BUDDY_AUDIO_DEBUG_STORAGE=off`, so Buddy microphone test captures are not written to disk.
@@ -376,13 +379,16 @@ between the YAML prompt profile and session history. The Context Assembly panel 
 
 ## Python Sandbox
 
-Build the optional Python tool image:
+The Python sandbox is enabled by default for local development and uses Docker to run code in
+an isolated helper container. Build the optional Python tool image:
 
 ```bash
 docker build -t anomalo-python:latest agent-backend/docker/python
 ```
 
 The tool runs with no network, CPU/memory limits, read-only container filesystem, and an execution timeout.
+Apple container deployments disable it by default because Docker is not available inside the runtime
+container. Set `PYTHON_SANDBOX_ENABLED=true` only when a compatible sandbox runtime is available.
 
 ## Skill Layout
 

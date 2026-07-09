@@ -300,6 +300,12 @@ class AgentRuntime:
                 yield event("message.done", session_id, run_id)
                 yield event("run.finished", session_id, run_id, final_text=message)
                 return
+            if not self.settings.python_sandbox_enabled:
+                message = "Python sandbox is disabled for this deployment."
+                yield event("message.delta", session_id, run_id, content=message)
+                yield event("message.done", session_id, run_id)
+                yield event("run.finished", session_id, run_id, final_text=message)
+                return
 
             yield event(
                 "tool.started",

@@ -10,6 +10,8 @@ class PythonSandboxProvider(ToolProvider):
         self.settings = settings
 
     async def list_tools(self, context: ToolContext | None = None) -> list[ToolSpec]:
+        if not self.settings.python_sandbox_enabled:
+            return []
         return [
             ToolSpec(
                 name="sandbox_python_run",
@@ -40,6 +42,12 @@ class PythonSandboxProvider(ToolProvider):
     ) -> ToolResult:
         if name != "sandbox_python_run":
             return ToolResult(name=name, ok=False, content=f"Unknown sandbox tool: {name}")
+        if not self.settings.python_sandbox_enabled:
+            return ToolResult(
+                name=name,
+                ok=False,
+                content="Python sandbox is disabled for this deployment.",
+            )
 
         code = str(arguments.get("code", ""))
         if not code.strip():
@@ -104,6 +112,14 @@ class PythonSandboxProvider(ToolProvider):
             },
         )
 
+    async def status(self, context: ToolContext | None = None) -> dict[str, Any]:
+        tools = await self.list_tools(context=context)
+        return {
+            "enabled": self.settings.python_sandbox_enabled,
+            "image": self.settings.python_sandbox_image,
+            "tools": [tool.model_dump() for tool in tools],
+        }
+
 
 def _limit_output(stdout: str, stderr: str, max_chars: int) -> str:
     parts = []
@@ -115,4 +131,3 @@ def _limit_output(stdout: str, stderr: str, max_chars: int) -> str:
     if len(text) <= max_chars:
         return text
     return text[:max_chars] + "\n... output truncated ..."
-

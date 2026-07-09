@@ -13,24 +13,31 @@ RUN npm run build
 
 FROM python:3.12-slim AS runtime
 
-ARG ANOMALO_INSTALL_EXTRAS=audio,buddy
+ARG ANOMALO_INSTALL_EXTRAS=buddy
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     ANOMALO_ENV=production \
     ANOMALO_BUDDY_AUDIO_AI_ENABLED=false \
-    ANOMALO_BUDDY_AUDIO_DEBUG_STORAGE=off
+    ANOMALO_BUDDY_AUDIO_DEBUG_STORAGE=off \
+    PYTHON_SANDBOX_ENABLED=false
 
 WORKDIR /app
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        ffmpeg \
-        libgl1 \
-        libglib2.0-0 \
-        libsndfile1 \
-    && rm -rf /var/lib/apt/lists/*
+RUN set -eux; \
+    apt_packages=""; \
+    case ",$ANOMALO_INSTALL_EXTRAS," in \
+        *,audio,*) apt_packages="$apt_packages ffmpeg libsndfile1" ;; \
+    esac; \
+    case ",$ANOMALO_INSTALL_EXTRAS," in \
+        *,vision,*) apt_packages="$apt_packages libgl1 libglib2.0-0" ;; \
+    esac; \
+    if [ -n "$apt_packages" ]; then \
+        apt-get update; \
+        apt-get install -y --no-install-recommends $apt_packages; \
+        rm -rf /var/lib/apt/lists/*; \
+    fi
 
 COPY pyproject.toml README.md ./
 COPY agent-backend ./agent-backend
