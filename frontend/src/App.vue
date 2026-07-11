@@ -249,6 +249,8 @@
             <div class="stock-run-meta">
               <span>Generated</span>
               <strong>{{ stockGeneratedAtText }}</strong>
+              <span>Session</span>
+              <strong>{{ stockMarketSessionText }}</strong>
               <span>Received</span>
               <strong>{{ stockReceivedAtText }}</strong>
             </div>
@@ -284,94 +286,168 @@
               </button>
             </div>
 
+            <div v-if="reportMethodologyNotice" class="stock-report-contract" role="status">
+              <span>{{ reportMethodologyNotice.label }}</span>
+              <strong>{{ reportMethodologyNotice.summary }}</strong>
+              <span class="info-anchor">
+                <button class="info-button" type="button" aria-label="分析方法说明">
+                  <Info :size="14" />
+                </button>
+                <span class="info-popover" role="tooltip">
+                  <strong>{{ reportMethodologyNotice.detail }}</strong>
+                  <em>{{ reportMethodologyNotice.limitation }}</em>
+                </span>
+              </span>
+            </div>
+
             <section
               v-if="stockActiveSection === 'market'"
               class="stock-tab-panel market-tab-panel"
               aria-label="Market context"
             >
-              <section class="market-brief-grid" aria-label="Market context summary">
-                <article class="market-overview-panel" :data-tone="scoreTone(stockMarketContext?.risk_score)">
-                  <div class="market-score">
-                    <span>Market score</span>
-                    <strong>{{ formatSignedNumber(stockMarketContext?.risk_score) }}</strong>
-                  </div>
-                  <div class="market-summary-copy">
-                    <span class="stock-kicker">Market read</span>
-                    <strong>{{ titleLabel(stockMarketContext?.regime) }}</strong>
-                    <p>{{ stockMarketSummary }}</p>
-                  </div>
-                </article>
+              <section class="market-hero" :data-tone="marketTone" aria-label="Market summary">
+                <div class="market-hero-copy">
+                  <span class="stock-kicker">Market posture</span>
+                  <h3>{{ marketStateLabel }}</h3>
+                  <p>{{ stockMarketSummary }}</p>
+                </div>
 
-                <div class="market-definition-grid">
-                  <article
-                    v-for="metric in marketMetricCards"
-                    :key="metric.label"
-                    class="market-definition-card"
-                    :data-tone="metric.tone"
-                  >
-                    <header>
-                      <span>{{ metric.label }}</span>
-                      <span class="info-anchor">
-                        <button class="info-button" type="button" :aria-label="`${metric.label} explanation`">
-                          <Info :size="14" />
-                        </button>
-                        <span class="info-popover" role="tooltip">
-                          <strong>{{ metric.meaning }}</strong>
-                          <em>{{ metric.reading }}</em>
-                        </span>
+                <div class="market-hero-state">
+                  <span>{{ marketStateTitle }}</span>
+                  <div>
+                    <strong v-if="showMarketInternalScores">{{ formatSignedNumber(stockMarketContext?.risk_score) }}</strong>
+                    <strong v-else>{{ marketStateLabel }}</strong>
+                    <span class="info-anchor">
+                      <button class="info-button" type="button" aria-label="市场状态评分说明">
+                        <Info :size="14" />
+                      </button>
+                      <span class="info-popover info-popover-left" role="tooltip">
+                        <strong>{{ marketScoreDetail.title }}</strong>
+                        <em>{{ marketScoreDetail.reading }}</em>
+                        <small v-if="marketScoreDetail.audit">{{ marketScoreDetail.audit }}</small>
                       </span>
-                    </header>
-                    <strong>{{ metric.value }}</strong>
+                    </span>
+                  </div>
+                  <em>{{ marketStanceLabel }}</em>
+                </div>
+
+                <div class="market-hero-stats">
+                  <article v-for="stat in marketHeroStats" :key="stat.label">
+                    <div>
+                      <span>{{ stat.label }}</span>
+                      <strong>{{ stat.value }}</strong>
+                    </div>
+                    <span class="info-anchor">
+                      <button class="info-button" type="button" :aria-label="`${stat.label} explanation`">
+                        <Info :size="14" />
+                      </button>
+                      <span class="info-popover" role="tooltip">
+                        <strong>{{ stat.meaning }}</strong>
+                        <em>{{ stat.reading }}</em>
+                      </span>
+                    </span>
                   </article>
                 </div>
               </section>
 
-              <section class="market-group-grid" aria-label="Market groups">
-                <article
-                  v-for="group in stockMarketGroups"
-                  :key="group.key"
-                  class="market-group"
-                  :data-tone="scoreTone(group.score)"
-                >
-                  <header>
-                    <div>
-                      <span>{{ group.definition.wording }}</span>
-                      <strong>{{ titleLabel(group.label) }}</strong>
-                    </div>
-                    <div class="market-group-actions">
-                      <b>{{ formatSignedNumber(group.score) }}</b>
-                      <span class="info-anchor">
-                        <button
-                          class="info-button"
-                          type="button"
-                          :aria-label="`${group.definition.wording} explanation`"
-                        >
-                          <Info :size="14" />
-                        </button>
-                        <span class="info-popover" role="tooltip">
-                          <strong>{{ group.definition.meaning }}</strong>
-                          <em>{{ group.definition.reading }}</em>
+              <section class="market-signal-panel" aria-label="Market signal blocks">
+                <header class="market-section-heading">
+                  <div>
+                    <span>市场信号</span>
+                    <strong>影响今天风险偏好的四块输入</strong>
+                  </div>
+                </header>
+                <div class="market-signal-rail">
+                  <article
+                    v-for="group in stockMarketGroups"
+                    :key="group.key"
+                    :data-tone="group.tone"
+                  >
+                    <header>
+                      <div>
+                        <span>{{ group.name }}</span>
+                        <strong>{{ group.label || group.name }}</strong>
+                      </div>
+                      <div class="market-signal-state">
+                        <span class="info-anchor">
+                          <button
+                            class="info-button"
+                            type="button"
+                            :aria-label="`${group.definition.wording} explanation`"
+                          >
+                            <Info :size="14" />
+                          </button>
+                          <span class="info-popover" role="tooltip">
+                            <strong>{{ group.scoreDetail.title }}</strong>
+                            <em>{{ group.scoreDetail.reading }}</em>
+                            <small v-if="group.scoreDetail.audit">{{ group.scoreDetail.audit }}</small>
+                          </span>
                         </span>
-                      </span>
+                      </div>
+                    </header>
+                    <footer>
+                      <span>{{ group.coverageLabel }}</span>
+                      <div class="market-signal-drivers">
+                        <span v-for="driver in group.displayDrivers.slice(0, 3)" :key="driver.symbol" :title="driver.meaning">
+                          {{ compactSymbol(driver.symbol) }} {{ driver.displayValue }}
+                        </span>
+                      </div>
+                    </footer>
+                  </article>
+                </div>
+              </section>
+
+              <section class="market-detail-grid" aria-label="Market breadth and macro context">
+                <article v-if="marketThemeGroups.length" class="market-breadth-panel">
+                  <header class="market-section-heading">
+                    <div>
+                      <span>观察组广度</span>
+                      <strong>{{ marketThemeSummary }}</strong>
                     </div>
-                  </header>
-                  <div class="group-meter" aria-hidden="true">
-                    <span :style="{ width: `${scoreWidth(group.score)}%` }"></span>
-                  </div>
-                  <div class="group-meta">
-                    <span>Coverage {{ formatScaledPercent(group.coverage, 0, false) }}</span>
-                    <span>{{ group.available_symbols }}/{{ group.configured_symbols }} symbols</span>
-                  </div>
-                  <div class="group-symbols">
-                    <span
-                      v-for="driver in group.displayDrivers"
-                      :key="driver.symbol"
-                      :data-tone="scoreTone(driver.score)"
-                      :title="driver.meaning"
-                    >
-                      {{ compactSymbol(driver.symbol) }}
-                      <b>{{ formatSignedNumber(driver.score, 0) }}</b>
+                    <span class="info-anchor">
+                      <button class="info-button" type="button" aria-label="观察组广度说明">
+                        <Info :size="14" />
+                      </button>
+                      <span class="info-popover" role="tooltip">
+                        <strong>四个精选科技观察组的同组方向。</strong>
+                        <em>用于确认板块轮动和同组共振，不进入大盘风险分，也不是完整市场广度。</em>
+                      </span>
                     </span>
+                  </header>
+                  <div class="market-breadth-list">
+                    <article v-for="group in marketThemeGroups" :key="group.key" :data-tone="marketStateTone(group.state || group.label)">
+                      <div>
+                        <span>{{ group.title }}</span>
+                        <strong>{{ group.label }}</strong>
+                      </div>
+                      <b>{{ group.breadth }}</b>
+                      <small>同组确认 · {{ compactSymbol(group.benchmark_symbol) }}</small>
+                    </article>
+                  </div>
+                </article>
+
+                <article v-if="marketMacroComponents.length" class="market-macro-panel">
+                  <header class="market-section-heading">
+                    <div>
+                      <span>宏观背景</span>
+                      <strong>黄金 / 美元 / 油 / 债</strong>
+                    </div>
+                    <span class="info-anchor">
+                      <button class="info-button" type="button" aria-label="宏观背景说明">
+                        <Info :size="14" />
+                      </button>
+                      <span class="info-popover" role="tooltip">
+                        <strong>宏观输入帮助解释外部环境。</strong>
+                        <em>它们不直接进入大盘风险分，应结合指数、波动率和板块信号一起阅读。</em>
+                      </span>
+                    </span>
+                  </header>
+                  <div class="market-macro-list">
+                    <article v-for="component in marketMacroComponents" :key="component.symbol">
+                      <strong>{{ compactSymbol(component.symbol) }}</strong>
+                      <b>{{ formatPercent(component.gap_pct) }}</b>
+                      <span>{{ component.meaning }}</span>
+                    </article>
                   </div>
                 </article>
               </section>
@@ -383,7 +459,7 @@
               >
                 <article v-if="marketIntelligenceList.length" class="judgment-panel">
                   <header>
-                    <span>Key intelligence</span>
+                    <span>关键观察</span>
                     <strong>{{ marketStanceLabel }}</strong>
                   </header>
                   <ul class="judgment-list">
@@ -393,7 +469,7 @@
 
                 <article v-if="marketScenarioCards.length" class="judgment-panel">
                   <header>
-                    <span>Market scenarios</span>
+                    <span>市场情景</span>
                     <strong>{{ marketScenarioCards.length }}</strong>
                   </header>
                   <div class="scenario-grid">
@@ -411,37 +487,6 @@
                 </article>
               </section>
 
-              <section class="market-context-grid" aria-label="Market notes and score guide">
-                <article class="market-notes-panel">
-                  <header>
-                    <span>Context notes</span>
-                    <strong>{{ marketNoteList.length }}</strong>
-                  </header>
-                  <ul>
-                    <li v-for="note in marketNoteList" :key="note">{{ note }}</li>
-                  </ul>
-                </article>
-
-                <article class="market-guide-panel">
-                  <header>
-                    <span>Score guide</span>
-                    <strong>{{ marketRiskBand }}</strong>
-                  </header>
-                  <div class="guide-row" v-for="row in marketGuideRows" :key="row.range">
-                    <b>{{ row.range }}</b>
-                    <span class="guide-label">{{ row.label }}</span>
-                    <span class="info-anchor">
-                      <button class="info-button" type="button" :aria-label="`${row.label} explanation`">
-                        <Info :size="14" />
-                      </button>
-                      <span class="info-popover" role="tooltip">
-                        <strong>{{ row.label }}</strong>
-                        <em>{{ row.description }}</em>
-                      </span>
-                    </span>
-                  </div>
-                </article>
-              </section>
             </section>
 
             <section
@@ -503,8 +548,8 @@
                         {{ formatNumber(stock.attention_score, 1) }}
                       </span>
                       <span class="stock-row-meta">
-                        Gap {{ formatPercent(stock.premarket?.gap_pct) }} · Move
-                        {{ formatPercent(stock.options?.expected_move_pct, 2, false) }}
+                        {{ stockSessionLabel(stock) }} {{ formatPercent(stockSessionQuote(stock)?.change_pct) }}
+                        · {{ stockSignalLabel(stock.judgment?.signal?.direction) }}
                       </span>
                       <ChevronRight :size="16" />
                     </button>
@@ -525,6 +570,13 @@
                     </span>
                   </header>
 
+                  <div v-if="selectedStockGroupContext || selectedRelativeStrength" class="stock-context-strip">
+                    <span v-if="selectedStockGroupContext">
+                      {{ selectedStockGroupContext.display_name }} · {{ selectedStockGroupContext.peer_label_localized || titleLabel(selectedStockGroupContext.peer_label) }}
+                    </span>
+                    <span v-if="selectedRelativeStrength">{{ selectedRelativeStrength.summary }}</span>
+                  </div>
+
                   <section v-if="selectedStockJudgment?.headline" class="stock-judgment-summary">
                     <span>{{ stanceLabel(selectedStockJudgment.stance) }}</span>
                     <p>{{ selectedStockJudgment.headline }}</p>
@@ -541,6 +593,21 @@
                       {{ tag.label || tag.tag }}
                     </span>
                   </div>
+
+                  <section v-if="selectedStockSignal" class="stock-signal-grid" aria-label="Conditional signal">
+                    <article>
+                      <span>Conditional signal</span>
+                      <strong :data-direction="selectedStockSignal.direction">{{ stockSignalLabel(selectedStockSignal.direction) }}</strong>
+                    </article>
+                    <article>
+                      <span>Trigger</span>
+                      <strong>{{ selectedStockSignal.trigger || "等待价格确认" }}</strong>
+                    </article>
+                    <article>
+                      <span>Invalidation</span>
+                      <strong>{{ selectedStockSignal.invalidation || "--" }}</strong>
+                    </article>
+                  </section>
 
                   <div class="stock-detail-metrics">
                     <article
@@ -623,11 +690,11 @@
                         <span class="level-marker-dot" aria-hidden="true"></span>
                       </span>
                       <span
-                        v-if="selectedStock.premarket?.price"
-                        class="level-marker premarket"
-                        :style="levelMarkerStyle(selectedStock, selectedStock.premarket.price)"
-                        :aria-label="levelMarkerTitle(selectedStock, 'premarket')"
-                        :data-tooltip="levelMarkerTitle(selectedStock, 'premarket')"
+                        v-if="stockSessionQuote(selectedStock)?.price"
+                        class="level-marker session"
+                        :style="levelMarkerStyle(selectedStock, stockSessionQuote(selectedStock)?.price)"
+                        :aria-label="levelMarkerTitle(selectedStock, 'session')"
+                        :data-tooltip="levelMarkerTitle(selectedStock, 'session')"
                         tabindex="0"
                       >
                         <span class="level-marker-dot" aria-hidden="true"></span>
@@ -670,10 +737,10 @@
                     </div>
                   </section>
 
-                  <section v-if="selectedStock.options" class="stock-section-block">
+                  <section v-if="selectedOptionRead || selectedStock.options" class="stock-section-block">
                     <header>
-                      <span>Options tape</span>
-                      <strong>{{ selectedOptionRead?.label || selectedStock.options.nearest_expiry || "nearest expiry" }}</strong>
+                      <span>Options context</span>
+                      <strong>{{ selectedOptionRead?.label || selectedStock.options?.nearest_expiry || "无期权摘要" }}</strong>
                     </header>
                     <div v-if="selectedOptionRead" class="option-summary-panel">
                       <p>{{ selectedOptionRead.summary }}</p>
@@ -681,14 +748,14 @@
                         <span v-for="label in selectedOptionRead.risk_labels" :key="label">{{ label }}</span>
                       </div>
                     </div>
-                    <div class="option-metric-grid">
+                    <div v-if="selectedOptionMetrics.length" class="option-metric-grid">
                       <article v-for="metric in selectedOptionMetrics" :key="metric.label">
                         <span>{{ metric.label }}</span>
                         <strong>{{ metric.value }}</strong>
                       </article>
                     </div>
                     <div
-                      v-if="selectedOptionRead?.display_contracts !== false && selectedStock.options.unusual_activity?.length"
+                      v-if="selectedOptionRead?.display_contracts !== false && selectedStock.options?.unusual_activity?.length"
                       class="option-flow-table"
                     >
                       <div class="option-flow-row option-flow-head">
@@ -706,14 +773,6 @@
                         <span>{{ formatNumber(contract.volume_oi_ratio, 2) }}</span>
                       </div>
                     </div>
-                  </section>
-
-                  <section v-else class="stock-section-block muted">
-                    <header>
-                      <span>Options tape</span>
-                      <strong>No option data</strong>
-                    </header>
-                    <p>This symbol did not include an options block in the latest report.</p>
                   </section>
 
                   <section class="stock-notes-grid">
@@ -1139,6 +1198,7 @@ const socket = ref(null);
 const reconnectTimer = ref(null);
 const dashboardRefreshTimer = ref(null);
 const creditsRefreshTimer = ref(null);
+const stockReportRefreshTimer = ref(null);
 const shuttingDown = ref(false);
 const inspectorOpen = ref(false);
 const composerActionsOpen = ref(false);
@@ -1162,6 +1222,7 @@ const messageInput = ref("");
 
 const MARKDOWN_RENDER_INTERVAL_MS = 160;
 const CREDITS_REFRESH_INTERVAL_MS = 82800000;
+const STOCK_REPORT_REFRESH_INTERVAL_MS = 15000;
 
 const openrouterCredits = ref(null);
 const openrouterCreditsStatus = ref("loading");
@@ -1214,6 +1275,8 @@ const buddyStateActions = [
 
 const stockReport = ref(null);
 const stockReportReceivedAt = ref(null);
+const stockReportEtag = ref(null);
+const stockReportRevision = ref(0);
 const stockStatus = ref("idle");
 const stockStatusMessage = ref("No stock report loaded yet.");
 const stockRefreshInFlight = ref(false);
@@ -1324,23 +1387,94 @@ const stockRows = computed(() => {
 });
 const stockMarketContext = computed(() => stockReport.value?.market_context || {});
 const marketJudgment = computed(() => stockMarketContext.value?.judgment || null);
+const marketDisplay = computed(() => marketJudgment.value?.display || {});
+const stockMarketSession = computed(() => stockReport.value?.market_session || null);
+const stockMarketSessionText = computed(() => {
+  const session = stockMarketSession.value;
+  if (!session) {
+    return "--";
+  }
+  return session.label || titleLabel(session.name);
+});
+const marketRegimeLabel = computed(() => marketMoodLabel(stockMarketContext.value?.regime));
+const marketState = computed(() => marketDisplay.value?.market_state || {});
+const marketStateTitle = computed(() => marketState.value?.title || "市场状态");
+const marketStateLabel = computed(() => marketState.value?.label || marketRegimeLabel.value);
+const marketTone = computed(() => marketStateTone(marketState.value?.state || stockMarketContext.value?.regime));
+const showMarketInternalScores = computed(() => marketDisplay.value?.score_policy?.show_internal_scores === true);
+const marketScoreDetail = computed(() => {
+  const explanation = marketDisplay.value?.overall_score_explanation || stockMarketContext.value?.risk_score_explanation || {};
+  const score = numericValue(explanation.current_score ?? stockMarketContext.value?.risk_score);
+  return {
+    title: explanation.current_meaning || "综合环境状态",
+    reading: [explanation.formula, explanation.how_to_use]
+      .filter(Boolean)
+      .join("；") || "用于综合指数、波动率和科技领导力，不是概率、收益率或价格目标。",
+    audit: score === null ? "" : `内部评分 ${formatSignedNumber(score)}，仅供审计环境构成。`,
+  };
+});
 const stockMarketGroups = computed(() => {
   const groups = stockMarketContext.value?.groups || {};
   const reads = marketJudgment.value?.reads || {};
   return Object.entries(groups).map(([key, group]) => {
     const read = reads[key] || {};
     const displayDrivers = marketGroupDrivers(read, group);
+    const definition = marketGroupDefinition(key);
+    const scoreExplanation = read.score_explanation || {};
+    const groupScore = numericValue(scoreExplanation.current_score ?? read.score ?? group.score);
     return {
       key,
-      name: marketGroupName(key),
-      definition: marketGroupDefinition(key),
+      name: read.title || marketGroupName(key),
+      definition,
       ...group,
-      label: read.label || group.label,
-      score: numericValue(read.score) ?? group.score,
+      label: read.label || titleLabel(group.label),
+      stateLabel: read.label || titleLabel(group.label),
+      tone: marketStateTone(read.state || group.label),
       summary: read.summary || group.notes?.[0] || "",
       displayDrivers,
+      coverageLabel:
+        Number.isFinite(group.available_symbols) && Number.isFinite(group.configured_symbols)
+          ? `${group.available_symbols}/${group.configured_symbols} symbols`
+          : "Context input",
+      scoreDetail: {
+        title: definition.meaning,
+        reading: [definition.reading, scoreExplanation.how_to_use || read.summary].filter(Boolean).join("；"),
+        audit:
+          groupScore === null || scoreExplanation.show_group_score === false
+            ? ""
+            : `内部评分 ${formatSignedNumber(groupScore)}，仅供审计环境构成。`,
+      },
     };
   });
+});
+const marketThemeGroups = computed(() => {
+  const judgmentGroups = marketJudgment.value?.reads?.themes?.groups;
+  if (Array.isArray(judgmentGroups) && judgmentGroups.length) {
+    return judgmentGroups.map((group) => ({ key: group.group, ...group }));
+  }
+  const groups = stockMarketContext.value?.theme_groups?.groups || {};
+  return Object.entries(groups).map(([key, group]) => ({
+    key,
+    title: group.display_name || key,
+    label: titleLabel(group.label),
+    state: group.label,
+    breadth: `${group.positive_symbols ?? 0}/${group.available_symbols ?? 0}`,
+    benchmark_symbol: group.benchmark_symbol,
+    benchmark_alignment: group.benchmark_alignment,
+  }));
+});
+const marketThemeSummary = computed(() => {
+  const state = marketJudgment.value?.reads?.themes?.state;
+  const labels = {
+    bullish: "多数偏强",
+    bearish: "多数偏弱",
+    mixed: "方向分化",
+  };
+  return labels[state] || "观察组分化";
+});
+const marketMacroComponents = computed(() => {
+  const components = marketJudgment.value?.reads?.macro?.components;
+  return components && typeof components === "object" ? Object.values(components) : [];
 });
 const selectedStock = computed(() => {
   if (!stockRows.value.length) {
@@ -1350,14 +1484,21 @@ const selectedStock = computed(() => {
 });
 const selectedStockJudgment = computed(() => selectedStock.value?.judgment || null);
 const selectedSetupTags = computed(() => selectedStock.value?.setups?.tags || []);
+const selectedStockSignal = computed(() => selectedStockJudgment.value?.signal || selectedStock.value?.signal || null);
+const selectedStockGroupContext = computed(
+  () => selectedStockJudgment.value?.group_read || selectedStock.value?.group_context || null,
+);
+const selectedRelativeStrength = computed(
+  () => selectedStockJudgment.value?.technical_read?.relative_strength || selectedStock.value?.relative_strength || null,
+);
 const stockHeadline = computed(() => {
   if (!stockReport.value) {
     return "Stock Analysis";
   }
   if (stockActiveSection.value === "market") {
-    return `大盘 · ${titleLabel(stockMarketContext.value?.regime)}`;
+    return `大盘 · ${marketStateLabel.value}`;
   }
-  return `个股 · ${stockRows.value.length} setups`;
+  return `个股 · ${stockRows.value.length} 个标的`;
 });
 const stockReportSubhead = computed(() => {
   if (!stockReport.value) {
@@ -1366,9 +1507,9 @@ const stockReportSubhead = computed(() => {
   const mode = stockReport.value.data_mode ? `Mode ${stockReport.value.data_mode}` : "Live report";
   const warnings = Array.isArray(stockReport.value.warnings) ? stockReport.value.warnings.length : 0;
   if (stockActiveSection.value === "market") {
-    return `${mode} · ${warnings} warnings · 大盘指标附带定义和读法`;
+    return `${mode} · ${stockMarketSessionText.value} · ${warnings} warnings`;
   }
-  return `${mode} · ${warnings} warnings · 按 attention score 排序`;
+  return `${mode} · ${warnings} warnings · 按关注优先级排序`;
 });
 const stockGeneratedAtText = computed(() => formatDateTime(stockReport.value?.generated_at));
 const stockReceivedAtText = computed(() => formatDateTime(stockReportReceivedAt.value));
@@ -1399,8 +1540,8 @@ const stockSectionTabs = computed(() => [
   {
     id: "market",
     label: "大盘",
-    value: titleLabel(stockMarketContext.value?.regime),
-    detail: `Score ${formatSignedNumber(stockMarketContext.value?.risk_score)}`,
+    value: marketStateLabel.value,
+    detail: marketStanceLabel.value,
   },
   {
     id: "stocks",
@@ -1409,74 +1550,62 @@ const stockSectionTabs = computed(() => [
     detail: `${stockRows.value.filter((stock) => stock.bucket === "observe").length} observe`,
   },
 ]);
-const marketRiskBand = computed(() => {
-  const score = numericValue(stockMarketContext.value?.risk_score);
-  if (score === null) {
-    return "Unknown";
-  }
-  if (score > 20) {
-    return "Supportive";
-  }
-  if (score < -20) {
-    return "Hostile";
-  }
-  return "Mixed";
+const marketHeroStats = computed(() => {
+  const dataQuality = marketDisplay.value?.data_quality || {};
+  const signalQuality = marketDisplay.value?.signal_quality || {};
+  return [
+    {
+      label: "Session",
+      value: stockMarketSessionText.value,
+      meaning: "本次报告使用的交易时段。",
+      reading: "报价和涨跌幅都以这个时段相对最近一次常规收盘价计算。",
+    },
+    {
+      label: dataQuality.title || "数据状态",
+      value: dataQuality.label || formatScaledPercent(stockMarketContext.value?.data_coverage, 0, false),
+      meaning: "数据状态反映配置的市场代理是否成功加载。",
+      reading: "数据不完整时，环境判断应降低优先级；它不是预测准确率。",
+    },
+    {
+      label: signalQuality.title || "环境信号一致性",
+      value: signalQuality.label || titleLabel(stockMarketContext.value?.signal_confidence_label),
+      meaning: signalQuality.explanation || "环境信号强弱与各区块一致性的启发式质量标签。",
+      reading: "它不是上涨或下跌概率，只用于判断是否值得优先观察。",
+    },
+  ];
 });
-const marketMetricCards = computed(() => [
-  {
-    label: "Market score",
-    value: formatSignedNumber(stockMarketContext.value?.risk_score),
-    meaning: "综合市场压力分，范围是 -100 到 +100。",
-    reading: "> +20 偏进攻；< -20 偏防守；中间区域按 mixed 处理。",
-    tone: scoreTone(stockMarketContext.value?.risk_score),
-  },
-  {
-    label: "Market mood",
-    value: titleLabel(stockMarketContext.value?.regime),
-    meaning: "今天的大盘姿态，不是个股方向预测。",
-    reading: "risk_on 偏进攻，risk_off 偏防守，mixed 表示没有清晰大盘信号。",
-    tone: scoreTone(stockMarketContext.value?.risk_score),
-  },
-  {
-    label: "Data coverage",
-    value: formatScaledPercent(stockMarketContext.value?.confidence, 0, false),
-    meaning: "数据覆盖率，不是预测置信度。",
-    reading: "100% 表示配置的代理指标都返回了数据；低覆盖率时分数可信度下降。",
-    tone: "neutral",
-  },
-]);
-const marketGuideRows = [
-  {
-    range: "> +20",
-    label: "Supportive",
-    description: "大盘背景支持进攻，个股信号更容易被放大。",
-  },
-  {
-    range: "-20 to +20",
-    label: "Mixed",
-    description: "没有明确大盘方向，优先看个股自己的 setup 和确认。",
-  },
-  {
-    range: "< -20",
-    label: "Hostile",
-    description: "大盘压力偏高，反弹和突破需要更强确认。",
-  },
-];
+const reportMethodologyNotice = computed(() => {
+  const methodology = stockReport.value?.methodology;
+  if (!methodology?.status) {
+    return null;
+  }
+  const isHeuristic = methodology.status === "heuristic_not_backtested";
+  return {
+    label: isHeuristic ? "启发式筛选，尚未回测" : titleLabel(methodology.status),
+    summary: isHeuristic
+      ? "用于安排观察优先级，不构成买卖或收益预测"
+      : methodologyPurposeLabel(methodology.purpose),
+    detail: methodology.purpose ? `用途：${methodologyPurposeLabel(methodology.purpose)}` : "分析方法说明未提供。",
+    limitation: methodology.not_a_claim
+      ? `不代表：${methodologyClaimLabel(methodology.not_a_claim)}`
+      : methodology.validation?.next_step || "请结合触发条件和后续回测结果使用。",
+  };
+});
 const marketNoteList = computed(() => {
   const notes = Array.isArray(stockMarketContext.value?.notes) ? stockMarketContext.value.notes : [];
   return notes.slice(0, 4);
 });
 const stockQueueSummaryCards = computed(() => [
   {
-    label: "Observe",
-    value: String(stockRows.value.filter((stock) => stock.bucket === "observe").length),
-    detail: "active watchlist",
+    label: "Watch now",
+    value: String(stockRows.value.filter((stock) => stock.bucket === "watch").length),
+    detail: "highest attention",
     tone: "positive",
   },
   {
-    label: "Avg move",
-    value: formatPercent(averageExpectedMove.value, 2, false),
-    detail: "nearest expiry",
+    label: "Avg session move",
+    value: formatPercent(averageSessionMove.value, 2, false),
+    detail: stockMarketSessionText.value,
     tone: "warning",
   },
   {
@@ -1486,20 +1615,20 @@ const stockQueueSummaryCards = computed(() => [
     tone: scoreTone(stockRows.value[0]?.attention_score),
   },
   {
-    label: "With options",
+    label: "Option summary",
     value: String(stockRows.value.filter((stock) => stock.options).length),
-    detail: "option tape loaded",
+    detail: "symbols with data",
     tone: "neutral",
   },
 ]);
-const averageExpectedMove = computed(() => {
+const averageSessionMove = computed(() => {
   const moves = stockRows.value
-    .map((stock) => numericValue(stock.options?.expected_move_pct))
+    .map((stock) => numericValue(stockSessionQuote(stock)?.change_pct))
     .filter((value) => value !== null);
   if (!moves.length) {
     return null;
   }
-  return moves.reduce((total, value) => total + value, 0) / moves.length;
+  return moves.reduce((total, value) => total + Math.abs(value), 0) / moves.length;
 });
 const stockBucketFilters = computed(() => {
   const counts = new Map();
@@ -1534,20 +1663,22 @@ const selectedStockMetrics = computed(() => {
     {
       label: "Last",
       value: formatPrice(stock.last_price),
-      detail: `Prev ${formatPrice(stock.previous_close)}`,
+      detail: stock.technicals?.last_bar_date || `Prev ${formatPrice(stock.previous_close)}`,
       tone: scoreTone(stock.technicals?.daily_change_pct),
     },
     {
-      label: "Premarket",
-      value: formatPrice(stock.premarket?.price),
-      detail: formatPercent(stock.premarket?.gap_pct),
-      tone: scoreTone(stock.premarket?.gap_pct),
+      label: stockSessionLabel(stock),
+      value: formatPrice(stockSessionQuote(stock)?.price),
+      detail: `${formatPercent(stockSessionQuote(stock)?.change_pct)} · ${formatVolume(stockSessionQuote(stock)?.volume)}`,
+      tone: scoreTone(stockSessionQuote(stock)?.change_pct),
     },
     {
-      label: "Expected move",
-      value: formatPercent(stock.options?.expected_move_pct, 2, false),
-      detail: stock.options?.nearest_expiry || "no expiry",
-      tone: "warning",
+      label: stock.options ? "Implied range" : "Trend",
+      value: stock.options
+        ? formatPercent(stock.options.straddle_implied_move_pct ?? stock.options.expected_move_pct, 2, false)
+        : titleLabel(stock.technicals?.trend),
+      detail: stock.options ? stock.options.nearest_expiry || "nearest expiry" : `ATR ${formatPercent(stock.technicals?.atr_pct, 2, false)}`,
+      tone: stock.options ? "warning" : scoreTone(stock.technicals?.trend_score),
     },
   ];
 });
@@ -1625,7 +1756,7 @@ const selectedOptionMetrics = computed(() => {
   return [
     { label: "ATM", value: formatPrice(options.atm_strike) },
     { label: "Straddle", value: formatPrice(options.atm_straddle_mid) },
-    { label: "Avg IV", value: formatScaledPercent(options.average_iv, 0, false) },
+    { label: "ATM IV", value: formatScaledPercent(options.atm_iv ?? options.average_iv, 0, false) },
     { label: "P/C volume", value: formatNumber(options.put_call_volume_ratio, 2) },
     { label: "P/C OI", value: formatNumber(options.put_call_oi_ratio, 2) },
     { label: "Skew", value: formatScaledPercent(options.skew_put_minus_call_iv, 1) },
@@ -1653,6 +1784,11 @@ onMounted(() => {
       void pollDashboard();
     }
   }, 10000);
+  stockReportRefreshTimer.value = setInterval(() => {
+    if (activeView.value === "stock-analysis" && !stockRefreshInFlight.value) {
+      void loadStockReport({ silent: true });
+    }
+  }, STOCK_REPORT_REFRESH_INTERVAL_MS);
 });
 
 onBeforeUnmount(() => {
@@ -1662,6 +1798,7 @@ onBeforeUnmount(() => {
   clearTimeout(reconnectTimer.value);
   clearInterval(dashboardRefreshTimer.value);
   clearInterval(creditsRefreshTimer.value);
+  clearInterval(stockReportRefreshTimer.value);
   clearMarkdownRenderTimers();
   socket.value?.close();
 });
@@ -1690,8 +1827,8 @@ function setActiveView(view) {
   if (view === "dashboard") {
     void refreshDashboard();
   }
-  if (view === "stock-analysis" && stockStatus.value !== "ready") {
-    void loadStockReport();
+  if (view === "stock-analysis") {
+    void loadStockReport({ silent: stockStatus.value === "ready" });
   }
 }
 
@@ -1897,12 +2034,36 @@ async function loadStockReport({ silent = false } = {}) {
   }
 
   try {
-    const payload = await fetchJson("/api/stocks/reports/latest");
+    const headers = stockReportEtag.value ? { "If-None-Match": stockReportEtag.value } : undefined;
+    const response = await fetch("/api/stocks/reports/latest", { headers });
+    if (response.status === 304) {
+      if (stockReport.value) {
+        stockStatus.value = "ready";
+        stockStatusMessage.value = `Stock report is current (revision ${stockReportRevision.value}).`;
+      }
+      return;
+    }
+    const responseText = await response.text();
+    let payload = null;
+    try {
+      payload = responseText ? JSON.parse(responseText) : null;
+    } catch {
+      payload = null;
+    }
+    if (!response.ok) {
+      throw new Error(payload?.detail || payload?.message || responseText || `HTTP ${response.status}`);
+    }
+    if (!payload) {
+      throw new Error("Stock report endpoint returned an empty response.");
+    }
+
+    stockReportEtag.value = response.headers.get("etag") || payload.report_id || null;
+    stockReportRevision.value = payload.revision || 0;
     stockReportReceivedAt.value = payload.received_at || null;
     if (payload.report) {
       stockReport.value = payload.report;
       stockStatus.value = "ready";
-      stockStatusMessage.value = `Loaded ${payload.stock_count ?? stockRows.value.length} stock setups.`;
+      stockStatusMessage.value = `Loaded ${payload.stock_count ?? stockRows.value.length} stock setups (revision ${stockReportRevision.value}).`;
       if (!selectedStockSymbol.value || !stockRows.value.some((stock) => stock.symbol === selectedStockSymbol.value)) {
         selectedStockSymbol.value = stockRows.value[0]?.symbol || "";
       }
@@ -1910,6 +2071,8 @@ async function loadStockReport({ silent = false } = {}) {
     }
 
     stockReport.value = null;
+    stockReportEtag.value = null;
+    stockReportRevision.value = 0;
     selectedStockSymbol.value = "";
     stockStatus.value = "empty";
     stockStatusMessage.value = "Send a JSON report to the REST endpoint to populate this view.";
@@ -1998,6 +2161,20 @@ function formatPrice(value) {
   return numberValue === null ? "--" : numberValue.toFixed(numberValue >= 100 ? 2 : 2);
 }
 
+function formatVolume(value) {
+  const numberValue = numericValue(value);
+  if (numberValue === null) {
+    return "--";
+  }
+  if (numberValue >= 1000000) {
+    return `${(numberValue / 1000000).toFixed(1)}M`;
+  }
+  if (numberValue >= 1000) {
+    return `${(numberValue / 1000).toFixed(0)}K`;
+  }
+  return String(Math.round(numberValue));
+}
+
 function formatDateTime(value) {
   if (!value) {
     return "--";
@@ -2023,6 +2200,29 @@ function titleLabel(value) {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+function marketMoodLabel(regime) {
+  const labels = {
+    risk_on: "Risk on",
+    risk_off: "Risk off",
+    mixed: "Mixed",
+  };
+  return labels[regime] || titleLabel(regime);
+}
+
+function methodologyPurposeLabel(value) {
+  const labels = {
+    attention_triage_and_conditional_scenarios: "开盘前注意力分配与条件情景判断",
+  };
+  return labels[value] || titleLabel(value);
+}
+
+function methodologyClaimLabel(value) {
+  const labels = {
+    buy_sell_or_return_prediction: "买卖建议或收益预测",
+  };
+  return labels[value] || titleLabel(value);
+}
+
 function compactSymbol(symbol) {
   return String(symbol || "--").replace(/^US\./, "");
 }
@@ -2033,11 +2233,14 @@ function compactOptionSymbol(symbol) {
 
 function stanceLabel(stance) {
   const labels = {
+    avoid_until_invalidation: "等待失效",
     cautious_selective: "谨慎筛选",
     defensive: "防守",
     low_priority: "低优先级",
     neutral_wait_for_confirmation: "等待确认",
     observe_for_confirmation: "观察确认",
+    observe_for_trigger: "等待触发",
+    watch_now: "立即关注",
   };
   return labels[stance] || titleLabel(stance || "Wait for confirmation");
 }
@@ -2071,19 +2274,19 @@ function marketGroupDefinition(key) {
       reading: "分数偏弱说明宽基指数拖累风险偏好；分数偏强说明指数背景更支持个股进攻。",
     },
     volatility: {
-      wording: "Fear gauge",
-      meaning: "VIX 类波动率压力代理。",
-      reading: "负分通常表示波动率上升或正在压制风险偏好。",
+      wording: "Volatility environment",
+      meaning: "VIXY 的短期变化，用作期货型波动率压力代理。",
+      reading: "正分代表波动压力缓和；VIXY 的长期 EMA 趋势不会被当作恐慌信号。",
     },
     macro: {
-      wording: "Macro pressure",
+      wording: "Macro context",
       meaning: "美元、债券、黄金、原油等宏观输入。",
-      reading: "负分说明宏观环境可能正在压制成长股或风险资产。",
+      reading: "它只解释背景，不进入 risk score；不要把 0 分解读为中性或看多。",
     },
     sector: {
-      wording: "Sector health",
-      meaning: "当前关注板块的主题健康度。",
-      reading: "对 INTC、MRVL、DRAM 这类标的，半导体/存储板块背景可能比 SPY 更重要。",
+      wording: "Tech leadership",
+      meaning: "SOXX 与 IGV 代表的科技领导力。",
+      reading: "科技领导力偏强会提高科技股 setup 的背景质量；它占 risk score 的一部分。",
     },
   };
   return definitions[key] || {
@@ -2094,16 +2297,43 @@ function marketGroupDefinition(key) {
 }
 
 function marketGroupDrivers(read, group) {
-  if (Array.isArray(read?.drivers) && read.drivers.length) {
-    return read.drivers.slice(0, 4);
+  let drivers = [];
+  if (Array.isArray(read?.display_drivers) && read.display_drivers.length) {
+    drivers = read.display_drivers;
+  } else if (Array.isArray(read?.drivers) && read.drivers.length) {
+    drivers = read.drivers;
+  } else if (read?.components && typeof read.components === "object") {
+    drivers = Object.values(read.components);
+  } else if (Array.isArray(group?.symbols)) {
+    drivers = group.symbols;
   }
-  if (read?.components && typeof read.components === "object") {
-    return Object.values(read.components).slice(0, 4);
+  return drivers.slice(0, 4).map((driver) => ({
+    ...driver,
+    displayValue:
+      driver.value ||
+      formatPercent(driver.session_move_pct ?? driver.gap_pct ?? driver.session_change_pct, 2),
+  }));
+}
+
+function stockSessionQuote(stock) {
+  if (stock?.session_quote?.price !== null && stock?.session_quote?.price !== undefined) {
+    return stock.session_quote;
   }
-  if (Array.isArray(group?.symbols)) {
-    return group.symbols.slice(0, 4);
-  }
-  return [];
+  return stock?.premarket || null;
+}
+
+function stockSessionLabel(stock) {
+  const session = stockSessionQuote(stock);
+  return session?.label || (session?.session ? titleLabel(session.session) : "Session");
+}
+
+function stockSignalLabel(direction) {
+  const labels = {
+    bullish: "偏多条件",
+    bearish: "偏空条件",
+    neutral: "等待方向",
+  };
+  return labels[direction] || titleLabel(direction) || "等待方向";
 }
 
 function scoreTone(value) {
@@ -2115,6 +2345,17 @@ function scoreTone(value) {
     return "positive";
   }
   if (numberValue <= -10) {
+    return "negative";
+  }
+  return "neutral";
+}
+
+function marketStateTone(state) {
+  const normalized = String(state || "").toLowerCase();
+  if (["risk_on", "bullish", "positive", "strong"].includes(normalized)) {
+    return "positive";
+  }
+  if (["risk_off", "bearish", "negative", "weak"].includes(normalized)) {
     return "negative";
   }
   return "neutral";
@@ -2132,11 +2373,6 @@ function rsiTone(value) {
     return "negative";
   }
   return "neutral";
-}
-
-function scoreWidth(value) {
-  const numberValue = numericValue(value) ?? 0;
-  return clampNumber(Math.abs(numberValue), 0, 100);
 }
 
 function clampNumber(value, min, max) {
@@ -2158,8 +2394,9 @@ function priceLevelSummary(stock) {
     `Support ${formatZone(stock.levels?.support_zone)}`,
     `Last ${formatPrice(stock.last_price)}`,
   ];
-  if (stock.premarket?.price) {
-    parts.push(`Premarket ${formatPrice(stock.premarket.price)} (${formatPercent(stock.premarket.gap_pct)})`);
+  const session = stockSessionQuote(stock);
+  if (session?.price) {
+    parts.push(`${stockSessionLabel(stock)} ${formatPrice(session.price)} (${formatPercent(session.change_pct)})`);
   }
   parts.push(`Resistance ${formatZone(stock.levels?.resistance_zone)}`);
   return parts.join(" · ");
@@ -2179,8 +2416,9 @@ function levelZoneTitle(stock, zoneKey) {
 }
 
 function levelMarkerTitle(stock, marker) {
-  if (marker === "premarket") {
-    return `Premarket ${formatPrice(stock?.premarket?.price)} (${formatPercent(stock?.premarket?.gap_pct)}): 盘前价格，蓝线表示开盘前相对昨收的位置。`;
+  if (marker === "session") {
+    const session = stockSessionQuote(stock);
+    return `${stockSessionLabel(stock)} ${formatPrice(session?.price)} (${formatPercent(session?.change_pct)}): 蓝线表示该交易时段报价相对昨收的位置。`;
   }
   return `Last ${formatPrice(stock?.last_price)}: 最近常规交易参考价，黑线表示当前价在支撑/压力区间中的位置。`;
 }
@@ -2236,7 +2474,7 @@ function levelValues(stock) {
   return [
     stock?.last_price,
     stock?.previous_close,
-    stock?.premarket?.price,
+    stockSessionQuote(stock)?.price,
     levels.yesterday_high,
     levels.yesterday_low,
     levels.last_week_high,

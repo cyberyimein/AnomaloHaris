@@ -79,6 +79,18 @@ ENV_FILE=agent-backend/deploy/anomalo.container.env.example \
 agent-backend/scripts/deploy_apple_container.sh agent-backend/artifacts/container-images/anomalo-<tag>-linux-arm64.env
 ```
 
+When the remote Apple Container runtime uses an external disk, place the deployment archive and
+persistent artifacts there too. `REMOTE_STORAGE_ROOT` derives both remote directories while
+allowing `REMOTE_DIR` and `REMOTE_DATA_DIR` to override either path independently:
+
+```bash
+REMOTE=macmini \
+REMOTE_CONTAINER_CLI=/opt/homebrew/bin/container \
+REMOTE_STORAGE_ROOT=/Volumes/DOCK/container-data/anomalo \
+ENV_FILE=agent-backend/deploy/anomalo.container.env \
+agent-backend/scripts/deploy_apple_container.sh agent-backend/artifacts/container-images/anomalo-<tag>-linux-arm64.env
+```
+
 Use a private env file for real secrets. The container example env uses TCP Buddy transport because
 serial passthrough needs host-specific container device configuration.
 

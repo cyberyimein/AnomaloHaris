@@ -17,6 +17,9 @@ Environment:
   IMAGE_REF               Required when deploying a .tar directly
   ENV_FILE                Optional local env file copied to the remote host
   REMOTE_ENV_FILE         Remote env-file path. Default: REMOTE_DIR/anomalo.env
+  REMOTE_STORAGE_ROOT     Absolute remote root for deploy files and artifacts. When set,
+                          defaults REMOTE_DIR to ROOT/anomalo-deploy and REMOTE_DATA_DIR
+                          to ROOT/anomalo-data
   REMOTE_DIR              Remote deploy directory. Default: .anomalo/anomalo-deploy
   REMOTE_DATA_DIR         Remote data directory for artifact persistence. Default: .anomalo/anomalo-data
   CONTAINER_NAME          Remote container name. Default: anomalo
@@ -80,8 +83,17 @@ else
 fi
 
 SSH_PORT="${SSH_PORT:-22}"
-REMOTE_DIR="${REMOTE_DIR:-.anomalo/anomalo-deploy}"
-REMOTE_DATA_DIR="${REMOTE_DATA_DIR:-.anomalo/anomalo-data}"
+REMOTE_STORAGE_ROOT="${REMOTE_STORAGE_ROOT:-}"
+if [[ -n "$REMOTE_STORAGE_ROOT" ]]; then
+    [[ "$REMOTE_STORAGE_ROOT" == /* ]] || fail "REMOTE_STORAGE_ROOT must be an absolute remote path"
+    default_remote_dir="$REMOTE_STORAGE_ROOT/anomalo-deploy"
+    default_remote_data_dir="$REMOTE_STORAGE_ROOT/anomalo-data"
+else
+    default_remote_dir=".anomalo/anomalo-deploy"
+    default_remote_data_dir=".anomalo/anomalo-data"
+fi
+REMOTE_DIR="${REMOTE_DIR:-$default_remote_dir}"
+REMOTE_DATA_DIR="${REMOTE_DATA_DIR:-$default_remote_data_dir}"
 REMOTE_CONTAINER_CLI="${REMOTE_CONTAINER_CLI:-container}"
 CONTAINER_NAME="${CONTAINER_NAME:-anomalo}"
 HOST_PORT="${HOST_PORT:-8000}"
