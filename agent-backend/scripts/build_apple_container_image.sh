@@ -57,7 +57,7 @@ IMAGE_NAME="${IMAGE_NAME:-anomalo}"
 PLATFORM="${PLATFORM:-linux/arm64}"
 OUTPUT_DIR="${OUTPUT_DIR:-$agent_backend_root/artifacts/container-images}"
 DOCKERFILE="${DOCKERFILE:-$agent_backend_root/docker/anomalo/Dockerfile}"
-INSTALL_EXTRAS="${INSTALL_EXTRAS:-buddy}"
+INSTALL_EXTRAS="${INSTALL_EXTRAS:-buddy,stocks}"
 START_CONTAINER_SYSTEM="${START_CONTAINER_SYSTEM:-1}"
 
 if [[ -z "${IMAGE_TAG:-}" ]]; then

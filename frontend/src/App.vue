@@ -75,13 +75,13 @@
             v-else-if="activeView === 'stock-analysis'"
             class="toolbar-button"
             type="button"
-            title="Refresh stock analysis"
-            aria-label="Refresh stock analysis"
+            title="Run stock analysis"
+            aria-label="Run stock analysis"
             :disabled="stockRefreshInFlight"
             @click="refreshStockReport"
           >
             <RefreshCw :size="17" />
-            <span>Refresh</span>
+            <span>Run Scan</span>
           </button>
         </div>
       </header>
@@ -282,7 +282,7 @@
             <Database :size="26" />
             <strong>No stock report loaded</strong>
             <span>{{ stockStatusMessage }}</span>
-            <code>POST /api/stocks/reports</code>
+            <code>POST /api/stocks/scan</code>
           </div>
 
           <template v-else>
@@ -2092,7 +2092,7 @@ async function loadStockReport({ silent = false } = {}) {
     stockReportRevision.value = 0;
     selectedStockSymbol.value = "";
     stockStatus.value = "empty";
-    stockStatusMessage.value = "Send a JSON report to the REST endpoint to populate this view.";
+    stockStatusMessage.value = "Run the integrated stock scan to populate this view.";
   } catch (error) {
     stockStatus.value = "error";
     stockStatusMessage.value = `Stock report load failed: ${formatError(error)}`;
@@ -2102,11 +2102,44 @@ async function loadStockReport({ silent = false } = {}) {
 
 async function refreshStockReport() {
   stockRefreshInFlight.value = true;
+  stockStatus.value = "loading";
+  stockStatusMessage.value = "Running the integrated market scan.";
   try {
-    await loadStockReport();
+    const response = await requestStockScan();
+    const responseText = await response.text();
+    let payload = null;
+    try {
+      payload = responseText ? JSON.parse(responseText) : null;
+    } catch {
+      payload = null;
+    }
+    if (!response.ok) {
+      const error = new Error(payload?.detail || responseText || `HTTP ${response.status}`);
+      error.status = response.status;
+      error.detail = payload?.detail;
+      throw error;
+    }
+    stockReportEtag.value = null;
+    await loadStockReport({ silent: true });
+  } catch (error) {
+    markManagementAccessError(error);
+    stockStatus.value = "error";
+    stockStatusMessage.value = isManagementAccessError(error)
+      ? "Stock scan requires an admin token. Save it in Dashboard > Admin Access."
+      : `Stock scan failed: ${formatError(error)}`;
   } finally {
     stockRefreshInFlight.value = false;
   }
+}
+
+function requestStockScan() {
+  return fetch(
+    "/api/stocks/scan",
+    withManagementAccess("/api/stocks/scan", {
+      method: "POST",
+      headers: { Accept: "application/json" },
+    }),
+  );
 }
 
 function setStockBucketFilter(filterId) {
@@ -2613,7 +2646,12 @@ function withManagementAccess(url, options = {}) {
 }
 
 function requiresManagementAccess(url) {
-  return url.startsWith("/api/buddy") || url.startsWith("/api/manage") || url.startsWith("/api/copilot-hooks");
+  return (
+    url.startsWith("/api/buddy") ||
+    url.startsWith("/api/manage") ||
+    url.startsWith("/api/copilot-hooks") ||
+    url === "/api/stocks/scan"
+  );
 }
 
 function markManagementAccessError(error) {

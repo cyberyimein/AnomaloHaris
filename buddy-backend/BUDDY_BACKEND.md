@@ -30,8 +30,8 @@
 本地运行：
 
 ```bash
-pip install -e ".[audio,buddy,dev]"
-PYTHONPATH=agent-backend:buddy-backend uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+pip install -e ".[audio,buddy,stocks,dev]"
+PYTHONPATH=agent-backend:buddy-backend:stock-backend uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 ## 环境变量

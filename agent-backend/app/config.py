@@ -7,6 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 AGENT_BACKEND_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = AGENT_BACKEND_ROOT.parent
 BUDDY_BACKEND_ROOT = REPO_ROOT / "buddy-backend"
+STOCK_BACKEND_ROOT = REPO_ROOT / "stock-backend"
 
 
 class Settings(BaseSettings):
@@ -203,6 +204,26 @@ class Settings(BaseSettings):
         default=2.0,
         alias="FRUITSPY_PYTHON_TOOL_STATUS_TIMEOUT_SECONDS",
     )
+    stock_data_mode: str | None = Field(default=None, alias="ANOMALO_STOCK_DATA_MODE")
+    stock_opend_host: str | None = Field(default=None, alias="ANOMALO_STOCK_OPEND_HOST")
+    stock_opend_port: int | None = Field(default=None, alias="ANOMALO_STOCK_OPEND_PORT")
+    stock_schedule_enabled: bool = Field(default=True, alias="ANOMALO_STOCK_SCHEDULE_ENABLED")
+    stock_schedule_timezone: str = Field(
+        default="Asia/Tokyo",
+        alias="ANOMALO_STOCK_SCHEDULE_TIMEZONE",
+    )
+    stock_schedule_hour: int = Field(
+        default=22,
+        ge=0,
+        le=23,
+        alias="ANOMALO_STOCK_SCHEDULE_HOUR",
+    )
+    stock_schedule_minute: int = Field(
+        default=0,
+        ge=0,
+        le=59,
+        alias="ANOMALO_STOCK_SCHEDULE_MINUTE",
+    )
 
     config_dir: Path = AGENT_BACKEND_ROOT / "config"
     skills_dir: Path = AGENT_BACKEND_ROOT / "skills"
@@ -210,6 +231,7 @@ class Settings(BaseSettings):
     frontend_dir: Path = AGENT_BACKEND_ROOT / "app" / "frontend"
     static_dir: Path = AGENT_BACKEND_ROOT / "app" / "static"
     artifacts_dir: Path = AGENT_BACKEND_ROOT / "artifacts"
+    stock_backend_dir: Path = STOCK_BACKEND_ROOT
     project_root: Path = REPO_ROOT
 
     @property

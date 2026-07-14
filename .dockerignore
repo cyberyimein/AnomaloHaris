@@ -15,6 +15,7 @@ local-fonts/
 artifacts/
 agent-backend/artifacts/
 stock-backend/artifacts/
+stock-backend/outputs/
 data/
 dist/
 build/

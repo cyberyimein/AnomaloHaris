@@ -1,0 +1,67 @@
+groups:
+  semiconductors:
+    label: "半导体 / 存储"
+    benchmark: "US.SOXX"
+    members:
+      - symbol: "US.INTC"
+        name: "Intel"
+        options: true
+      - symbol: "US.AMD"
+        name: "Advanced Micro Devices"
+        options: false
+      - symbol: "US.MU"
+        name: "Micron Technology"
+        options: false
+      - symbol: "US.SNDK"
+        name: "Sandisk"
+        options: false
+      - symbol: "US.SKHY"
+        name: "SK hynix ADR"
+        options: false
+        active_from: "2026-07-13"
+        availability_note: "SKHY regular-way trading starts 2026-07-13"
+
+  optical:
+    label: "光模块 / 网络"
+    benchmark: "US.QQQ"
+    members:
+      - symbol: "US.LITE"
+        name: "Lumentum"
+        options: false
+      - symbol: "US.COHR"
+        name: "Coherent"
+        options: false
+      - symbol: "US.MRVL"
+        name: "Marvell Technology"
+        options: true
+      - symbol: "US.NOK"
+        name: "Nokia"
+        options: false
+
+  compute:
+    label: "算力 / 云基础设施"
+    benchmark: "US.QQQ"
+    members:
+      - symbol: "US.NVDA"
+        name: "NVIDIA"
+        options: false
+      - symbol: "US.NBIS"
+        name: "Nebius Group"
+        options: false
+      - symbol: "US.ORCL"
+        name: "Oracle"
+        options: false
+
+  software:
+    label: "软件"
+    benchmark: "US.IGV"
+    members:
+      - symbol: "US.MSFT"
+        name: "Microsoft"
+        options: false
+      - symbol: "US.NOW"
+        name: "ServiceNow"
+        options: false
+      - symbol: "US.PLTR"
+        name: "Palantir"
+        options: false

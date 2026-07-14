@@ -22,7 +22,7 @@ The runtime is event based: the agent emits message deltas, tool start/result ev
 - `frontend/` — Vue + Vite frontend, including its own `package.json` and `.gitignore`.
 - `agent-backend/` — main FastAPI agent backend, config, agent skills, tests, Docker files, and deployment scripts.
 - `buddy-backend/` — Buddy gateway package, Buddy skills, Copilot hook bridge, protocol docs, and client alignment notes.
-- `stock-backend/` — reserved folder for future stock backend code.
+- `stock-backend/` — integrated KabuLens market-analysis engine, configuration, reports, and tests.
 
 ## Run Backend
 
@@ -30,14 +30,25 @@ The runtime is event based: the agent emits message deltas, tool start/result ev
 cd /Users/waynewong/code/Anomalo
 uv venv --python 3.12 --seed .venv
 source .venv/bin/activate
-pip install -e ".[audio,buddy,vision,dev]"
-PYTHONPATH=agent-backend:buddy-backend .venv/bin/python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+pip install -e ".[audio,buddy,vision,stocks,dev]"
+PYTHONPATH=agent-backend:buddy-backend:stock-backend .venv/bin/python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 Runtime configuration is centralized in the root `.env`. The split backend folders do not use
 separate `.env` files.
 
 Open http://127.0.0.1:8000.
+
+The Stock Analysis page runs KabuLens directly through `POST /api/stocks/scan`; no separate
+KabuLens process or publish step is required. The default target is OpenD at `127.0.0.1:11111`.
+For an offline deterministic report, set `ANOMALO_STOCK_DATA_MODE=mock` in the root `.env`.
+Production deployments automatically run one scan every day at 22:00 in `Asia/Tokyo`; the
+Stock Analysis page's **Run Scan** button remains available for manual runs. Override the schedule
+with `ANOMALO_STOCK_SCHEDULE_TIMEZONE`, `ANOMALO_STOCK_SCHEDULE_HOUR`, and
+`ANOMALO_STOCK_SCHEDULE_MINUTE`, or disable it with `ANOMALO_STOCK_SCHEDULE_ENABLED=false`.
+Remote manual scans require `ANOMALO_ADMIN_TOKEN`; save it through **Dashboard > Admin Access**.
+Container deployments must set `ANOMALO_STOCK_OPEND_HOST` to the Mac host's LAN address rather
+than `127.0.0.1`.
 
 For frontend development, run the FastAPI server above and start Vite in another shell:
 
@@ -66,9 +77,9 @@ Build and save an OCI archive with Apple `container`:
 agent-backend/scripts/build_apple_container_image.sh
 ```
 
-Production image builds install the Buddy control backend only by default, without STT/TTS
-model dependencies. If Buddy voice AI is re-enabled later, build with
-`INSTALL_EXTRAS=audio,buddy`.
+Production image builds install the Buddy control backend and stock/OpenD dependencies by default,
+without STT/TTS model dependencies. If Buddy voice AI is re-enabled later, build with
+`INSTALL_EXTRAS=audio,buddy,stocks`.
 
 The script writes a `.tar` image archive and a sibling `.env` metadata file under
 `agent-backend/artifacts/container-images/`. Deploy that archive to a remote Mac over SSH:
