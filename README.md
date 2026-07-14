@@ -47,8 +47,15 @@ Stock Analysis page's **Run Scan** button remains available for manual runs. Ove
 with `ANOMALO_STOCK_SCHEDULE_TIMEZONE`, `ANOMALO_STOCK_SCHEDULE_HOUR`, and
 `ANOMALO_STOCK_SCHEDULE_MINUTE`, or disable it with `ANOMALO_STOCK_SCHEDULE_ENABLED=false`.
 Remote manual scans require `ANOMALO_ADMIN_TOKEN`; save it through **Dashboard > Admin Access**.
-Container deployments must set `ANOMALO_STOCK_OPEND_HOST` to the Mac host's LAN address rather
-than `127.0.0.1`.
+For container access to a host-loopback OpenD, set
+`ANOMALO_STOCK_OPEND_HOST=host.container.internal` and configure Apple Container once on the host:
+
+```bash
+sudo container system dns create host.container.internal --localhost 203.0.113.113
+```
+
+Apple Container may remove the associated packet-filter rule after a host restart, in which case
+rerun this command before the next scan.
 
 For frontend development, run the FastAPI server above and start Vite in another shell:
 
