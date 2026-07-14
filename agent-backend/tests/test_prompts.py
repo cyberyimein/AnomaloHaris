@@ -9,7 +9,9 @@ def test_agent_prompt_profile_is_not_buddy_identity() -> None:
 
     assert len(messages) == 1
     assert messages[0]["role"] == "system"
-    assert "text-only" in messages[0]["content"]
+    assert "primarily text" in messages[0]["content"]
+    assert "display image artifacts" in messages[0]["content"]
+    assert "do not invent relative artifact URLs" in messages[0]["content"]
     assert "Do not describe yourself as Buddy" in messages[0]["content"]
     assert "external device you control" in messages[0]["content"]
 

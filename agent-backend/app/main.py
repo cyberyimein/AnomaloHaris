@@ -9,6 +9,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api import (
+    artifacts,
     audio,
     chat,
     manage,
@@ -119,6 +120,7 @@ def create_app() -> FastAPI:
             app.mount("/fonts/local", StaticFiles(directory=local_font_dir), name="local-fonts")
 
     app.include_router(chat.router)
+    app.include_router(artifacts.router)
     app.include_router(websocket.router)
     app.include_router(skills.router)
     app.include_router(mcp_sessions.router)

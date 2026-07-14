@@ -123,11 +123,27 @@
             </div>
           </article>
           <article v-else class="message-row" :class="`message-row-${turn.role}`">
-            <div
-              v-if="turn.role === 'assistant'"
-              class="message-bubble message-bubble-assistant markdown-body"
-              v-html="turn.htmlContent"
-            ></div>
+            <div v-if="turn.role === 'assistant'" class="message-bubble message-bubble-assistant">
+              <div class="markdown-body" v-html="turn.htmlContent"></div>
+              <div v-if="visibleTurnArtifacts(turn).length" class="message-artifacts">
+                <a
+                  v-for="artifact in visibleTurnArtifacts(turn)"
+                  :key="artifact.url"
+                  class="message-artifact"
+                  :href="artifact.url"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <img
+                    v-if="artifact.media_type?.startsWith('image/')"
+                    :src="artifact.url"
+                    :alt="artifact.name || 'Python output image'"
+                    loading="lazy"
+                  />
+                  <span v-else>{{ artifact.name || "Open artifact" }}</span>
+                </a>
+              </div>
+            </div>
             <div v-else class="message-bubble" :class="`message-bubble-${turn.role}`">
               {{ turn.content }}
             </div>
@@ -1212,6 +1228,7 @@ const events = ref([]);
 const eventSequence = ref(0);
 const conversationTurns = ref([]);
 const activeAssistantIndex = ref(null);
+const pendingAssistantArtifacts = ref([]);
 const activeThinkingActivityIndex = ref(null);
 const activeToolActivityIndexes = new Map();
 const markdownRenderTimers = new Map();
@@ -2622,6 +2639,7 @@ function submitMessage() {
   messageInput.value = "";
   void nextTick(resizeComposer);
   activeAssistantIndex.value = null;
+  pendingAssistantArtifacts.value = [];
   activeThinkingActivityIndex.value = null;
   activeToolActivityIndexes.clear();
   setAgentState("Queued", "Message sent. Waiting for run start.");
@@ -2657,6 +2675,7 @@ function resetConversationState() {
   messageInput.value = "";
   conversationTurns.value = [];
   activeAssistantIndex.value = null;
+  pendingAssistantArtifacts.value = [];
   activeThinkingActivityIndex.value = null;
   activeToolActivityIndexes.clear();
   events.value = [];
@@ -2802,6 +2821,7 @@ function handleAgentEvent(event) {
         body: summarizeToolResult(event.data.content),
       });
       addEventLog(`tool.finished · ${event.data.tool}`, event.data.content || "");
+      queueAssistantArtifacts(event.data.data?.artifacts);
       if (event.data.data?.skill_action) {
         void loadSkills();
         void loadTools();
@@ -2997,8 +3017,9 @@ function updateToolActivity(toolName, updates) {
 
 function appendAssistantContent(content) {
   if (activeAssistantIndex.value === null) {
+    const artifacts = consumePendingAssistantArtifacts();
     activeAssistantIndex.value =
-      conversationTurns.value.push({ role: "assistant", content: "", htmlContent: "" }) - 1;
+      conversationTurns.value.push({ role: "assistant", content: "", htmlContent: "", artifacts }) - 1;
   }
   conversationTurns.value[activeAssistantIndex.value].content += content;
   scheduleMarkdownRender(activeAssistantIndex.value);
@@ -3009,6 +3030,7 @@ function reconcileFinalAssistantContent(content) {
   const finalContent = String(content || "");
 
   if (typeof activeAssistantIndex.value === "number") {
+    attachPendingArtifacts(activeAssistantIndex.value);
     if (finalContent) {
       setAssistantContent(activeAssistantIndex.value, finalContent);
     } else {
@@ -3024,6 +3046,7 @@ function reconcileFinalAssistantContent(content) {
 
   const currentAssistantIndex = findLatestAssistantTurnIndexAfterLatestUser();
   if (typeof currentAssistantIndex === "number") {
+    attachPendingArtifacts(currentAssistantIndex);
     const turn = conversationTurns.value[currentAssistantIndex];
     if (turn.content === finalContent) {
       flushMarkdownRender(currentAssistantIndex);
@@ -3037,10 +3060,12 @@ function reconcileFinalAssistantContent(content) {
     return;
   }
 
+  const artifacts = consumePendingAssistantArtifacts();
   conversationTurns.value.push({
     role: "assistant",
     content: finalContent,
-    htmlContent: renderMarkdown(finalContent),
+    artifacts,
+    htmlContent: renderMarkdown(finalContent, artifacts),
   });
   void scrollConversation();
 }
@@ -3079,7 +3104,7 @@ function setAssistantContent(index, content) {
   conversationTurns.value[index] = {
     ...turn,
     content,
-    htmlContent: renderMarkdown(content),
+    htmlContent: renderMarkdown(content, turn.artifacts),
   };
   void scrollConversation();
 }
@@ -3124,7 +3149,7 @@ function renderConversationMarkdown(index) {
 
   conversationTurns.value[index] = {
     ...turn,
-    htmlContent: renderMarkdown(turn.content),
+    htmlContent: renderMarkdown(turn.content, turn.artifacts),
   };
   void scrollConversation();
 }
@@ -3210,7 +3235,47 @@ function summarizeMessageContent(message) {
   return parts.join("\n\n") || "(empty)";
 }
 
-function renderMarkdown(value) {
+function queueAssistantArtifacts(artifacts) {
+  if (!Array.isArray(artifacts)) {
+    return;
+  }
+  const accepted = artifacts.filter((artifact) => artifact?.url && artifact?.name);
+  const combined = [...pendingAssistantArtifacts.value, ...accepted];
+  pendingAssistantArtifacts.value = combined.filter(
+    (artifact, index) => combined.findIndex((candidate) => candidate.url === artifact.url) === index,
+  );
+}
+
+function consumePendingAssistantArtifacts() {
+  const artifacts = pendingAssistantArtifacts.value;
+  pendingAssistantArtifacts.value = [];
+  return artifacts;
+}
+
+function attachPendingArtifacts(index) {
+  const pending = consumePendingAssistantArtifacts();
+  if (!pending.length || !conversationTurns.value[index]) {
+    return;
+  }
+  const existing = conversationTurns.value[index].artifacts || [];
+  const combined = [...existing, ...pending];
+  conversationTurns.value[index].artifacts = combined.filter(
+    (artifact, artifactIndex) =>
+      combined.findIndex((candidate) => candidate.url === artifact.url) === artifactIndex,
+  );
+}
+
+function visibleTurnArtifacts(turn) {
+  const referencedSources = Array.from(
+    String(turn.content || "").matchAll(/!\[[^\]]*\]\(([^\s)]+)\)/g),
+    (match) => match[1],
+  );
+  return (turn.artifacts || []).filter((artifact) => {
+    return !referencedSources.includes(artifact.name) && !referencedSources.includes(artifact.url);
+  });
+}
+
+function renderMarkdown(value, artifacts = []) {
   const text = String(value || "").replace(/\r\n?/g, "\n");
   if (!text.trim()) {
     return "";
@@ -3248,7 +3313,7 @@ function renderMarkdown(value) {
     const heading = line.match(/^(#{1,6})\s+(.+)$/);
     if (heading) {
       const level = heading[1].length;
-      blocks.push(`<h${level}>${renderInlineMarkdown(heading[2].trim())}</h${level}>`);
+      blocks.push(`<h${level}>${renderInlineMarkdown(heading[2].trim(), artifacts)}</h${level}>`);
       index += 1;
       continue;
     }
@@ -3259,12 +3324,12 @@ function renderMarkdown(value) {
         quoteLines.push(lines[index].replace(/^\s*>\s?/, ""));
         index += 1;
       }
-      blocks.push(`<blockquote>${renderMarkdown(quoteLines.join("\n"))}</blockquote>`);
+      blocks.push(`<blockquote>${renderMarkdown(quoteLines.join("\n"), artifacts)}</blockquote>`);
       continue;
     }
 
     if (isMarkdownTable(lines, index)) {
-      const table = renderMarkdownTable(lines, index);
+      const table = renderMarkdownTable(lines, index, artifacts);
       blocks.push(table.html);
       index = table.nextIndex;
       continue;
@@ -3279,7 +3344,7 @@ function renderMarkdown(value) {
         if (!item || item.ordered !== list.ordered) {
           break;
         }
-        items.push(`<li>${renderInlineMarkdown(item.content.trim())}</li>`);
+        items.push(`<li>${renderInlineMarkdown(item.content.trim(), artifacts)}</li>`);
         index += 1;
       }
       blocks.push(`<${tag}>${items.join("")}</${tag}>`);
@@ -3292,25 +3357,39 @@ function renderMarkdown(value) {
       index += 1;
     }
     if (paragraphLines.length) {
-      blocks.push(`<p>${renderInlineMarkdown(paragraphLines.join(" "))}</p>`);
+      blocks.push(`<p>${renderInlineMarkdown(paragraphLines.join(" "), artifacts)}</p>`);
       continue;
     }
 
-    blocks.push(`<p>${renderInlineMarkdown(trimmed)}</p>`);
+    blocks.push(`<p>${renderInlineMarkdown(trimmed, artifacts)}</p>`);
     index += 1;
   }
 
   return blocks.join("");
 }
 
-function renderInlineMarkdown(value) {
+function renderInlineMarkdown(value, artifacts = []) {
   const codeTokens = [];
   const linkTokens = [];
+  const imageTokens = [];
   let html = String(value);
 
   html = html.replace(/`([^`]+)`/g, (_match, code) => {
     const token = `\u0000CODE${codeTokens.length}\u0000`;
     codeTokens.push(`<code>${escapeHtml(code)}</code>`);
+    return token;
+  });
+
+  html = html.replace(/!\[([^\]]*)\]\(([^\s)]+)\)/g, (match, label, source) => {
+    const artifact = artifacts.find((candidate) => candidate.name === source || candidate.url === source);
+    const url = artifact?.url || (source.startsWith("/api/artifacts/python/") ? source : "");
+    if (!url) {
+      return match;
+    }
+    const token = `\u0000IMAGE${imageTokens.length}\u0000`;
+    imageTokens.push(
+      `<a class="markdown-image-link" href="${escapeAttribute(url)}" target="_blank" rel="noreferrer"><img src="${escapeAttribute(url)}" alt="${escapeAttribute(label || artifact?.name || "Python output image")}" loading="lazy"></a>`,
+    );
     return token;
   });
 
@@ -3330,10 +3409,11 @@ function renderInlineMarkdown(value) {
 
   return html
     .replace(/\u0000CODE(\d+)\u0000/g, (_match, tokenIndex) => codeTokens[Number(tokenIndex)] || "")
-    .replace(/\u0000LINK(\d+)\u0000/g, (_match, tokenIndex) => linkTokens[Number(tokenIndex)] || "");
+    .replace(/\u0000LINK(\d+)\u0000/g, (_match, tokenIndex) => linkTokens[Number(tokenIndex)] || "")
+    .replace(/\u0000IMAGE(\d+)\u0000/g, (_match, tokenIndex) => imageTokens[Number(tokenIndex)] || "");
 }
 
-function renderMarkdownTable(lines, startIndex) {
+function renderMarkdownTable(lines, startIndex, artifacts = []) {
   const headers = splitMarkdownTableRow(lines[startIndex]);
   const alignments = splitMarkdownTableRow(lines[startIndex + 1]).map(tableAlignment);
   const rows = [];
@@ -3347,7 +3427,7 @@ function renderMarkdownTable(lines, startIndex) {
   const headerHtml = headers
     .map((cell, cellIndex) => {
       const attrs = tableCellAttributes(alignments[cellIndex]);
-      return `<th${attrs}>${renderInlineMarkdown(cell)}</th>`;
+      return `<th${attrs}>${renderInlineMarkdown(cell, artifacts)}</th>`;
     })
     .join("");
   const bodyHtml = rows
@@ -3355,7 +3435,7 @@ function renderMarkdownTable(lines, startIndex) {
       const cells = headers
         .map((_, cellIndex) => {
           const attrs = tableCellAttributes(alignments[cellIndex]);
-          return `<td${attrs}>${renderInlineMarkdown(row[cellIndex] || "")}</td>`;
+          return `<td${attrs}>${renderInlineMarkdown(row[cellIndex] || "", artifacts)}</td>`;
         })
         .join("");
       return `<tr>${cells}</tr>`;

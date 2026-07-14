@@ -391,16 +391,22 @@ between the YAML prompt profile and session history. The Context Assembly panel 
 
 ## Python Sandbox
 
-The Python sandbox is enabled by default for local development and uses Docker to run code in
-an isolated helper container. Build the optional Python tool image:
+The Python sandbox tool delegates execution to FruitSpy on the same Mac. FruitSpy starts a short-lived
+Apple container sandbox and returns stdout/stderr plus optional artifacts. Anomalo immediately caches
+returned files under `artifacts/python`, exposes them through a restricted artifact route, and renders
+image artifacts in the chat. Anomalo keeps the same `sandbox_python_run` tool name, but it no longer
+runs Docker locally.
+
+Configure the shared token in a private env file:
 
 ```bash
-docker build -t anomalo-python:latest agent-backend/docker/python
+PYTHON_SANDBOX_ENABLED=true
+FRUITSPY_PYTHON_TOOL_BASE_URL=http://127.0.0.1:8848
+FRUITSPY_PYTHON_TOOL_TOKEN=<shared-token>
 ```
 
-The tool runs with no network, CPU/memory limits, read-only container filesystem, and an execution timeout.
-Apple container deployments disable it by default because Docker is not available inside the runtime
-container. Set `PYTHON_SANDBOX_ENABLED=true` only when a compatible sandbox runtime is available.
+If Anomalo runs inside an Apple container, make sure the configured FruitSpy URL is reachable from
+that container and allowed by FruitSpy's Python Tool loopback/source policy.
 
 ## Skill Layout
 

@@ -2938,6 +2938,38 @@ button {
   text-underline-offset: 3px;
 }
 
+.message-artifacts {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.message-artifact,
+.markdown-image-link {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+}
+
+.message-artifact img,
+.markdown-image-link img {
+  display: block;
+  width: auto;
+  max-width: min(100%, 780px);
+  max-height: 620px;
+  border: 1px solid rgba(203, 200, 191, 0.68);
+  border-radius: 8px;
+  object-fit: contain;
+}
+
+.message-artifact span {
+  color: var(--accent);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 .markdown-table-wrap {
   margin: 0 0 20px;
   overflow-x: auto;

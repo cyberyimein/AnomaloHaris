@@ -186,18 +186,22 @@ class Settings(BaseSettings):
         alias="ANOMALO_COPILOT_BUDDY_PERMISSION_BRIDGE_ENABLED",
     )
 
-    python_sandbox_image: str = Field(
-        default="anomalo-python:latest",
-        alias="PYTHON_SANDBOX_IMAGE",
-    )
     python_sandbox_enabled: bool = Field(default=True, alias="PYTHON_SANDBOX_ENABLED")
     python_sandbox_timeout_seconds: int = Field(
         default=10,
         alias="PYTHON_SANDBOX_TIMEOUT_SECONDS",
     )
-    python_sandbox_max_output_chars: int = Field(
-        default=12000,
-        alias="PYTHON_SANDBOX_MAX_OUTPUT_CHARS",
+    fruitspy_python_tool_base_url: str = Field(
+        default="http://127.0.0.1:8848",
+        alias="FRUITSPY_PYTHON_TOOL_BASE_URL",
+    )
+    fruitspy_python_tool_token: str | None = Field(
+        default=None,
+        alias="FRUITSPY_PYTHON_TOOL_TOKEN",
+    )
+    fruitspy_python_tool_status_timeout_seconds: float = Field(
+        default=2.0,
+        alias="FRUITSPY_PYTHON_TOOL_STATUS_TIMEOUT_SECONDS",
     )
 
     config_dir: Path = AGENT_BACKEND_ROOT / "config"
