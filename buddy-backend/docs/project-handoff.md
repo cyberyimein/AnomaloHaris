@@ -1,7 +1,7 @@
 # MystackChan Project Handoff
 
 This document captures the working context from the StackChan firmware discussion
-so the project can continue from `/Users/waynewong/code/MyStackChan` without
+so the project can continue from `/path/to/MyStackChan` without
 depending on the old `StackChan-BSP` workspace or chat history.
 
 ## Current Status
@@ -30,7 +30,7 @@ Upload result: hash verified, hard reset via RTS
 ## Project Layout
 
 ```text
-/Users/waynewong/code/MyStackChan/
+/path/to/MyStackChan/
   CONTEXT.md
   MystackChan/
     MystackChan.ino
@@ -58,9 +58,9 @@ Upload result: hash verified, hard reset via RTS
 ## 2026-05-28 Notes
 
 - The current USB-connected development machine is not necessarily the Mac mini.
-  Do not hard-code `192.168.31.31` unless the server is actually running there.
+  Do not hard-code `192.0.2.10` unless the server is actually running there.
 - `MystackChan/local_config.h` is ignored and currently stores Wi-Fi/TCP
-  settings for a future Mac mini agent at `192.168.31.31:8787`.
+  settings for a future Mac mini agent at `192.0.2.10:8787`.
 - After rebooting the Mac, the experimental camera probe displayed its debug
   information on Buddy. The earlier no-output state was host/USB state, not a
   confirmed firmware failure.
@@ -224,8 +224,8 @@ PNG storage note:
 Regenerate assets:
 
 ```bash
-cd /Users/waynewong/code/MyStackChan
-python3 tools/buddy_assets/generate_pixel_buddy.py --repo /Users/waynewong/code/MyStackChan
+cd /path/to/MyStackChan
+python3 tools/buddy_assets/generate_pixel_buddy.py --repo /path/to/MyStackChan
 ```
 
 ## Build And Upload
@@ -235,7 +235,7 @@ Compile:
 ```bash
 "/Applications/Arduino IDE.app/Contents/Resources/app/lib/backend/resources/arduino-cli" compile \
   --fqbn m5stack:esp32:m5stack_cores3 \
-  /Users/waynewong/code/MyStackChan/MystackChan
+  /path/to/MyStackChan/MystackChan
 ```
 
 Upload:
@@ -244,7 +244,7 @@ Upload:
 "/Applications/Arduino IDE.app/Contents/Resources/app/lib/backend/resources/arduino-cli" upload \
   -p /dev/cu.usbmodem2101 \
   --fqbn m5stack:esp32:m5stack_cores3 \
-  /Users/waynewong/code/MyStackChan/MystackChan
+  /path/to/MyStackChan/MystackChan
 ```
 
 Serial communication test, only after the device is visibly running the app UI:

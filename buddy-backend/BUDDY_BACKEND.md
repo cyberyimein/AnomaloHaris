@@ -67,7 +67,7 @@ PYTHONPATH=agent-backend:buddy-backend:stock-backend uvicorn app.main:app --relo
   "baud_rate": 115200,
   "tcp_host": "0.0.0.0",
   "tcp_port": 8787,
-  "tcp_client_ip": "192.168.31.78"
+  "tcp_client_ip": "192.0.2.20"
 }
 ```
 

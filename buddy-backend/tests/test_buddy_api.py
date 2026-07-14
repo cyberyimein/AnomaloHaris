@@ -99,7 +99,7 @@ def test_buddy_connect_endpoint_accepts_tcp_config(monkeypatch) -> None:
 
     response = client.post(
         "/api/buddy/connect",
-        json={"transport": "tcp", "tcp_port": 8787, "tcp_client_ip": "192.168.31.78"},
+        json={"transport": "tcp", "tcp_port": 8787, "tcp_client_ip": "192.0.2.20"},
     )
 
     assert response.status_code == 200

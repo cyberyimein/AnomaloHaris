@@ -32,7 +32,7 @@ CoreS3 StackChan device used as a local AI/agent buddy.
 
 - Main Buddy firmware has Wi-Fi config support via ignored
   `MystackChan/local_config.h`; the current local file points at Mac mini
-  `192.168.31.31:8787`, but server-side development should not assume the
+  `192.0.2.10:8787`, but server-side development should not assume the
   current Codex machine is that Mac mini.
 - Current device is running the main Buddy firmware with camera-follow enabled
   by default.
@@ -55,8 +55,8 @@ CoreS3 StackChan device used as a local AI/agent buddy.
   and rebuilds the baseline. Home movement is skipped when already at home to
   avoid no-op servo noise.
 - TCP connection to the Mac mini agent has been verified from Buddy:
-  `network.wifi.connected` showed Buddy at `192.168.31.78`, then
-  `network.tcp.connected` to `192.168.31.31:8787`, then the server sent
+  `network.wifi.connected` showed Buddy at `192.0.2.20`, then
+  `network.tcp.connected` to `192.0.2.10:8787`, then the server sent
   `CB connect` text `MacMiniM4 online`. Use `NET STATUS` over serial for live
   diagnostics.
 - Audio transport is implemented in firmware as half-duplex PCM16 over the same
@@ -64,8 +64,8 @@ CoreS3 StackChan device used as a local AI/agent buddy.
   samples / 640 bytes; `audio.output` binary frames are `0x21/0x02`, default
   24 kHz mono, 960 bytes. Use `AUDIO STATUS`, `AUDIO IN START/STOP`, and
   `AUDIO OUT START [sample_rate] [chunk_bytes]` for diagnostics/control.
-- Current post-audio-flash network check: Buddy joined Wi-Fi as `192.168.31.78`
-  but `192.168.31.31:8787` returned connection refused, so end-to-end audio
+- Current post-audio-flash network check: Buddy joined Wi-Fi as `192.0.2.20`
+  but `192.0.2.10:8787` returned connection refused, so end-to-end audio
   could not be verified until the Mac mini listener is running again.
 - Servo boot jerk was fixed by keeping
   `M5StackChan.Motion.setAutoAngleSyncEnabled(true)`. Do not turn this off.

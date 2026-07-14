@@ -71,7 +71,7 @@ class FakeBuddyGateway:
             "connected": True,
             "listening": True,
             "transport": "tcp",
-            "client_address": "192.168.31.78:12345",
+            "client_address": "192.0.2.20:12345",
             "tcp_port": 8787,
             "serial_port": None,
         }
