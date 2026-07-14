@@ -112,6 +112,10 @@ agent-backend/scripts/deploy_apple_container.sh agent-backend/artifacts/containe
 Use a private env file for real secrets. The container example env uses TCP Buddy transport because
 serial passthrough needs host-specific container device configuration.
 
+Remote deployments create and use the dedicated `anomalo-external` network by default so outbound
+OpenRouter requests do not depend on the Apple Container runtime's shared default network. Override
+the name with `CONTAINER_NETWORK`, or set it to an empty string to use the runtime default.
+
 Deployment images default to `ANOMALO_ENV=production` and
 `ANOMALO_BUDDY_AUDIO_DEBUG_STORAGE=off`, so Buddy microphone test captures are not written to disk.
 For local diagnosis, use `ANOMALO_ENV=development` with the default

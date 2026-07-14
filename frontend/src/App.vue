@@ -272,6 +272,29 @@
             </div>
           </header>
 
+          <div
+            v-if="stockStatus === 'error' || managementAccessRequired"
+            class="stock-action-notice"
+            :data-tone="managementAccessRequired ? 'warning' : 'error'"
+            role="alert"
+          >
+            <span>{{ stockStatusMessage }}</span>
+            <form
+              v-if="managementAccessRequired"
+              class="stock-token-form"
+              @submit.prevent="saveManagementToken"
+            >
+              <input
+                v-model="managementTokenInput"
+                type="password"
+                autocomplete="off"
+                placeholder="Admin token"
+                aria-label="Admin token for stock scan"
+              />
+              <button class="control-button" type="submit">Save &amp; Retry</button>
+            </form>
+          </div>
+
           <div v-if="stockStatus === 'loading'" class="stock-empty-panel">
             <LoaderCircle :size="22" class="activity-spinner" />
             <strong>Loading stock report</strong>
@@ -1855,6 +1878,8 @@ function loadManagementToken() {
 
 function saveManagementToken() {
   const nextToken = managementTokenInput.value.trim();
+  const retryStockScan =
+    managementAccessRequired.value && activeView.value === "stock-analysis" && Boolean(nextToken);
   managementToken.value = nextToken;
   managementAccessRequired.value = false;
   if (nextToken) {
@@ -1866,6 +1891,9 @@ function saveManagementToken() {
   }
   if (activeView.value === "dashboard") {
     void refreshDashboard();
+  }
+  if (retryStockScan) {
+    void refreshStockReport();
   }
 }
 

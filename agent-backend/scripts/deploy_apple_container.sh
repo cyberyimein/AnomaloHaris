@@ -31,6 +31,7 @@ Environment:
   MOUNT_ARTIFACTS         Mount persistent agent artifacts and stock runtime data. Default: 1
   START_CONTAINER_SYSTEM  Start Apple container system before deploy. Default: 1
   REMOTE_CONTAINER_CLI    Remote Apple container CLI path. Default: container
+  CONTAINER_NETWORK       Dedicated container network. Default: anomalo-external
 EOF
 }
 
@@ -102,6 +103,7 @@ BUDDY_TRANSPORT="${BUDDY_TRANSPORT:-tcp}"
 BUDDY_TCP_PORT="${BUDDY_TCP_PORT:-8787}"
 MOUNT_ARTIFACTS="${MOUNT_ARTIFACTS:-1}"
 START_CONTAINER_SYSTEM="${START_CONTAINER_SYSTEM:-1}"
+CONTAINER_NETWORK="${CONTAINER_NETWORK:-anomalo-external}"
 
 site_host="${SSH_HOST:-${ssh_target#*@}}"
 site_host="${site_host%%:*}"
@@ -143,7 +145,8 @@ ssh "${ssh_args[@]}" "$ssh_target" "bash -s" -- \
     "$REMOTE_ENV_FILE" \
     "$REMOTE_DATA_DIR" \
     "$MOUNT_ARTIFACTS" \
-    "$START_CONTAINER_SYSTEM" <<'REMOTE_SCRIPT'
+    "$START_CONTAINER_SYSTEM" \
+    "$CONTAINER_NETWORK" <<'REMOTE_SCRIPT'
 set -Eeuo pipefail
 
 container_cli="$1"
@@ -159,9 +162,14 @@ remote_env_file="${10}"
 remote_data_dir="${11}"
 mount_artifacts="${12}"
 start_container_system="${13}"
+container_network="${14}"
 
 if [[ "$start_container_system" == "1" ]]; then
     "$container_cli" system start >/dev/null 2>&1 || true
+fi
+
+if [[ -n "$container_network" ]] && ! "$container_cli" network list | awk 'NR > 1 { print $1 }' | grep -Fxq "$container_network"; then
+    "$container_cli" network create "$container_network" >/dev/null
 fi
 
 load_image() {
@@ -180,6 +188,9 @@ remove_existing_container() {
 build_run_args() {
     local include_mount="$1"
     run_args=(run --detach --name "$container_name")
+    if [[ -n "$container_network" ]]; then
+        run_args+=(--network "$container_network")
+    fi
     run_args+=(--publish "${host_port}:${app_port}")
     if [[ "$buddy_transport" == "tcp" && -n "$buddy_tcp_port" ]]; then
         run_args+=(--publish "${buddy_tcp_port}:${buddy_tcp_port}")
