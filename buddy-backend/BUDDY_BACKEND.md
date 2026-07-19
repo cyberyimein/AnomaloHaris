@@ -158,6 +158,15 @@ wander。
 
 返回 Buddy vision 是否启用、detector 是否已经加载、阈值、暂停时长和最近一次检测结果。
 
+### `POST /api/buddy/vision/start`
+
+按需预加载人脸检测器。
+
+### `POST /api/buddy/vision/enable` / `POST /api/buddy/vision/disable`
+
+运行时启用或关闭整个 Vision 功能。`disable` 会卸载检测器并拒绝后续摄像头帧；`enable`
+只恢复 Vision 功能，不会自动加载检测器，仍需调用 `start`。
+
 默认检测器是 `ANOMALO_BUDDY_VISION_PROVIDER=opencv_haar`。它是 CPU-only 的 OpenCV Haar
 检测器，适合几分钟一次的低功耗“看到人脸/照片就停止漫游”场景。MediaPipe BlazeFace 可通过
 `ANOMALO_BUDDY_VISION_PROVIDER=mediapipe_blazeface` 启用，但需要额外安装兼容的 MediaPipe；

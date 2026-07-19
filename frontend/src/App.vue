@@ -153,29 +153,14 @@
 
       <section v-else-if="activeView === 'dashboard'" class="dashboard-view" aria-label="StackChan dashboard">
         <div class="dashboard-hero">
-          <span>StackChan Server</span>
-          <h2>Dashboard</h2>
-          <p>Monitor Buddy transport, audio activity, recent events, and manual state triggers.</p>
-        </div>
-
-        <div class="dashboard-grid">
-          <section class="dashboard-panel">
+          <div class="dashboard-hero-copy">
+            <span>StackChan Server</span>
+            <h2>Dashboard</h2>
+            <p>Monitor Buddy transport, audio activity, recent events, and manual state triggers.</p>
+          </div>
+          <section class="dashboard-admin-compact" aria-label="Admin Access">
             <header>
-              <span>Server Status</span>
-              <strong>{{ buddyStatusLabel }}</strong>
-            </header>
-            <div class="metric-grid">
-              <div v-for="metric in buddyStatusCards" :key="metric.label" class="metric">
-                <span>{{ metric.label }}</span>
-                <strong>{{ metric.value }}</strong>
-              </div>
-            </div>
-            <p class="dashboard-note">{{ buddyDashboardStatus }}</p>
-          </section>
-
-          <section class="dashboard-panel">
-            <header>
-              <span>Admin Access</span>
+              <span>Admin Token</span>
               <strong>{{ managementTokenStatus }}</strong>
             </header>
             <form class="management-token-form" @submit.prevent="saveManagementToken">
@@ -196,10 +181,26 @@
                 Clear
               </button>
             </form>
-            <p class="dashboard-note">{{ managementTokenHint }}</p>
+            <p>{{ managementTokenHint }}</p>
+          </section>
+        </div>
+
+        <div class="dashboard-grid">
+          <section class="dashboard-panel">
+            <header>
+              <span>Server Status</span>
+              <strong>{{ buddyStatusLabel }}</strong>
+            </header>
+            <div class="metric-grid">
+              <div v-for="metric in buddyStatusCards" :key="metric.label" class="metric">
+                <span>{{ metric.label }}</span>
+                <strong>{{ metric.value }}</strong>
+              </div>
+            </div>
+            <p class="dashboard-note">{{ buddyDashboardStatus }}</p>
           </section>
 
-          <section class="dashboard-panel">
+          <section class="dashboard-panel dashboard-control-panel">
             <header>
               <span>Manual Control</span>
               <strong>{{ buddyActionInFlight ? "Working" : "Ready" }}</strong>
@@ -229,23 +230,77 @@
                 {{ stateAction.label }}
               </button>
             </div>
+            <div class="vision-controls">
+              <button
+                class="vision-start-button"
+                type="button"
+                :disabled="buddyActionInFlight || !buddyVisionStatus?.enabled || buddyVisionStatus?.active"
+                @click="startBuddyVision"
+              >
+                {{ buddyVisionStatus?.active ? "Face Detection Ready" : "Start Face Detection" }}
+              </button>
+              <label
+                class="vision-toggle"
+                :class="{
+                  active: buddyVisionStatus?.enabled,
+                  disabled: buddyActionInFlight,
+                }"
+              >
+                <span>
+                  <strong>Vision</strong>
+                  <em>{{ buddyVisionStatus?.enabled ? "Enabled" : "Disabled" }}</em>
+                </span>
+                <input
+                  type="checkbox"
+                  :checked="Boolean(buddyVisionStatus?.enabled)"
+                  :disabled="buddyActionInFlight"
+                  @change="toggleBuddyVisionFeature"
+                />
+                <span class="vision-toggle-radio" aria-hidden="true"></span>
+              </label>
+            </div>
+            <p class="control-hint">{{ buddyVisionHint }}</p>
           </section>
 
           <section class="dashboard-panel dashboard-panel-wide">
             <header>
               <span>Recent Events</span>
-              <strong>{{ buddyEvents.length }}</strong>
+              <strong>{{ filteredBuddyEvents.length }} / {{ buddyEvents.length }}</strong>
             </header>
-            <div v-if="buddyEvents.length" class="dashboard-events">
-              <article v-for="event in buddyEvents" :key="event.id" class="dashboard-event">
+            <div class="event-toolbar">
+              <input
+                v-model.trim="buddyEventFilter"
+                type="search"
+                placeholder="Filter by event type or content"
+                aria-label="Filter recent events"
+              />
+              <button
+                class="control-button"
+                type="button"
+                :disabled="!buddyEventFilter"
+                @click="buddyEventFilter = ''"
+              >
+                Clear
+              </button>
+            </div>
+            <div v-if="filteredBuddyEvents.length" class="dashboard-events">
+              <article v-for="event in filteredBuddyEvents" :key="event.id" class="dashboard-event">
                 <div>
                   <strong>{{ event.type }}</strong>
-                  <span>{{ event.received_at || "unknown time" }}</span>
+                  <span :title="event.received_at || ''">{{ formatBuddyEventTime(event.received_at) }}</span>
                 </div>
-                <pre>{{ summarizeBuddyEvent(event) }}</pre>
+                <dl v-if="buddyEventDetails(event).length" class="event-details">
+                  <div v-for="detail in buddyEventDetails(event)" :key="detail.label">
+                    <dt>{{ detail.label }}</dt>
+                    <dd>{{ detail.value }}</dd>
+                  </div>
+                </dl>
+                <p v-else class="event-message">{{ event.raw || "No additional details." }}</p>
               </article>
             </div>
-            <div v-else class="dashboard-empty">No Buddy events recorded.</div>
+            <div v-else class="dashboard-empty">
+              {{ buddyEvents.length ? "No events match this filter." : "No Buddy events recorded." }}
+            </div>
           </section>
         </div>
       </section>
@@ -1402,6 +1457,8 @@ const memoryUploadDisabled = ref(false);
 
 const buddyStatus = ref(null);
 const buddyEvents = ref([]);
+const buddyEventFilter = ref("");
+const buddyVisionStatus = ref(null);
 const buddyDashboardStatus = ref("Dashboard idle.");
 const buddyActionInFlight = ref(false);
 const buddyStateActions = [
@@ -1504,6 +1561,37 @@ const buddyStatusCards = computed(() => {
     { label: "Queued", value: String(status.queued_audio_turns ?? 0) },
     { label: "Events", value: String(status.recent_event_count ?? buddyEvents.value.length) },
   ];
+});
+const filteredBuddyEvents = computed(() => {
+  const query = buddyEventFilter.value.trim().toLowerCase();
+  if (!query) {
+    return buddyEvents.value;
+  }
+  return buddyEvents.value.filter((event) => {
+    const searchable = [
+      event?.type,
+      event?.raw,
+      event?.received_at,
+      JSON.stringify(event?.payload || {}),
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    return searchable.includes(query);
+  });
+});
+const buddyVisionHint = computed(() => {
+  const status = buddyVisionStatus.value;
+  if (!status) {
+    return "Vision status unavailable.";
+  }
+  if (!status.enabled) {
+    return "Vision is disabled; camera frames will not run face detection.";
+  }
+  if (status.active) {
+    return `${status.provider || "Vision"} is ready for Buddy camera frames.`;
+  }
+  return `${status.provider || "Vision"} is enabled; start it to preload the detector.`;
 });
 const managementTokenStatus = computed(() => (managementToken.value ? "Token saved" : "Token missing"));
 const managementTokenHint = computed(() => {
@@ -2374,7 +2462,7 @@ function formatVolume(value) {
   return String(Math.round(numberValue));
 }
 
-function formatDateTime(value) {
+function formatDateTime(value, { includeSeconds = false } = {}) {
   if (!value) {
     return "--";
   }
@@ -2383,10 +2471,13 @@ function formatDateTime(value) {
     return String(value);
   }
   return date.toLocaleString([], {
+    year: "numeric",
     month: "short",
     day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
+    second: includeSeconds ? "2-digit" : undefined,
+    timeZoneName: "short",
   });
 }
 
@@ -2691,7 +2782,7 @@ async function refreshDashboard() {
   buddyActionInFlight.value = true;
   buddyDashboardStatus.value = "Refreshing Buddy dashboard...";
   try {
-    await Promise.all([loadBuddyStatus(), loadBuddyEvents()]);
+    await Promise.all([loadBuddyStatus(), loadBuddyEvents(), loadBuddyVisionStatus()]);
     managementAccessRequired.value = false;
     buddyDashboardStatus.value = `Updated ${new Date().toLocaleTimeString()}`;
   } catch (error) {
@@ -2704,7 +2795,7 @@ async function refreshDashboard() {
 
 async function pollDashboard() {
   try {
-    await Promise.all([loadBuddyStatus(), loadBuddyEvents()]);
+    await Promise.all([loadBuddyStatus(), loadBuddyEvents(), loadBuddyVisionStatus()]);
     managementAccessRequired.value = false;
     buddyDashboardStatus.value = `Updated ${new Date().toLocaleTimeString()}`;
   } catch (error) {
@@ -2721,6 +2812,10 @@ async function loadBuddyStatus() {
 async function loadBuddyEvents() {
   const payload = await fetchJson("/api/buddy/events?limit=30");
   buddyEvents.value = payload.events || [];
+}
+
+async function loadBuddyVisionStatus() {
+  buddyVisionStatus.value = await fetchJson("/api/buddy/vision/status");
 }
 
 async function connectBuddy() {
@@ -2746,6 +2841,22 @@ async function sendBuddyState(state) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ state }),
     });
+  });
+}
+
+async function startBuddyVision() {
+  await runBuddyAction("Starting face detection...", async () => {
+    buddyVisionStatus.value = await fetchJson("/api/buddy/vision/start", { method: "POST" });
+  });
+}
+
+async function toggleBuddyVisionFeature(event) {
+  const enabling = Boolean(event.target.checked);
+  await runBuddyAction(`${enabling ? "Enabling" : "Disabling"} Vision...`, async () => {
+    buddyVisionStatus.value = await fetchJson(
+      enabling ? "/api/buddy/vision/enable" : "/api/buddy/vision/disable",
+      { method: "POST" },
+    );
   });
 }
 
@@ -3894,10 +4005,106 @@ function truncateInline(value, maxLength) {
   return `${text.slice(0, maxLength - 1)}…`;
 }
 
-function summarizeBuddyEvent(event) {
-  const payload = event?.payload || {};
-  const summary = Object.keys(payload).length ? JSON.stringify(payload, null, 2) : event?.raw || "";
-  return summary || "No payload.";
+function buddyEventDetails(event) {
+  return flattenEventDetails(event?.payload || {});
+}
+
+function flattenEventDetails(value, path = [], details = []) {
+  if (details.length >= 48) {
+    return details;
+  }
+  if (Array.isArray(value)) {
+    if (!value.length) {
+      details.push({ label: eventDetailLabel(path), value: "None" });
+    } else if (value.every((item) => item === null || typeof item !== "object")) {
+      details.push({
+        label: eventDetailLabel(path),
+        value: value.map(formatEventDetailValue).join(", "),
+      });
+    } else {
+      value.forEach((item, index) => flattenEventDetails(item, [...path, String(index + 1)], details));
+    }
+    return details;
+  }
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value);
+    if (!entries.length && path.length) {
+      details.push({ label: eventDetailLabel(path), value: "None" });
+    }
+    entries.forEach(([key, item]) => flattenEventDetails(item, [...path, key], details));
+    return details;
+  }
+  details.push({
+    label: eventDetailLabel(path),
+    value: formatEventDetailValue(value),
+  });
+  return details;
+}
+
+function eventDetailLabel(path) {
+  if (!path.length) {
+    return "Detail";
+  }
+  return path
+    .map((part) =>
+      /^\d+$/.test(part)
+        ? `Item ${part}`
+        : String(part)
+            .replaceAll("_", " ")
+            .replace(/\b\w/g, (char) => char.toUpperCase()),
+    )
+    .join(" › ");
+}
+
+function formatEventDetailValue(value) {
+  if (isIsoDateTime(value)) {
+    return formatDateTime(value, { includeSeconds: true });
+  }
+  if (typeof value === "boolean") {
+    return value ? "Yes" : "No";
+  }
+  if (value === null || value === undefined || value === "") {
+    return "—";
+  }
+  return String(value);
+}
+
+function isIsoDateTime(value) {
+  return (
+    typeof value === "string" &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value)
+  );
+}
+
+function formatBuddyEventTime(value) {
+  if (!value) {
+    return "Unknown time";
+  }
+  const absolute = formatDateTime(value, { includeSeconds: true });
+  const relative = formatRelativeTime(value);
+  return relative ? `${absolute} · ${relative}` : absolute;
+}
+
+function formatRelativeTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  const deltaSeconds = Math.round((date.getTime() - Date.now()) / 1000);
+  const absoluteSeconds = Math.abs(deltaSeconds);
+  if (absoluteSeconds < 45) {
+    return "just now";
+  }
+  const units = [
+    ["day", 86400],
+    ["hour", 3600],
+    ["minute", 60],
+  ];
+  const [unit, seconds] = units.find(([, size]) => absoluteSeconds >= size) || ["minute", 60];
+  return new Intl.RelativeTimeFormat(undefined, { numeric: "auto" }).format(
+    Math.round(deltaSeconds / seconds),
+    unit,
+  );
 }
 
 function formatError(error) {

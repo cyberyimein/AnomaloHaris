@@ -47,6 +47,27 @@ async def buddy_vision_status() -> dict[str, Any]:
     return get_buddy_vision_service().status()
 
 
+@router.post("/start", dependencies=[Depends(require_management_access)])
+async def buddy_vision_start() -> dict[str, Any]:
+    try:
+        return get_buddy_vision_service().start()
+    except BuddyVisionConfigurationError as exc:
+        raise _vision_http_error(exc) from exc
+
+
+@router.post("/enable", dependencies=[Depends(require_management_access)])
+async def buddy_vision_enable() -> dict[str, Any]:
+    try:
+        return get_buddy_vision_service().enable()
+    except BuddyVisionConfigurationError as exc:
+        raise _vision_http_error(exc) from exc
+
+
+@router.post("/disable", dependencies=[Depends(require_management_access)])
+async def buddy_vision_disable() -> dict[str, Any]:
+    return get_buddy_vision_service().disable()
+
+
 @router.post("/detect", dependencies=[Depends(require_management_access)])
 async def buddy_vision_detect(
     file: UploadFile = VISION_UPLOAD,

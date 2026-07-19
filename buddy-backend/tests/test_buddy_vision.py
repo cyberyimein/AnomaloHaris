@@ -60,6 +60,63 @@ def test_buddy_vision_rejects_unsupported_provider() -> None:
         service.detect_image(b"image-bytes")
 
 
+def test_buddy_vision_start_preloads_detector() -> None:
+    detector = FakeFaceDetector([])
+    service = BuddyVisionService(
+        Settings(ANOMALO_BUDDY_VISION_ENABLED=True),
+        gateway=FakeBuddyGateway(),  # type: ignore[arg-type]
+        detector_factory=lambda: detector,
+    )
+
+    result = service.start()
+
+    assert result["enabled"] is True
+    assert result["detector_loaded"] is True
+
+
+def test_buddy_vision_start_rejects_disabled_service() -> None:
+    service = BuddyVisionService(
+        Settings(ANOMALO_BUDDY_VISION_ENABLED=False),
+        gateway=FakeBuddyGateway(),  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(BuddyVisionConfigurationError, match="disabled"):
+        service.start()
+
+
+def test_buddy_vision_disable_unloads_detector_and_blocks_frames() -> None:
+    service = BuddyVisionService(
+        Settings(ANOMALO_BUDDY_VISION_ENABLED=True),
+        gateway=FakeBuddyGateway(),  # type: ignore[arg-type]
+        detector_factory=lambda: FakeFaceDetector([]),
+        image_decoder=lambda _: BuddyVisionImage(pixels=object(), width=320, height=240),
+    )
+    service.start()
+
+    result = service.disable()
+
+    assert result["active"] is False
+    assert result["enabled"] is False
+    assert result["detector_loaded"] is False
+    with pytest.raises(BuddyVisionConfigurationError, match="disabled"):
+        service.detect_image(b"image-bytes")
+
+
+def test_buddy_vision_enable_does_not_load_detector() -> None:
+    service = BuddyVisionService(
+        Settings(ANOMALO_BUDDY_VISION_ENABLED=True),
+        gateway=FakeBuddyGateway(),  # type: ignore[arg-type]
+        detector_factory=lambda: FakeFaceDetector([]),
+    )
+    service.disable()
+
+    result = service.enable()
+
+    assert result["enabled"] is True
+    assert result["active"] is False
+    assert result["detector_loaded"] is False
+
+
 def test_opencv_haar_detector_upscales_low_resolution_frames() -> None:
     import numpy as np
 
@@ -316,6 +373,54 @@ def test_buddy_vision_detect_endpoint_uses_uploaded_image(monkeypatch) -> None:
     ]
 
 
+def test_buddy_vision_start_endpoint_preloads_detector(monkeypatch) -> None:
+    service = FakeVisionService()
+    monkeypatch.setattr("buddy_backend.vision_api.get_buddy_vision_service", lambda: service)
+    monkeypatch.setattr("app.main.get_buddy_gateway", lambda: FakeBuddyGateway())
+    monkeypatch.setattr("app.main.get_buddy_audio_bridge", lambda: FakeBuddyAudioBridge())
+    app = create_app()
+    app.dependency_overrides[require_management_access] = lambda: None
+    client = TestClient(app)
+
+    response = client.post("/api/buddy/vision/start")
+
+    assert response.status_code == 200
+    assert response.json()["detector_loaded"] is True
+    assert service.started is True
+
+
+def test_buddy_vision_disable_endpoint_unloads_detector(monkeypatch) -> None:
+    service = FakeVisionService()
+    monkeypatch.setattr("buddy_backend.vision_api.get_buddy_vision_service", lambda: service)
+    monkeypatch.setattr("app.main.get_buddy_gateway", lambda: FakeBuddyGateway())
+    monkeypatch.setattr("app.main.get_buddy_audio_bridge", lambda: FakeBuddyAudioBridge())
+    app = create_app()
+    app.dependency_overrides[require_management_access] = lambda: None
+    client = TestClient(app)
+
+    response = client.post("/api/buddy/vision/disable")
+
+    assert response.status_code == 200
+    assert response.json()["enabled"] is False
+    assert service.disabled is True
+
+
+def test_buddy_vision_enable_endpoint_restores_feature(monkeypatch) -> None:
+    service = FakeVisionService()
+    monkeypatch.setattr("buddy_backend.vision_api.get_buddy_vision_service", lambda: service)
+    monkeypatch.setattr("app.main.get_buddy_gateway", lambda: FakeBuddyGateway())
+    monkeypatch.setattr("app.main.get_buddy_audio_bridge", lambda: FakeBuddyAudioBridge())
+    app = create_app()
+    app.dependency_overrides[require_management_access] = lambda: None
+    client = TestClient(app)
+
+    response = client.post("/api/buddy/vision/enable")
+
+    assert response.status_code == 200
+    assert response.json()["enabled"] is True
+    assert service.enabled is True
+
+
 def test_buddy_vision_frame_endpoint_applies_buddy_action_by_default(monkeypatch) -> None:
     service = FakeVisionService()
     monkeypatch.setattr("buddy_backend.vision_api.get_buddy_vision_service", lambda: service)
@@ -358,9 +463,39 @@ def test_buddy_vision_frame_endpoint_accepts_frame_token(monkeypatch) -> None:
 class FakeVisionService:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
+        self.started = False
+        self.disabled = False
+        self.enabled = False
 
     def status(self) -> dict[str, object]:
         return {"detector_loaded": False}
+
+    def start(self) -> dict[str, object]:
+        self.started = True
+        return {
+            "enabled": True,
+            "active": True,
+            "detector_loaded": True,
+            "provider": "fake_blazeface",
+        }
+
+    def disable(self) -> dict[str, object]:
+        self.disabled = True
+        return {
+            "enabled": False,
+            "active": False,
+            "detector_loaded": False,
+            "provider": "fake_blazeface",
+        }
+
+    def enable(self) -> dict[str, object]:
+        self.enabled = True
+        return {
+            "enabled": True,
+            "active": False,
+            "detector_loaded": False,
+            "provider": "fake_blazeface",
+        }
 
     def detect_image(
         self,

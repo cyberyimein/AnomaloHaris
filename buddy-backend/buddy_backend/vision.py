@@ -61,10 +61,13 @@ class BuddyVisionService:
         self._detector: BuddyFaceDetector | None = None
         self._last_detection: dict[str, Any] | None = None
         self._roam_paused_by_vision = False
+        self._enabled = settings.buddy_vision_enabled
 
     def status(self) -> dict[str, Any]:
         return {
-            "enabled": self.settings.buddy_vision_enabled,
+            "enabled": self._enabled,
+            "configured_enabled": self.settings.buddy_vision_enabled,
+            "active": self._detector is not None and self._enabled,
             "provider": self.settings.buddy_vision_provider,
             "detector_loaded": self._detector is not None,
             "score_threshold": self.settings.buddy_vision_score_threshold,
@@ -82,6 +85,27 @@ class BuddyVisionService:
             },
             "last_detection": self._last_detection,
         }
+
+    def start(self) -> dict[str, Any]:
+        if not self._enabled:
+            raise BuddyVisionConfigurationError(
+                "Buddy vision is disabled. Enable Vision before starting face detection."
+            )
+        self._get_detector()
+        return self.status()
+
+    def enable(self) -> dict[str, Any]:
+        if not self.settings.buddy_vision_enabled:
+            raise BuddyVisionConfigurationError(
+                "Buddy vision is unavailable. Set ANOMALO_BUDDY_VISION_ENABLED=true."
+            )
+        self._enabled = True
+        return self.status()
+
+    def disable(self) -> dict[str, Any]:
+        self._detector = None
+        self._enabled = False
+        return self.status()
 
     def detect_image(
         self,
@@ -136,6 +160,10 @@ class BuddyVisionService:
         return result
 
     def _get_detector(self) -> BuddyFaceDetector:
+        if not self._enabled:
+            raise BuddyVisionConfigurationError(
+                "Buddy vision is disabled. Enable Vision before uploading frames."
+            )
         if self._detector is None:
             self._detector = self._detector_factory()
         return self._detector

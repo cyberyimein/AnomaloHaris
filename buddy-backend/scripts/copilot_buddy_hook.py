@@ -19,7 +19,11 @@ def main() -> int:
     env = _merged_env()
     url = _endpoint_url(env, event_name)
     headers = {"content-type": "application/json"}
-    token = env.get("ANOMALO_ADMIN_TOKEN", "").strip()
+    token = (
+        env.get("ANOMALO_COPILOT_HOOK_ADMIN_TOKEN")
+        or env.get("ANOMALO_ADMIN_TOKEN")
+        or ""
+    ).strip()
     if token:
         headers["x-anomalo-admin-token"] = token
 
@@ -59,15 +63,19 @@ def _merged_env() -> dict[str, str]:
 
 def _env_file_values() -> dict[str, str]:
     values: dict[str, str] = {}
-    env_path = Path(__file__).resolve().parents[2] / ".env"
-    if not env_path.exists():
-        return values
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
+    env_paths = (
+        Path(__file__).resolve().parents[2] / ".env",
+        Path.home() / ".config" / "anomalo" / "buddy-hook.env",
+    )
+    for env_path in env_paths:
+        if not env_path.exists():
             continue
-        key, value = stripped.split("=", 1)
-        values[key.strip()] = _strip_quotes(value.strip())
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or "=" not in stripped:
+                continue
+            key, value = stripped.split("=", 1)
+            values[key.strip()] = _strip_quotes(value.strip())
     return values
 
 
