@@ -1,0 +1,64 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3 /Users/waynewong/code/Anomalo/buddy-backend/scripts/copilot_buddy_hook.py UserPromptSubmit",
+            "timeout": 10,
+            "statusMessage": "Syncing Buddy status"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3 /Users/waynewong/code/Anomalo/buddy-backend/scripts/copilot_buddy_hook.py PreToolUse",
+            "timeout": 10,
+            "statusMessage": "Syncing Buddy activity"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3 /Users/waynewong/code/Anomalo/buddy-backend/scripts/copilot_buddy_hook.py PermissionRequest",
+            "timeout": 10,
+            "statusMessage": "Syncing Buddy approval state"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3 /Users/waynewong/code/Anomalo/buddy-backend/scripts/copilot_buddy_hook.py PostToolUse",
+            "timeout": 10,
+            "statusMessage": "Syncing Buddy activity"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3 /Users/waynewong/code/Anomalo/buddy-backend/scripts/copilot_buddy_hook.py Stop",
+            "timeout": 10,
+            "statusMessage": "Syncing Buddy completion"
+          }
+        ]
+      }
+    ]
+  }
+}

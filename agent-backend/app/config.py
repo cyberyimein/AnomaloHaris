@@ -128,7 +128,7 @@ class Settings(BaseSettings):
         default=0.1,
         alias="ANOMALO_BUDDY_VISION_DETECTOR_MIN_CONFIDENCE",
     )
-    buddy_vision_pause_ms: int = Field(default=300000, alias="ANOMALO_BUDDY_VISION_PAUSE_MS")
+    buddy_vision_pause_ms: int = Field(default=0, alias="ANOMALO_BUDDY_VISION_PAUSE_MS")
     buddy_vision_look_enabled: bool = Field(
         default=True,
         alias="ANOMALO_BUDDY_VISION_LOOK_ENABLED",

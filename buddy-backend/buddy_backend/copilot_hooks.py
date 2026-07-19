@@ -32,6 +32,8 @@ class CopilotHookService:
             return self._handle_user_prompt_submitted(payload)
         if normalized == "preToolUse":
             return self._handle_pre_tool_use(payload)
+        if normalized == "postToolUse":
+            return self._handle_post_tool_use(payload)
         if normalized == "permissionRequest":
             return self._handle_permission_request(payload)
         if normalized == "notification":
@@ -56,13 +58,18 @@ class CopilotHookService:
         text = f"{tool_name}: {detail}" if detail else tool_name
         return self._set_state("coding", _compact_text(text, fallback=tool_name))
 
+    def _handle_post_tool_use(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        tool_name = _string_value(payload, "toolName", "tool_name")
+        text = f"{tool_name} complete" if tool_name else "continuing"
+        return self._set_state("coding", text)
+
     def _handle_permission_request(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        prompt = _permission_prompt(payload)
         if not self._permission_bridge_enabled:
-            return {}
+            return self._set_state("approval", prompt)
         if not self._gateway.is_connected():
             return {}
 
-        prompt = _permission_prompt(payload)
         request_id = _request_id(payload, prompt)
         try:
             response = self._gateway.request_approval(
@@ -126,6 +133,7 @@ def _normalize_event_name(event_name: str) -> str:
     alias = {
         "UserPromptSubmit": "userPromptSubmitted",
         "PreToolUse": "preToolUse",
+        "PostToolUse": "postToolUse",
         "PermissionRequest": "permissionRequest",
         "Notification": "notification",
         "Stop": "agentStop",

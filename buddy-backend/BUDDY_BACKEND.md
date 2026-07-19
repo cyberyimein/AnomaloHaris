@@ -27,11 +27,10 @@
 4. 只有显式启用 `ANOMALO_BUDDY_AUDIO_AI_ENABLED=true` 时，`BuddyAudioBridge.start()` 才启动后台线程，轮询 `BuddyGateway.wait_for_audio_turn()`。
 5. 前端、agent tools、skills、Copilot hooks 都通过同一个 gateway 操作 Buddy。
 
-本地运行：
+本地运行（Buddy 需要通过局域网访问 HTTP 人脸接口，因此必须监听 `0.0.0.0`）：
 
 ```bash
-pip install -e ".[audio,buddy,stocks,dev]"
-PYTHONPATH=agent-backend:buddy-backend:stock-backend uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+buddy-backend/scripts/run_local_dev.sh
 ```
 
 ## 环境变量
@@ -45,6 +44,8 @@ PYTHONPATH=agent-backend:buddy-backend:stock-backend uvicorn app.main:app --relo
 - `ANOMALO_BUDDY_HOST_NAME`：发给设备展示的 host 名称。
 - `ANOMALO_BUDDY_AUDIO_AI_ENABLED`：是否启用 Buddy 语音 AI 回合桥，默认 `false`。关闭时仍保留 TCP/串口连接、事件、审批、视觉等能力，但不会加载 STT/TTS 模型。
 - `ANOMALO_BUDDY_AUDIO_DEBUG_STORAGE`：`auto` / `on` / `off`，控制是否保存 Buddy 音频诊断文件。
+- `ANOMALO_BUDDY_VISION_ENABLED`：是否让检测结果控制 Buddy。启用后找到人脸会注视目标并暂停漫游。
+- `ANOMALO_BUDDY_VISION_PAUSE_MS`：人脸出现后的漫游暂停时长。默认 `0` 表示保持暂停，直到后续检测确认无人脸。
 - `ANOMALO_COPILOT_BUDDY_APPROVAL_TIMEOUT_SECONDS`：hook 审批等待秒数，默认 `90`。
 - `ANOMALO_COPILOT_BUDDY_PERMISSION_BRIDGE_ENABLED`：是否让 `permissionRequest` 真的等待 Buddy 审批，默认 `false`。
 

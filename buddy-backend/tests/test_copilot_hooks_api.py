@@ -103,6 +103,20 @@ def test_pre_tool_use_restores_coding_state(monkeypatch) -> None:
     ]
 
 
+def test_post_tool_use_clears_approval_state(monkeypatch) -> None:
+    gateway = FakeBuddyGateway()
+    client = _client(monkeypatch, gateway)
+
+    response = client.post(
+        "/api/copilot/hooks/PostToolUse",
+        json={"session_id": "session-1", "tool_name": "exec_command"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {}
+    assert gateway.state_calls == [("coding", "exec_command complete")]
+
+
 def test_notification_permission_prompt_sets_approval_state(monkeypatch) -> None:
     gateway = FakeBuddyGateway()
     client = _client(monkeypatch, gateway)
@@ -134,7 +148,7 @@ def test_permission_request_does_not_bridge_by_default(monkeypatch) -> None:
     assert response.status_code == 200
     assert response.json() == {}
     assert gateway.approval_calls == []
-    assert gateway.state_calls == []
+    assert gateway.state_calls == [("approval", "Allow bash: pwd")]
 
 
 def test_permission_request_uses_buddy_approval_when_bridge_enabled(monkeypatch) -> None:

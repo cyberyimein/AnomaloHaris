@@ -228,7 +228,7 @@ class BuddyGateway:
             "stop": "CB stop",
             "error": "CB error",
             "coding": "CODEX CODING",
-            "approval": "STATE approval",
+            "approval": "CODEX APPROVAL codex-hook",
             "done": "CODEX DONE",
         }.get(normalized_state)
         if command_name is None:

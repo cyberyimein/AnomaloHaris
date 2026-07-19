@@ -67,6 +67,23 @@ def test_buddy_gateway_connects_and_waits_for_approval() -> None:
     assert disconnected["connected"] is False
 
 
+def test_buddy_gateway_uses_codex_approval_ui_for_approval_state() -> None:
+    serial = FakeSerial()
+    gateway = BuddyGateway(
+        Settings(ANOMALO_BUDDY_TRANSPORT="serial"),
+        serial_factory=lambda *_args, **_kwargs: serial,
+        glob_func=lambda pattern: ["/dev/tty.usbmodem2101"] if "usbmodem" in pattern else [],
+    )
+    gateway.connect()
+
+    gateway.set_state("approval", "Allow shell command?")
+
+    assert any(
+        b"CODEX APPROVAL codex-hook Allow shell command?" in item
+        for item in serial.writes
+    )
+
+
 def test_buddy_gateway_records_json_and_text_events() -> None:
     serial = FakeSerial()
 

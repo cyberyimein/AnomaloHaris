@@ -212,7 +212,7 @@ def test_buddy_vision_service_lazily_loads_detector_and_looks_at_face() -> None:
     assert result["detector_loaded"] is True
     assert factory_calls == 1
     assert gateway.commands == [
-        "ROAM PAUSE 300000",
+        "ROAM PAUSE 0",
         "LOOK -203 335 40",
         "CB idle person nearby",
     ]
@@ -238,7 +238,7 @@ def test_buddy_vision_service_skips_look_when_face_is_centered() -> None:
 
     assert result["face_detected"] is True
     assert gateway.commands == [
-        "ROAM PAUSE 300000",
+        "ROAM PAUSE 0",
         "CB idle person nearby",
     ]
     assert result["action"]["look"]["applied"] is False
