@@ -23,6 +23,7 @@ from app.tools.mcp_provider import MCPManager, MCPProvider
 from app.tools.python_sandbox import PythonSandboxProvider
 from app.tools.registry import ToolRegistry
 from app.tools.skills import SkillManager, SkillProvider
+from app.tools.web import WebToolProvider
 
 
 @lru_cache
@@ -36,6 +37,7 @@ def get_tool_registry() -> ToolRegistry:
     return ToolRegistry(
         providers=[
             CoreToolProvider(),
+            WebToolProvider(settings),
             BuddyToolProvider(get_buddy_gateway()),
             PythonSandboxProvider(settings),
             SkillProvider(settings.skill_dirs),

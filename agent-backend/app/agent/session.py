@@ -1,5 +1,6 @@
 from collections import defaultdict
 from copy import deepcopy
+from datetime import UTC, datetime
 from typing import Any
 
 
@@ -8,6 +9,7 @@ class SessionStore:
         self._messages: dict[str, list[dict[str, Any]]] = defaultdict(list)
         self._active_skills: dict[str, set[str]] = defaultdict(set)
         self._active_mcp_servers: dict[str, set[str]] = defaultdict(set)
+        self._web_traces: dict[str, list[dict[str, Any]]] = defaultdict(list)
 
     def get_messages(self, session_id: str) -> list[dict[str, Any]]:
         return deepcopy(self._messages[session_id])
@@ -42,8 +44,19 @@ class SessionStore:
     def replace(self, session_id: str, messages: list[dict[str, Any]]) -> None:
         self._messages[session_id] = deepcopy(messages)
 
+    def get_web_traces(self, session_id: str) -> list[dict[str, Any]]:
+        return deepcopy(self._web_traces[session_id])
+
+    def append_web_trace(self, session_id: str, trace: dict[str, Any]) -> None:
+        value = deepcopy(trace)
+        value.setdefault("timestamp", datetime.now(UTC).isoformat())
+        traces = self._web_traces[session_id]
+        traces.append(value)
+        if len(traces) > 100:
+            del traces[:-100]
+
     def clear(self, session_id: str) -> None:
         self._messages.pop(session_id, None)
         self._active_skills.pop(session_id, None)
         self._active_mcp_servers.pop(session_id, None)
-
+        self._web_traces.pop(session_id, None)

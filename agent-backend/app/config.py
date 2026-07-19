@@ -204,6 +204,48 @@ class Settings(BaseSettings):
         default=2.0,
         alias="FRUITSPY_PYTHON_TOOL_STATUS_TIMEOUT_SECONDS",
     )
+    web_tools_enabled: bool = Field(default=True, alias="WEB_TOOLS_ENABLED")
+    web_search_timeout_seconds: float = Field(
+        default=8.0,
+        alias="WEB_SEARCH_TIMEOUT_SECONDS",
+    )
+    web_search_cache_seconds: int = Field(
+        default=300,
+        alias="WEB_SEARCH_CACHE_SECONDS",
+    )
+    web_search_max_bytes: int = Field(
+        default=1_000_000,
+        alias="WEB_SEARCH_MAX_BYTES",
+    )
+    web_fetch_provider: str = Field(default="auto", alias="WEB_FETCH_PROVIDER")
+    web_fetch_timeout_seconds: float = Field(
+        default=30.0,
+        alias="WEB_FETCH_TIMEOUT_SECONDS",
+    )
+    web_fetch_max_bytes: int = Field(
+        default=2_000_000,
+        alias="WEB_FETCH_MAX_BYTES",
+    )
+    web_fetch_max_chars: int = Field(
+        default=30_000,
+        alias="WEB_FETCH_MAX_CHARS",
+    )
+    web_user_agent: str = Field(
+        default="Anomalo/0.1 (+local agent web tools)",
+        alias="WEB_USER_AGENT",
+    )
+    fruitspy_crawl_api_base_url: str = Field(
+        default="",
+        alias="FRUITSPY_CRAWL_API_BASE_URL",
+    )
+    fruitspy_crawl_api_path: str = Field(
+        default="/api/v1/tools/crawl",
+        alias="FRUITSPY_CRAWL_API_PATH",
+    )
+    fruitspy_crawl_api_token: str | None = Field(
+        default=None,
+        alias="FRUITSPY_CRAWL_API_TOKEN",
+    )
     stock_data_mode: str | None = Field(default=None, alias="ANOMALO_STOCK_DATA_MODE")
     stock_opend_host: str | None = Field(default=None, alias="ANOMALO_STOCK_OPEND_HOST")
     stock_opend_port: int | None = Field(default=None, alias="ANOMALO_STOCK_OPEND_PORT")

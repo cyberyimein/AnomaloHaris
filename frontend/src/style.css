@@ -3588,6 +3588,248 @@ button:disabled,
   min-height: 0;
 }
 
+.summary-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.summary-label strong {
+  display: inline-grid;
+  min-width: 22px;
+  height: 22px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--drawer-tile-strong);
+  color: var(--drawer-accent);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.web-trace-list {
+  display: flex;
+  max-height: 48vh;
+  flex-direction: column;
+  gap: 10px;
+  overflow: auto;
+}
+
+.web-trace {
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: var(--drawer-tile);
+  padding: 11px;
+}
+
+.web-trace[data-status="running"] {
+  border-color: rgba(185, 126, 24, 0.28);
+}
+
+.web-trace[data-status="error"] {
+  border-color: rgba(183, 67, 67, 0.3);
+}
+
+.web-trace-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.web-trace-header > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.web-trace-header > div > span {
+  color: var(--drawer-accent);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+}
+
+.web-trace-header strong {
+  overflow: hidden;
+  color: var(--drawer-text);
+  font-size: 13px;
+  font-weight: 560;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.web-trace-status {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: rgba(79, 147, 128, 0.12);
+  padding: 3px 7px;
+  color: var(--ok);
+  font-size: 9px;
+  font-weight: 650;
+  text-transform: uppercase;
+}
+
+.web-trace[data-status="running"] .web-trace-status {
+  background: rgba(185, 126, 24, 0.12);
+  color: var(--warning);
+}
+
+.web-trace[data-status="error"] .web-trace-status {
+  background: rgba(183, 67, 67, 0.1);
+  color: var(--danger);
+}
+
+.web-trace-meta,
+.web-fetch-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.web-trace-meta span,
+.web-fetch-stats span {
+  border-radius: 999px;
+  background: rgba(255, 254, 253, 0.72);
+  padding: 3px 6px;
+  color: var(--drawer-muted);
+  font-size: 9px;
+}
+
+.web-result-list {
+  display: grid;
+  gap: 6px;
+  margin-top: 9px;
+}
+
+.web-result {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 7px;
+  border-radius: 8px;
+  background: rgba(255, 254, 253, 0.65);
+  padding: 8px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.web-result:hover {
+  background: rgba(255, 254, 253, 0.96);
+}
+
+.web-result > span:first-child {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--drawer-tile-strong);
+  color: var(--drawer-accent);
+  font-size: 9px;
+}
+
+.web-result > span:nth-child(2) {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.web-result strong,
+.web-result small,
+.web-result em {
+  min-width: 0;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.web-result strong {
+  color: var(--drawer-text);
+  font-size: 11px;
+  font-weight: 560;
+  line-height: 1.35;
+}
+
+.web-result small {
+  color: var(--drawer-accent);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.web-result em {
+  color: var(--drawer-muted);
+  display: -webkit-box;
+  font-size: 10px;
+  font-style: normal;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.web-result > svg,
+.web-fetch-url > svg {
+  flex: 0 0 auto;
+  color: var(--drawer-muted);
+}
+
+.web-fetch-url {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 9px;
+  color: var(--drawer-accent);
+  font-size: 10px;
+  text-decoration: none;
+}
+
+.web-fetch-url span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.web-trace-content {
+  position: relative;
+  margin-top: 9px;
+  border-top: 1px solid var(--drawer-line);
+  padding-top: 8px;
+}
+
+.web-trace-content > summary {
+  min-height: 28px;
+  padding: 0;
+  color: var(--drawer-muted);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.web-trace-content > .mini-icon-button {
+  position: absolute;
+  top: 5px;
+  right: 0;
+  min-height: 24px;
+  padding: 0 7px;
+}
+
+.web-trace-content pre {
+  max-height: 260px;
+  margin: 8px 0 0;
+  overflow: auto;
+  border-radius: 8px;
+  background: var(--code);
+  padding: 9px;
+  color: var(--drawer-text);
+  font-family:
+    "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 10px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .switch-card {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);

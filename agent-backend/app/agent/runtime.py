@@ -201,6 +201,7 @@ class AgentRuntime:
                     "tool.started",
                     session_id,
                     run_id,
+                    tool_call_id=call.id,
                     tool=call.name,
                     arguments=call.arguments,
                 )
@@ -208,10 +209,25 @@ class AgentRuntime:
                 result = await self._call_tool_safely(call.name, call.arguments, tool_context)
                 self._apply_skill_state(session_id, result)
                 self._apply_mcp_state(session_id, result)
+                if result.data.get("trace_kind") in {"web_search", "web_fetch"}:
+                    self.sessions.append_web_trace(
+                        session_id,
+                        {
+                            "id": call.id,
+                            "tool_call_id": call.id,
+                            "run_id": run_id,
+                            "tool": call.name,
+                            "ok": result.ok,
+                            "arguments": call.arguments,
+                            "content": result.content,
+                            "data": result.data,
+                        },
+                    )
                 yield event(
                     "tool.finished" if result.ok else "tool.error",
                     session_id,
                     run_id,
+                    tool_call_id=call.id,
                     tool=call.name,
                     ok=result.ok,
                     content=result.content,

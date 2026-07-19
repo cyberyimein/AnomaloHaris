@@ -21,3 +21,10 @@ async def list_tools(session_id: str | None = Query(default=None)) -> dict[str, 
         "providers": await registry.status(context=context),
     }
 
+
+@router.get("/sessions/{session_id}/web-traces")
+async def list_web_traces(session_id: str) -> dict[str, object]:
+    return {
+        "session_id": session_id,
+        "traces": get_session_store().get_web_traces(session_id),
+    }

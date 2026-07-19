@@ -1183,6 +1183,102 @@
           </div>
         </details>
 
+        <details class="drawer-card web-activity-card" open>
+          <summary>
+            <span class="summary-label">
+              <span>Web Activity</span>
+              <strong>{{ webTraceCount }}</strong>
+            </span>
+            <Globe2 :size="16" />
+          </summary>
+          <div v-if="webTraces.length" class="web-trace-list">
+            <article
+              v-for="trace in webTraces"
+              :key="trace.id || trace.tool_call_id"
+              class="web-trace"
+              :data-status="webTraceStatus(trace)"
+            >
+              <header class="web-trace-header">
+                <div>
+                  <span>{{ webTraceKindLabel(trace) }}</span>
+                  <strong>{{ webTraceTitle(trace) }}</strong>
+                </div>
+                <span class="web-trace-status">{{ webTraceStatus(trace) }}</span>
+              </header>
+
+              <div class="web-trace-meta">
+                <span>{{ trace.data?.provider || "pending" }}</span>
+                <span v-if="trace.data?.duration_ms != null">{{ trace.data.duration_ms }} ms</span>
+                <span v-if="trace.data?.cached">cached</span>
+                <span>{{ formatDateTime(trace.timestamp) }}</span>
+              </div>
+
+              <template v-if="trace.data?.trace_kind === 'web_search'">
+                <div v-if="trace.data?.results?.length" class="web-result-list">
+                  <a
+                    v-for="(result, index) in trace.data.results"
+                    :key="`${trace.id}-${result.url}`"
+                    :href="safeWebUrl(result.url)"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="web-result"
+                  >
+                    <span>{{ index + 1 }}</span>
+                    <span>
+                      <strong>{{ result.title || result.url }}</strong>
+                      <small>{{ result.url }}</small>
+                      <em v-if="result.snippet">{{ result.snippet }}</em>
+                    </span>
+                    <ExternalLink :size="13" />
+                  </a>
+                </div>
+                <div v-else-if="trace.ok !== null" class="panel-note">
+                  {{ trace.content || "No search results returned." }}
+                </div>
+              </template>
+
+              <template v-else-if="trace.data?.trace_kind === 'web_fetch'">
+                <a
+                  v-if="trace.data?.final_url || trace.data?.requested_url"
+                  :href="safeWebUrl(trace.data.final_url || trace.data.requested_url)"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="web-fetch-url"
+                >
+                  <span>{{ trace.data.final_url || trace.data.requested_url }}</span>
+                  <ExternalLink :size="13" />
+                </a>
+                <div class="web-fetch-stats">
+                  <span v-if="trace.data?.status_code">HTTP {{ trace.data.status_code }}</span>
+                  <span v-if="trace.data?.markdown_chars != null">
+                    {{ trace.data.markdown_chars }} chars
+                  </span>
+                  <span v-if="trace.data?.rendered">rendered</span>
+                  <span v-if="trace.data?.truncated">truncated</span>
+                </div>
+                <details v-if="trace.content" class="web-trace-content">
+                  <summary>Returned Markdown</summary>
+                  <button
+                    class="mini-icon-button"
+                    type="button"
+                    @click.stop.prevent="copyWebTrace(trace)"
+                  >
+                    <Copy :size="13" />
+                    <span>{{ copiedWebTraceId === trace.id ? "Copied" : "Copy" }}</span>
+                  </button>
+                  <pre>{{ trace.content }}</pre>
+                </details>
+                <div v-else-if="trace.ok === false" class="panel-note error">
+                  Fetch failed before content was returned.
+                </div>
+              </template>
+            </article>
+          </div>
+          <div v-else class="empty-panel">
+            Search and fetch calls from this conversation will appear here.
+          </div>
+        </details>
+
         <details class="drawer-card">
           <summary>
             <span>Agent Events</span>
@@ -1208,6 +1304,8 @@ import {
   CircleCheck,
   Copy,
   Database,
+  ExternalLink,
+  Globe2,
   Info,
   Layers3,
   LoaderCircle,
@@ -1249,6 +1347,8 @@ const managementAccessRequired = ref(false);
 const tools = ref([]);
 const events = ref([]);
 const eventSequence = ref(0);
+const webTraces = ref([]);
+const copiedWebTraceId = ref("");
 const conversationTurns = ref([]);
 const activeAssistantIndex = ref(null);
 const pendingAssistantArtifacts = ref([]);
@@ -1328,6 +1428,7 @@ const normalizedAgentState = computed(() => normalizeState(agentState.value));
 const normalizedRunStatus = computed(() => normalizeState(runStatus.value));
 const activeSkillCount = computed(() => skills.value.filter((skill) => skill.active).length);
 const activeMcpCount = computed(() => mcpServers.value.filter((server) => server.active).length);
+const webTraceCount = computed(() => webTraces.value.length);
 const openrouterCreditsLabel = computed(() => {
   const remaining = openrouterCredits.value?.remaining_credits;
   if (openrouterCreditsStatus.value === "ready" || openrouterCreditsStatus.value === "stale") {
@@ -1809,6 +1910,7 @@ onMounted(() => {
   document.addEventListener("pointerdown", handleGlobalPointerdown);
   connect();
   void loadTools();
+  void loadWebTraces();
   void loadSkills();
   void loadMcpServers();
   void loadPromptProfile();
@@ -1990,6 +2092,25 @@ async function loadTools() {
     tools.value = data.tools || [];
   } catch (error) {
     addEventLog("tools.error", String(error), true);
+  }
+}
+
+async function loadWebTraces() {
+  const currentSessionId = sessionId.value;
+  try {
+    const response = await fetch(
+      `/api/sessions/${encodeURIComponent(currentSessionId)}/web-traces`,
+    );
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || "Web traces failed to load.");
+    }
+    if (sessionId.value !== currentSessionId) {
+      return;
+    }
+    webTraces.value = [...(data.traces || [])].reverse();
+  } catch (error) {
+    addEventLog("web-traces.error", String(error), true);
   }
 }
 
@@ -2732,6 +2853,7 @@ function startNewConversation() {
   sendDisabled.value = true;
   connect();
   void loadTools();
+  void loadWebTraces();
   void loadSkills();
   void loadMcpServers();
   void nextTick(() => messageInputEl.value?.focus());
@@ -2746,6 +2868,8 @@ function resetConversationState() {
   activeToolActivityIndexes.clear();
   events.value = [];
   eventSequence.value = 0;
+  webTraces.value = [];
+  copiedWebTraceId.value = "";
   runId.value = "none";
   runTitle.value = "Ready";
   iterationCount.value = "0";
@@ -2817,6 +2941,104 @@ async function copyMessages() {
   await copyToClipboard(latestMessagesJson.value, copyMessagesLabel, "Copy Messages");
 }
 
+function toolActivityKey(event) {
+  return event.data?.tool_call_id || event.data?.tool || "tool";
+}
+
+function isWebTool(toolName) {
+  return toolName === "web_search" || toolName === "web_fetch";
+}
+
+function isWebTraceData(data) {
+  return data?.trace_kind === "web_search" || data?.trace_kind === "web_fetch";
+}
+
+function upsertWebTrace(event, ok) {
+  const toolCallId = event.data?.tool_call_id || `${event.run_id}:${event.data?.tool}`;
+  const existingIndex = webTraces.value.findIndex(
+    (trace) => (trace.tool_call_id || trace.id) === toolCallId,
+  );
+  const existing = existingIndex >= 0 ? webTraces.value[existingIndex] : null;
+  const tool = event.data?.tool || existing?.tool || "web";
+  const argumentsValue = event.data?.arguments || existing?.arguments || {};
+  const inferredData =
+    tool === "web_search"
+      ? {
+          trace_kind: "web_search",
+          provider: "duckduckgo_html",
+          query: argumentsValue.query || "",
+          results: [],
+        }
+      : {
+          trace_kind: "web_fetch",
+          provider: "pending",
+          requested_url: argumentsValue.url || "",
+        };
+  const trace = {
+    ...existing,
+    id: existing?.id || toolCallId,
+    tool_call_id: toolCallId,
+    run_id: event.run_id || existing?.run_id,
+    tool,
+    ok,
+    arguments: argumentsValue,
+    content: event.data?.content ?? existing?.content ?? "",
+    data: event.data?.data || existing?.data || inferredData,
+    timestamp: existing?.timestamp || event.timestamp || new Date().toISOString(),
+  };
+  if (existingIndex >= 0) {
+    webTraces.value.splice(existingIndex, 1, trace);
+  } else {
+    webTraces.value.unshift(trace);
+  }
+}
+
+function webTraceStatus(trace) {
+  if (trace.ok === null || trace.ok === undefined) {
+    return "running";
+  }
+  return trace.ok ? "done" : "error";
+}
+
+function webTraceKindLabel(trace) {
+  return trace.data?.trace_kind === "web_search" ? "SEARCH" : "FETCH";
+}
+
+function webTraceTitle(trace) {
+  if (trace.data?.trace_kind === "web_search") {
+    return trace.data?.query || trace.arguments?.query || "Web search";
+  }
+  return (
+    trace.data?.title ||
+    trace.data?.final_url ||
+    trace.data?.requested_url ||
+    trace.arguments?.url ||
+    "Web fetch"
+  );
+}
+
+function safeWebUrl(value) {
+  try {
+    const url = new URL(String(value || ""));
+    return url.protocol === "http:" || url.protocol === "https:" ? url.href : "#";
+  } catch {
+    return "#";
+  }
+}
+
+async function copyWebTrace(trace) {
+  if (!trace?.content) {
+    return;
+  }
+  await navigator.clipboard.writeText(trace.content);
+  copiedWebTraceId.value = trace.id;
+  setTimeout(() => {
+    if (copiedWebTraceId.value === trace.id) {
+      copiedWebTraceId.value = "";
+    }
+  }, 1200);
+}
+
 async function copyToClipboard(value, labelRef, defaultText) {
   if (!value) {
     return;
@@ -2869,7 +3091,7 @@ function handleAgentEvent(event) {
       });
       setAgentState("Tool", event.data.tool || "Tool call started.");
       activeToolActivityIndexes.set(
-        event.data.tool || "tool",
+        toolActivityKey(event),
         addConversationActivity({
           kind: "tool",
           status: "running",
@@ -2877,15 +3099,21 @@ function handleAgentEvent(event) {
           body: summarizeToolArguments(event.data.arguments),
         }),
       );
+      if (isWebTool(event.data.tool)) {
+        upsertWebTrace(event, null);
+      }
       addEventLog(`tool.started · ${event.data.tool}`, JSON.stringify(event.data.arguments || {}));
       break;
     case "tool.finished":
       setAgentState("Tool Result", event.data.tool || "Tool call finished.");
-      updateToolActivity(event.data.tool || "tool", {
+      updateToolActivity(toolActivityKey(event), {
         status: "done",
         title: `已使用 ${event.data.tool || "工具"}`,
         body: summarizeToolResult(event.data.content),
       });
+      if (isWebTool(event.data.tool) || isWebTraceData(event.data.data)) {
+        upsertWebTrace(event, true);
+      }
       addEventLog(`tool.finished · ${event.data.tool}`, event.data.content || "");
       queueAssistantArtifacts(event.data.data?.artifacts);
       if (event.data.data?.skill_action) {
@@ -2898,11 +3126,14 @@ function handleAgentEvent(event) {
       }
       break;
     case "tool.error":
-      updateToolActivity(event.data.tool || "tool", {
+      updateToolActivity(toolActivityKey(event), {
         status: "error",
         title: `${event.data.tool || "工具"} 失败`,
         body: summarizeToolResult(event.data.content),
       });
+      if (isWebTool(event.data.tool) || isWebTraceData(event.data.data)) {
+        upsertWebTrace(event, false);
+      }
       setAgentState("Tool Error", event.data.content || "Tool call failed.");
       addEventLog(event.type, event.data.content || "tool error", true);
       break;

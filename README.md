@@ -121,6 +121,9 @@ All runtime configuration comes from the root `.env`. The most commonly used var
 | `ANOMALO_BUDDY_AUDIO_AI_ENABLED` | Enables Buddy STT/LLM/TTS turns | `false` |
 | `ANOMALO_BUDDY_VISION_ENABLED` | Enables Buddy vision actions | `false` |
 | `PYTHON_SANDBOX_ENABLED` | Publishes the FruitSpy-backed Python tool when ready | `true` |
+| `WEB_TOOLS_ENABLED` | Publishes DuckDuckGo search and Markdown fetch tools | `true` |
+| `WEB_FETCH_PROVIDER` | Fetch mode: `auto`, `direct`, or `crawl4ai` | `auto` |
+| `FRUITSPY_CRAWL_API_BASE_URL` | FruitSpy base URL for dynamic-page Crawl4AI fallback | reuses the Python tool base URL |
 
 See [`.env.example`](.env.example) for the complete template. Empty optional values are intentionally safe to commit.
 
@@ -134,6 +137,12 @@ Anomalo assembles each model request from:
 4. Session history and available tool schemas.
 
 The runtime emits typed events for run start and finish, LLM requests, streamed message deltas, tool calls, tool results, and errors. The browser UI exposes this context for debugging.
+
+The Agent Inspector's **Web Activity** panel records `web_search` and `web_fetch` calls for the
+current session, including DuckDuckGo result lists, fetch backend and timing metadata, and returned
+Markdown. `GET /api/sessions/{session_id}/web-traces` exposes the same in-memory trace data for
+development and evaluation. Direct fetch rejects private and local targets; `auto` mode falls back
+to FruitSpy Crawl4AI when a page appears to require JavaScript rendering.
 
 ### Chat endpoints
 
