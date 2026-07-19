@@ -13,7 +13,7 @@ RUN npm run build
 
 FROM python:3.12-slim AS runtime
 
-ARG ANOMALO_INSTALL_EXTRAS=buddy,stocks
+ARG ANOMALO_INSTALL_EXTRAS=buddy,stocks,vision
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

@@ -94,6 +94,10 @@ class BuddyVisionService:
         self._get_detector()
         return self.status()
 
+    def stop(self) -> dict[str, Any]:
+        self._detector = None
+        return self.status()
+
     def enable(self) -> dict[str, Any]:
         if not self.settings.buddy_vision_enabled:
             raise BuddyVisionConfigurationError(
@@ -300,7 +304,7 @@ class _MediaPipeBlazeFaceDetector:
         except ImportError as exc:
             raise BuddyVisionConfigurationError(
                 "Buddy vision requires MediaPipe BlazeFace. Install with "
-                '`pip install mediapipe` in the Anomalo environment, or use '
+                "`pip install mediapipe` in the Anomalo environment, or use "
                 "`ANOMALO_BUDDY_VISION_PROVIDER=opencv_haar`."
             ) from exc
 

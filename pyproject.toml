@@ -34,7 +34,7 @@ buddy = [
 
 vision = [
   "numpy>=1.26.0; python_version < '3.13'",
-  "opencv-python-headless>=4.11.0",
+  "opencv-python-headless>=4.11.0,<5",
   "pillow>=10.4.0",
 ]
 

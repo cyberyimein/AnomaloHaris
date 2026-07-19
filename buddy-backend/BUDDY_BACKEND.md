@@ -96,7 +96,12 @@ buddy-backend/scripts/run_local_dev.sh
 { "state": "thinking", "text": "asking model" }
 ```
 
-支持状态：`connect`、`disconnect`、`idle`、`listening`、`thinking`、`speaking`、`stop`、`error`、`coding`、`approval`、`done`。
+支持状态：`connect`、`disconnect`、`idle`、`listening`、`thinking`、`waiting_user`、`speaking`、`stop`、`error`、`coding`、`approval`、`done`。`waiting_user` 当前复用固件的 thinking 视觉，但在 Codex run projection 中保留独立语义。
+
+Codex hook 不再把每一个 `PermissionRequest` 直接解释为 Buddy 审批提醒。只有 payload
+明确携带 `requires_user_action=true`（或等价 pending-user 状态），或者启用了 Buddy permission
+bridge 时，Buddy 才进入 approval。自动审批保持 coding，后续 tool/session 事件按 session ID
+清理或更新投影。
 
 ### `POST /api/buddy/approval`
 

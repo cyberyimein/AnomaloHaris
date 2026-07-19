@@ -83,6 +83,12 @@ def test_buddy_gateway_uses_codex_approval_ui_for_approval_state() -> None:
         for item in serial.writes
     )
 
+    gateway.show_approval("shell-42", "Allow npm install?")
+    gateway.set_state("waiting_user", "Choose a database")
+
+    assert any(b"CODEX APPROVAL shell-42 Allow npm install?" in item for item in serial.writes)
+    assert any(b"CB think Choose a database" in item for item in serial.writes)
+
 
 def test_buddy_gateway_records_json_and_text_events() -> None:
     serial = FakeSerial()

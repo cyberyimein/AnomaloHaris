@@ -1,7 +1,10 @@
-from types import SimpleNamespace
-
 from app.api.security import require_management_access
 from app.main import create_app
+from buddy_backend import BuddyConnectionError
+from buddy_backend.codex_projection import (
+    CodexBuddyProjection,
+    CodexRunState,
+)
 from fastapi.testclient import TestClient
 
 
@@ -9,6 +12,7 @@ class FakeBuddyGateway:
     def __init__(self) -> None:
         self.connected = True
         self.state_calls: list[tuple[str, str | None]] = []
+        self.shown_approvals: list[tuple[str, str]] = []
         self.approval_calls: list[tuple[str, str, float]] = []
         self.approval_choice = "approve"
 
@@ -22,6 +26,8 @@ class FakeBuddyGateway:
         return self.connected
 
     def set_state(self, state: str, text: str | None = None) -> dict[str, object]:
+        if not self.connected:
+            raise BuddyConnectionError("Buddy is not connected.")
         self.state_calls.append((state, text))
         return {"state": state, "text": text, "connected": self.connected}
 
@@ -32,11 +38,19 @@ class FakeBuddyGateway:
         *,
         timeout_seconds: float = 30.0,
     ) -> dict[str, object]:
+        if not self.connected:
+            raise BuddyConnectionError("Buddy is not connected.")
         self.approval_calls.append((request_id, text, timeout_seconds))
         return {
             "type": "approval.response",
             "payload": {"id": request_id, "choice": self.approval_choice},
         }
+
+    def show_approval(self, request_id: str, text: str) -> dict[str, object]:
+        if not self.connected:
+            raise BuddyConnectionError("Buddy is not connected.")
+        self.shown_approvals.append((request_id, text))
+        return {"request_id": request_id, "text": text}
 
 
 class FakeBuddyAudioBridge:
@@ -53,13 +67,14 @@ def _client(
     *,
     permission_bridge_enabled: bool = False,
 ) -> TestClient:
-    monkeypatch.setattr("buddy_backend.copilot_api.get_buddy_gateway", lambda: gateway)
+    projection = CodexBuddyProjection(
+        gateway,
+        approval_timeout_seconds=90.0,
+        permission_bridge_enabled=permission_bridge_enabled,
+    )
     monkeypatch.setattr(
-        "buddy_backend.copilot_api.get_settings",
-        lambda: SimpleNamespace(
-            copilot_buddy_approval_timeout_seconds=90.0,
-            copilot_buddy_permission_bridge_enabled=permission_bridge_enabled,
-        ),
+        "buddy_backend.copilot_api.get_codex_buddy_projection",
+        lambda: projection,
     )
     monkeypatch.setattr("app.main.get_buddy_gateway", lambda: gateway)
     monkeypatch.setattr("app.main.get_buddy_audio_bridge", lambda: FakeBuddyAudioBridge())
@@ -117,7 +132,7 @@ def test_post_tool_use_clears_approval_state(monkeypatch) -> None:
     assert gateway.state_calls == [("coding", "exec_command complete")]
 
 
-def test_notification_permission_prompt_sets_approval_state(monkeypatch) -> None:
+def test_automatic_permission_notification_keeps_coding_state(monkeypatch) -> None:
     gateway = FakeBuddyGateway()
     client = _client(monkeypatch, gateway)
 
@@ -133,10 +148,11 @@ def test_notification_permission_prompt_sets_approval_state(monkeypatch) -> None
 
     assert response.status_code == 200
     assert response.json() == {}
-    assert gateway.state_calls == [("approval", "Permission needed")]
+    assert gateway.shown_approvals == []
+    assert gateway.state_calls == [("coding", "continuing")]
 
 
-def test_permission_request_does_not_bridge_by_default(monkeypatch) -> None:
+def test_automatic_permission_request_does_not_alert_by_default(monkeypatch) -> None:
     gateway = FakeBuddyGateway()
     client = _client(monkeypatch, gateway)
 
@@ -148,7 +164,111 @@ def test_permission_request_does_not_bridge_by_default(monkeypatch) -> None:
     assert response.status_code == 200
     assert response.json() == {}
     assert gateway.approval_calls == []
-    assert gateway.state_calls == [("approval", "Allow bash: pwd")]
+    assert gateway.shown_approvals == []
+    assert gateway.state_calls == [("coding", "continuing")]
+
+
+def test_explicit_user_action_uses_correlated_approval_notice(monkeypatch) -> None:
+    gateway = FakeBuddyGateway()
+    client = _client(monkeypatch, gateway)
+
+    payload = {
+        "sessionId": "session-1",
+        "requestId": "shell-42",
+        "toolName": "bash",
+        "toolArgs": {"command": "npm install"},
+        "requires_user_action": True,
+    }
+    first = client.post("/api/copilot/hooks/permissionRequest", json=payload)
+    duplicate = client.post("/api/copilot/hooks/permissionRequest", json=payload)
+
+    assert first.status_code == 200
+    assert duplicate.status_code == 200
+    assert gateway.shown_approvals == [("shell-42", "Allow bash: npm install")]
+    assert gateway.state_calls == []
+
+
+def test_waiting_user_is_distinct_from_approval(monkeypatch) -> None:
+    gateway = FakeBuddyGateway()
+    client = _client(monkeypatch, gateway)
+
+    response = client.post(
+        "/api/copilot/hooks/notification",
+        json={
+            "sessionId": "session-1",
+            "notification_type": "user_input_required",
+            "title": "Choose a database",
+        },
+    )
+
+    assert response.status_code == 200
+    assert gateway.state_calls == [("waiting_user", "Choose a database")]
+    assert gateway.shown_approvals == []
+
+
+def test_older_event_does_not_replace_current_projection(monkeypatch) -> None:
+    gateway = FakeBuddyGateway()
+    client = _client(monkeypatch, gateway)
+
+    current = client.post(
+        "/api/copilot/hooks/userPromptSubmitted",
+        json={"sessionId": "session-1", "sequence": 20, "prompt": "working"},
+    )
+    stale = client.post(
+        "/api/copilot/hooks/errorOccurred",
+        json={"sessionId": "session-1", "sequence": 10, "message": "old error"},
+    )
+
+    assert current.status_code == 200
+    assert stale.status_code == 200
+    assert gateway.state_calls == [("coding", "working")]
+
+
+def test_disconnected_projection_records_order_and_rejects_stale_event() -> None:
+    gateway = FakeBuddyGateway()
+    gateway.connected = False
+    projection = CodexBuddyProjection(gateway)
+
+    projection.handle_event(
+        "userPromptSubmitted",
+        {"sessionId": "session-1", "sequence": 20, "prompt": "current work"},
+    )
+    snapshot = projection.snapshot("session-1")
+
+    assert snapshot.state is CodexRunState.RUNNING
+    assert snapshot.last_order == 20
+    assert snapshot.projection_delivered is False
+
+    gateway.connected = True
+    projection.handle_event(
+        "errorOccurred",
+        {"sessionId": "session-1", "sequence": 10, "message": "old error"},
+    )
+
+    assert projection.snapshot("session-1") == snapshot
+    assert gateway.state_calls == []
+
+
+def test_disconnected_approval_is_delivered_when_event_is_retried() -> None:
+    gateway = FakeBuddyGateway()
+    gateway.connected = False
+    projection = CodexBuddyProjection(gateway)
+    payload = {
+        "sessionId": "session-1",
+        "sequence": 20,
+        "requestId": "shell-42",
+        "toolName": "bash",
+        "requires_user_action": True,
+    }
+
+    projection.handle_event("permissionRequest", payload)
+    assert projection.snapshot("session-1").projection_delivered is False
+
+    gateway.connected = True
+    projection.handle_event("permissionRequest", payload)
+
+    assert gateway.shown_approvals == [("shell-42", "Allow bash")]
+    assert projection.snapshot("session-1").projection_delivered is True
 
 
 def test_permission_request_uses_buddy_approval_when_bridge_enabled(monkeypatch) -> None:
@@ -191,7 +311,7 @@ def test_permission_request_denial_is_returned_to_copilot(monkeypatch) -> None:
         "message": "Buddy denied the permission request.",
     }
     assert gateway.approval_calls[0][1] == "Allow edit: app/main.py"
-    assert gateway.state_calls[-1] == ("done", "denied")
+    assert gateway.state_calls[-1] == ("idle", "denied")
 
 
 def test_disconnected_buddy_falls_back_to_normal_permission_flow(monkeypatch) -> None:

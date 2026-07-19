@@ -95,7 +95,7 @@ def _endpoint_url(env: dict[str, str], event_name: str) -> str:
 
 
 def _timeout_seconds(event_name: str, env: dict[str, str]) -> float:
-    if event_name == "permissionRequest":
+    if event_name.strip().lower() == "permissionrequest":
         return _float_env(env, "ANOMALO_COPILOT_BUDDY_APPROVAL_TIMEOUT_SECONDS", 90.0) + 5.0
     return 5.0
 

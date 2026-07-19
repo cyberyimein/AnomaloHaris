@@ -224,6 +224,7 @@ class BuddyGateway:
             "idle": "CB idle",
             "listening": "CB listen",
             "thinking": "CB think",
+            "waiting_user": "CB think",
             "speaking": "CB speak",
             "stop": "CB stop",
             "error": "CB error",
@@ -276,6 +277,9 @@ class BuddyGateway:
                 f"Timed out waiting for Buddy approval response: {request_id}"
             )
         return event.as_dict()
+
+    def show_approval(self, request_id: str, text: str) -> dict[str, Any]:
+        return self.send_raw_command(f"CODEX APPROVAL {request_id} {text.strip()}")
 
     def wait_for_event(
         self,

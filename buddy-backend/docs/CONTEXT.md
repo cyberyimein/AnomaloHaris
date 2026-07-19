@@ -10,6 +10,10 @@ CoreS3 StackChan device used as a local AI/agent buddy.
   approval policy, and future audio pipeline. The future production host may be
   the Mac mini, but the current USB-connected development machine is not
   necessarily the Mac mini.
+- Codex run projection: the host-owned lifecycle Module that correlates Codex
+  hook events and approvals, then projects the current run onto Buddy presence.
+  A permission event is not user attention until it is explicitly unresolved
+  and requires user action.
 - Firmware role: display buddy state, play sprite animations, drive LEDs/servos,
   read touch input, and expose a small line-based control protocol.
 - Protocol name: Call Buddy.

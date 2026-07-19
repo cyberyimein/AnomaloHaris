@@ -1,6 +1,7 @@
 from functools import lru_cache
 
 from buddy_backend.audio_bridge import BuddyAudioBridge
+from buddy_backend.codex_projection import CodexBuddyProjection
 from buddy_backend.gateway import BuddyGateway
 from buddy_backend.tools import BuddyToolProvider
 from buddy_backend.vision import BuddyVisionService
@@ -77,6 +78,16 @@ def get_mcp_manager() -> MCPManager:
 @lru_cache
 def get_buddy_gateway() -> BuddyGateway:
     return BuddyGateway(get_settings())
+
+
+@lru_cache
+def get_codex_buddy_projection() -> CodexBuddyProjection:
+    settings = get_settings()
+    return CodexBuddyProjection(
+        get_buddy_gateway(),
+        approval_timeout_seconds=settings.copilot_buddy_approval_timeout_seconds,
+        permission_bridge_enabled=settings.copilot_buddy_permission_bridge_enabled,
+    )
 
 
 @lru_cache

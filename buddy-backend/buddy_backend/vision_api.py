@@ -2,9 +2,10 @@ from typing import Any
 
 from app.api.security import require_management_access
 from app.config import get_settings
-from app.container import get_buddy_vision_service
+from app.container import get_buddy_gateway, get_buddy_vision_service
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 
+from buddy_backend import BuddyConnectionError
 from buddy_backend.vision import BuddyVisionConfigurationError, BuddyVisionProcessingError
 
 router = APIRouter(
@@ -49,10 +50,21 @@ async def buddy_vision_status() -> dict[str, Any]:
 
 @router.post("/start", dependencies=[Depends(require_management_access)])
 async def buddy_vision_start() -> dict[str, Any]:
+    service = get_buddy_vision_service()
+    detector_was_loaded = bool(service.status().get("detector_loaded"))
     try:
-        return get_buddy_vision_service().start()
+        result = service.start()
+        command = get_buddy_gateway().send_raw_command("VISION START")
+        return {**result, "capture_command": command["command"]}
     except BuddyVisionConfigurationError as exc:
         raise _vision_http_error(exc) from exc
+    except BuddyConnectionError as exc:
+        if not detector_was_loaded:
+            service.stop()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
 
 
 @router.post("/enable", dependencies=[Depends(require_management_access)])
@@ -65,7 +77,15 @@ async def buddy_vision_enable() -> dict[str, Any]:
 
 @router.post("/disable", dependencies=[Depends(require_management_access)])
 async def buddy_vision_disable() -> dict[str, Any]:
-    return get_buddy_vision_service().disable()
+    try:
+        command = get_buddy_gateway().send_raw_command("VISION STOP")
+    except BuddyConnectionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    result = get_buddy_vision_service().disable()
+    return {**result, "capture_command": command["command"]}
 
 
 @router.post("/detect", dependencies=[Depends(require_management_access)])

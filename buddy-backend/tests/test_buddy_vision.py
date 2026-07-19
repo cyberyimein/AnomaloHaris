@@ -2,6 +2,7 @@ import pytest
 from app.api.security import require_management_access
 from app.config import Settings
 from app.main import create_app
+from buddy_backend import BuddyConnectionError
 from buddy_backend.vision import (
     BuddyFaceBox,
     BuddyVisionConfigurationError,
@@ -35,6 +36,15 @@ class FakeBuddyGateway:
     def send_raw_command(self, command: str) -> dict[str, object]:
         self.commands.append(command)
         return {"command": command, "connected": self.connected}
+
+
+class DisconnectedBuddyGateway(FakeBuddyGateway):
+    def __init__(self) -> None:
+        super().__init__(connected=False)
+
+    def send_raw_command(self, command: str) -> dict[str, object]:
+        del command
+        raise BuddyConnectionError("Buddy is not connected.")
 
 
 class FakeBuddyAudioBridge:
@@ -375,7 +385,9 @@ def test_buddy_vision_detect_endpoint_uses_uploaded_image(monkeypatch) -> None:
 
 def test_buddy_vision_start_endpoint_preloads_detector(monkeypatch) -> None:
     service = FakeVisionService()
+    gateway = FakeBuddyGateway()
     monkeypatch.setattr("buddy_backend.vision_api.get_buddy_vision_service", lambda: service)
+    monkeypatch.setattr("buddy_backend.vision_api.get_buddy_gateway", lambda: gateway)
     monkeypatch.setattr("app.main.get_buddy_gateway", lambda: FakeBuddyGateway())
     monkeypatch.setattr("app.main.get_buddy_audio_bridge", lambda: FakeBuddyAudioBridge())
     app = create_app()
@@ -386,12 +398,16 @@ def test_buddy_vision_start_endpoint_preloads_detector(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert response.json()["detector_loaded"] is True
+    assert response.json()["capture_command"] == "VISION START"
     assert service.started is True
+    assert gateway.commands == ["VISION START"]
 
 
 def test_buddy_vision_disable_endpoint_unloads_detector(monkeypatch) -> None:
     service = FakeVisionService()
+    gateway = FakeBuddyGateway()
     monkeypatch.setattr("buddy_backend.vision_api.get_buddy_vision_service", lambda: service)
+    monkeypatch.setattr("buddy_backend.vision_api.get_buddy_gateway", lambda: gateway)
     monkeypatch.setattr("app.main.get_buddy_gateway", lambda: FakeBuddyGateway())
     monkeypatch.setattr("app.main.get_buddy_audio_bridge", lambda: FakeBuddyAudioBridge())
     app = create_app()
@@ -402,7 +418,50 @@ def test_buddy_vision_disable_endpoint_unloads_detector(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert response.json()["enabled"] is False
+    assert response.json()["capture_command"] == "VISION STOP"
     assert service.disabled is True
+    assert gateway.commands == ["VISION STOP"]
+
+
+def test_buddy_vision_start_endpoint_rolls_back_when_capture_command_fails(
+    monkeypatch,
+) -> None:
+    service = FakeVisionService()
+    monkeypatch.setattr("buddy_backend.vision_api.get_buddy_vision_service", lambda: service)
+    monkeypatch.setattr(
+        "buddy_backend.vision_api.get_buddy_gateway",
+        lambda: DisconnectedBuddyGateway(),
+    )
+    monkeypatch.setattr("app.main.get_buddy_gateway", lambda: FakeBuddyGateway())
+    monkeypatch.setattr("app.main.get_buddy_audio_bridge", lambda: FakeBuddyAudioBridge())
+    app = create_app()
+    app.dependency_overrides[require_management_access] = lambda: None
+
+    response = TestClient(app).post("/api/buddy/vision/start")
+
+    assert response.status_code == 503
+    assert service.started is True
+    assert service.stopped is True
+
+
+def test_buddy_vision_disable_endpoint_preserves_state_when_capture_command_fails(
+    monkeypatch,
+) -> None:
+    service = FakeVisionService()
+    monkeypatch.setattr("buddy_backend.vision_api.get_buddy_vision_service", lambda: service)
+    monkeypatch.setattr(
+        "buddy_backend.vision_api.get_buddy_gateway",
+        lambda: DisconnectedBuddyGateway(),
+    )
+    monkeypatch.setattr("app.main.get_buddy_gateway", lambda: FakeBuddyGateway())
+    monkeypatch.setattr("app.main.get_buddy_audio_bridge", lambda: FakeBuddyAudioBridge())
+    app = create_app()
+    app.dependency_overrides[require_management_access] = lambda: None
+
+    response = TestClient(app).post("/api/buddy/vision/disable")
+
+    assert response.status_code == 503
+    assert service.disabled is False
 
 
 def test_buddy_vision_enable_endpoint_restores_feature(monkeypatch) -> None:
@@ -464,6 +523,7 @@ class FakeVisionService:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
         self.started = False
+        self.stopped = False
         self.disabled = False
         self.enabled = False
 
@@ -483,6 +543,15 @@ class FakeVisionService:
         self.disabled = True
         return {
             "enabled": False,
+            "active": False,
+            "detector_loaded": False,
+            "provider": "fake_blazeface",
+        }
+
+    def stop(self) -> dict[str, object]:
+        self.stopped = True
+        return {
+            "enabled": True,
             "active": False,
             "detector_loaded": False,
             "provider": "fake_blazeface",

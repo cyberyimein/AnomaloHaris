@@ -100,8 +100,141 @@
           <p>Send a message to start.</p>
         </div>
         <template v-for="(turn, index) in conversationTurns" :key="`${turn.role}-${index}`">
+          <section
+            v-if="turn.role === 'activity-group' && turn.status === 'running'"
+            class="activity-group activity-group-live"
+            aria-live="polite"
+          >
+            <article
+              v-if="activityGroupFading(turn)"
+              :key="activityGroupFading(turn).id"
+              class="activity-row activity-row-fading"
+              :class="[
+                `activity-${activityGroupFading(turn).kind}`,
+                `activity-${activityGroupFading(turn).status}`,
+              ]"
+            >
+              <span class="activity-icon" aria-hidden="true">
+                <AlertTriangle
+                  v-if="activityGroupFading(turn).status === 'error'"
+                  :size="17"
+                />
+                <Wrench v-else-if="activityGroupFading(turn).kind === 'tool'" :size="17" />
+                <Search
+                  v-else-if="activityGroupFading(turn).kind === 'context'"
+                  :size="17"
+                />
+                <CircleCheck v-else :size="17" />
+              </span>
+              <div class="activity-copy">
+                <div class="activity-title">{{ activityGroupFading(turn).title }}</div>
+              </div>
+            </article>
+            <article
+              v-if="activityGroupPrevious(turn)"
+              :key="activityGroupPrevious(turn).id"
+              class="activity-row activity-row-recent"
+              :class="[
+                `activity-${activityGroupPrevious(turn).kind}`,
+                `activity-${activityGroupPrevious(turn).status}`,
+              ]"
+            >
+              <span class="activity-icon" aria-hidden="true">
+                <LoaderCircle
+                  v-if="activityGroupPrevious(turn).status === 'running'"
+                  :size="18"
+                  class="activity-spinner"
+                />
+                <AlertTriangle
+                  v-else-if="activityGroupPrevious(turn).status === 'error'"
+                  :size="18"
+                />
+                <Wrench v-else-if="activityGroupPrevious(turn).kind === 'tool'" :size="18" />
+                <Search
+                  v-else-if="activityGroupPrevious(turn).kind === 'context'"
+                  :size="18"
+                />
+                <CircleCheck v-else :size="18" />
+              </span>
+              <div class="activity-copy">
+                <div class="activity-title">{{ activityGroupPrevious(turn).title }}</div>
+                <div v-if="activityGroupPrevious(turn).body" class="activity-body">
+                  {{ activityGroupPrevious(turn).body }}
+                </div>
+              </div>
+            </article>
+            <article
+              v-if="activityGroupCurrent(turn)"
+              :key="activityGroupCurrent(turn).id"
+              class="activity-row activity-row-current"
+              :class="[
+                `activity-${activityGroupCurrent(turn).kind}`,
+                `activity-${activityGroupCurrent(turn).status}`,
+              ]"
+            >
+              <span class="activity-icon" aria-hidden="true">
+                <LoaderCircle
+                  v-if="activityGroupCurrent(turn).status === 'running'"
+                  :size="18"
+                  class="activity-spinner"
+                />
+                <AlertTriangle
+                  v-else-if="activityGroupCurrent(turn).status === 'error'"
+                  :size="18"
+                />
+                <Wrench v-else-if="activityGroupCurrent(turn).kind === 'tool'" :size="18" />
+                <Search
+                  v-else-if="activityGroupCurrent(turn).kind === 'context'"
+                  :size="18"
+                />
+                <CircleCheck v-else :size="18" />
+              </span>
+              <div class="activity-copy">
+                <div class="activity-title">{{ activityGroupCurrent(turn).title }}</div>
+                <div v-if="activityGroupCurrent(turn).body" class="activity-body">
+                  {{ activityGroupCurrent(turn).body }}
+                </div>
+              </div>
+            </article>
+          </section>
+          <details
+            v-else-if="turn.role === 'activity-group'"
+            class="activity-group activity-group-complete"
+            :class="`activity-group-${turn.status}`"
+          >
+            <summary class="activity-group-summary">
+              <span class="activity-icon" aria-hidden="true">
+                <AlertTriangle v-if="turn.status === 'error'" :size="18" />
+                <CircleCheck v-else :size="18" />
+              </span>
+              <span class="activity-copy">
+                <span class="activity-title">{{ activityGroupSummary(turn) }}</span>
+                <span class="activity-body">{{ activityGroupSubtitle(turn) }}</span>
+              </span>
+              <ChevronRight :size="16" class="activity-group-chevron" />
+            </summary>
+            <div class="activity-history">
+              <article
+                v-for="item in turn.items"
+                :key="item.id"
+                class="activity-row"
+                :class="[`activity-${item.kind}`, `activity-${item.status}`]"
+              >
+                <span class="activity-icon" aria-hidden="true">
+                  <AlertTriangle v-if="item.status === 'error'" :size="17" />
+                  <Wrench v-else-if="item.kind === 'tool'" :size="17" />
+                  <Search v-else-if="item.kind === 'context'" :size="17" />
+                  <CircleCheck v-else :size="17" />
+                </span>
+                <span class="activity-copy">
+                  <span class="activity-title">{{ item.title }}</span>
+                  <span v-if="item.body" class="activity-body">{{ item.body }}</span>
+                </span>
+              </article>
+            </div>
+          </details>
           <article
-            v-if="turn.role === 'activity'"
+            v-else-if="turn.role === 'activity'"
             class="activity-row"
             :class="[`activity-${turn.kind}`, `activity-${turn.status}`]"
             aria-live="polite"
@@ -1407,8 +1540,10 @@ const copiedWebTraceId = ref("");
 const conversationTurns = ref([]);
 const activeAssistantIndex = ref(null);
 const pendingAssistantArtifacts = ref([]);
-const activeThinkingActivityIndex = ref(null);
-const activeToolActivityIndexes = new Map();
+const activeThinkingActivityId = ref("");
+const activeActivityGroupIndex = ref(null);
+const activitySequence = ref(0);
+const activeToolActivityIds = new Map();
 const markdownRenderTimers = new Map();
 const conversationEl = ref(null);
 const composerActionsEl = ref(null);
@@ -2938,8 +3073,9 @@ function submitMessage() {
   void nextTick(resizeComposer);
   activeAssistantIndex.value = null;
   pendingAssistantArtifacts.value = [];
-  activeThinkingActivityIndex.value = null;
-  activeToolActivityIndexes.clear();
+  activeThinkingActivityId.value = "";
+  activeActivityGroupIndex.value = null;
+  activeToolActivityIds.clear();
   setAgentState("Queued", "Message sent. Waiting for run start.");
   socket.value.send(JSON.stringify({ type: "user.message", content }));
   void scrollConversation();
@@ -2975,8 +3111,10 @@ function resetConversationState() {
   conversationTurns.value = [];
   activeAssistantIndex.value = null;
   pendingAssistantArtifacts.value = [];
-  activeThinkingActivityIndex.value = null;
-  activeToolActivityIndexes.clear();
+  activeThinkingActivityId.value = "";
+  activeActivityGroupIndex.value = null;
+  activitySequence.value = 0;
+  activeToolActivityIds.clear();
   events.value = [];
   eventSequence.value = 0;
   webTraces.value = [];
@@ -3166,13 +3304,14 @@ function handleAgentEvent(event) {
     case "run.started":
       runId.value = event.run_id;
       runTitle.value = "Running";
+      activeActivityGroupIndex.value = null;
       setAgentState("Thinking", "Building context and preparing tools.");
       addEventLog("run.started", event.run_id);
       break;
     case "llm.request":
       renderLlmRequest(event.data.request, event.data.context, event.data.iteration);
       setAgentState("LLM Request", summarizeLlmRequest(event.data.request));
-      activeThinkingActivityIndex.value = addConversationActivity({
+      activeThinkingActivityId.value = addConversationActivity({
         kind: "thinking",
         status: "running",
         title: "正在思考",
@@ -3201,7 +3340,7 @@ function handleAgentEvent(event) {
         title: "已决定使用工具",
       });
       setAgentState("Tool", event.data.tool || "Tool call started.");
-      activeToolActivityIndexes.set(
+      activeToolActivityIds.set(
         toolActivityKey(event),
         addConversationActivity({
           kind: "tool",
@@ -3257,7 +3396,8 @@ function handleAgentEvent(event) {
         title: "思考中断",
         body: event.data.error || "Run error.",
       });
-      activeToolActivityIndexes.clear();
+      completeActivityGroup("error");
+      activeToolActivityIds.clear();
       setAgentState("Error", event.data.error || "Run error.");
       addEventLog(event.type, event.data.error || "error", true);
       break;
@@ -3268,7 +3408,8 @@ function handleAgentEvent(event) {
         status: "done",
         title: "已完成思考",
       });
-      activeToolActivityIndexes.clear();
+      completeActivityGroup("done");
+      activeToolActivityIds.clear();
       setAgentState("Done", "Run finished.");
       addEventLog("run.finished", "done");
       void loadTools();
@@ -3357,70 +3498,142 @@ function renderMcpServers(servers) {
 }
 
 function addConversationActivity({ kind, status, title, body = "" }) {
-  const index =
-    conversationTurns.value.push({
-      role: "activity",
-      kind,
-      status,
-      title,
-      body,
-    }) - 1;
+  const group = ensureActivityGroup();
+  const id = `activity-${++activitySequence.value}`;
+  group.items.push({ id, kind, status, title, body });
+  group.status = "running";
   void scrollConversation();
-  return index;
+  return id;
 }
 
-function updateConversationActivity(index, updates) {
-  if (typeof index !== "number") {
-    return;
+function ensureActivityGroup() {
+  const activeIndex = activeActivityGroupIndex.value;
+  const activeGroup =
+    typeof activeIndex === "number" ? conversationTurns.value[activeIndex] : null;
+  if (activeGroup?.role === "activity-group" && activeGroup.status === "running") {
+    return activeGroup;
   }
-  const turn = conversationTurns.value[index];
-  if (!turn || turn.role !== "activity") {
-    return;
-  }
-  conversationTurns.value[index] = {
-    ...turn,
-    ...updates,
+
+  const group = {
+    role: "activity-group",
+    status: "running",
+    items: [],
   };
-  void scrollConversation();
+  activeActivityGroupIndex.value = conversationTurns.value.push(group) - 1;
+  return group;
+}
+
+function updateConversationActivity(activityId, updates) {
+  if (!activityId) {
+    return;
+  }
+  for (const turn of conversationTurns.value) {
+    if (turn?.role !== "activity-group") {
+      continue;
+    }
+    const itemIndex = turn.items.findIndex((item) => item.id === activityId);
+    if (itemIndex >= 0) {
+      turn.items[itemIndex] = {
+        ...turn.items[itemIndex],
+        ...updates,
+      };
+      void scrollConversation();
+      return;
+    }
+  }
 }
 
 function finishThinkingActivity(updates) {
-  if (typeof activeThinkingActivityIndex.value === "number") {
-    updateConversationActivity(activeThinkingActivityIndex.value, updates);
-    activeThinkingActivityIndex.value = null;
+  if (activeThinkingActivityId.value) {
+    updateConversationActivity(activeThinkingActivityId.value, updates);
+    activeThinkingActivityId.value = "";
     return;
   }
 
-  const fallbackIndex = findLatestRunningThinkingActivityIndex();
-  if (typeof fallbackIndex === "number") {
-    updateConversationActivity(fallbackIndex, updates);
+  const fallbackId = findLatestRunningThinkingActivityId();
+  if (fallbackId) {
+    updateConversationActivity(fallbackId, updates);
   }
-  activeThinkingActivityIndex.value = null;
+  activeThinkingActivityId.value = "";
 }
 
-function findLatestRunningThinkingActivityIndex() {
+function findLatestRunningThinkingActivityId() {
   const latestUserIndex = findLatestUserTurnIndex();
   for (let index = conversationTurns.value.length - 1; index > latestUserIndex; index -= 1) {
     const turn = conversationTurns.value[index];
-    if (turn?.role === "activity" && turn.kind === "thinking" && turn.status === "running") {
-      return index;
+    if (turn?.role !== "activity-group") {
+      continue;
+    }
+    for (let itemIndex = turn.items.length - 1; itemIndex >= 0; itemIndex -= 1) {
+      const item = turn.items[itemIndex];
+      if (item.kind === "thinking" && item.status === "running") {
+        return item.id;
+      }
     }
   }
-  return null;
+  return "";
 }
 
 function updateToolActivity(toolName, updates) {
   const key = toolName || "tool";
-  const index = activeToolActivityIndexes.get(key);
-  if (typeof index === "number") {
-    updateConversationActivity(index, updates);
-    activeToolActivityIndexes.delete(key);
+  const activityId = activeToolActivityIds.get(key);
+  if (activityId) {
+    updateConversationActivity(activityId, updates);
+    activeToolActivityIds.delete(key);
     return;
   }
   addConversationActivity({
     kind: "tool",
     ...updates,
   });
+}
+
+function completeActivityGroup(status) {
+  const index = activeActivityGroupIndex.value;
+  const group = typeof index === "number" ? conversationTurns.value[index] : null;
+  if (group?.role === "activity-group") {
+    group.status = status;
+    if (status === "error") {
+      for (const item of group.items) {
+        if (item.status === "running") {
+          item.status = "error";
+        }
+      }
+    }
+  }
+  activeActivityGroupIndex.value = null;
+}
+
+function activityGroupCurrent(group) {
+  return group.items[group.items.length - 1] || null;
+}
+
+function activityGroupPrevious(group) {
+  return group.items[group.items.length - 2] || null;
+}
+
+function activityGroupFading(group) {
+  return group.items[group.items.length - 3] || null;
+}
+
+function activityGroupSummary(group) {
+  if (group.status === "error") {
+    return "执行中断";
+  }
+  return "已完成";
+}
+
+function activityGroupSubtitle(group) {
+  const toolCount = group.items.filter((item) => item.kind === "tool").length;
+  const thinkingCount = group.items.filter((item) => item.kind === "thinking").length;
+  const parts = [];
+  if (thinkingCount) {
+    parts.push(`${thinkingCount} 次思考`);
+  }
+  if (toolCount) {
+    parts.push(`${toolCount} 次工具调用`);
+  }
+  return `${parts.join(" · ") || `${group.items.length} 个事件`} · 点击展开`;
 }
 
 function appendAssistantContent(content) {
