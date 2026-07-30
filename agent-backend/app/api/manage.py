@@ -1,7 +1,7 @@
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.api.security import require_management_access
 from app.container import get_mcp_manager, get_skill_manager
@@ -26,10 +26,21 @@ class EnabledRequest(BaseModel):
 class MCPServerRequest(BaseModel):
     name: str
     description: str = ""
-    command: str
+    transport: Literal["stdio", "streamable_http"] = "stdio"
+    protocol: Literal["auto", "modern", "legacy"] = "auto"
+    command: str = ""
     args: list[str] = Field(default_factory=list)
     env: dict[str, str] = Field(default_factory=dict)
+    url: str = ""
     enabled: bool = True
+
+    @model_validator(mode="after")
+    def validate_transport_target(self) -> "MCPServerRequest":
+        if self.transport == "stdio" and not self.command.strip():
+            raise ValueError("command is required for stdio MCP servers")
+        if self.transport == "streamable_http" and not self.url.strip():
+            raise ValueError("url is required for streamable_http MCP servers")
+        return self
 
 
 @router.get("/skills")
@@ -71,6 +82,9 @@ async def upsert_mcp_server(request: MCPServerRequest) -> dict[str, Any]:
         command=request.command,
         args=request.args,
         env=request.env,
+        transport=request.transport,
+        url=request.url,
+        protocol=request.protocol,
         description=request.description,
         enabled=request.enabled,
     )

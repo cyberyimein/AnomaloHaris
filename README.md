@@ -178,6 +178,34 @@ uv sync --extra mcp
 
 MCP configurations can start local processes and pass environment variables. Only add servers you trust, and never commit secrets inside the YAML file.
 
+Anomalo uses the MCP Python SDK v2 and prefers the stateless `2026-07-28`
+protocol. With `protocol: auto`, it probes `server/discover` first and falls
+back to the legacy `initialize` handshake when necessary. Both local stdio and
+remote Streamable HTTP servers are supported:
+
+```yaml
+mcp_servers:
+  local_tools:
+    enabled: true
+    transport: stdio
+    protocol: auto
+    command: uvx
+    args: [example-mcp-server]
+    env: {}
+
+  fruitspy_room_climate:
+    enabled: true
+    transport: streamable_http
+    protocol: auto
+    # Use FruitSpy's LAN address when Anomalo runs in a container.
+    # A same-host, non-container process can use http://127.0.0.1:8848 instead.
+    url: http://192.168.31.31:8848/api/v1/tools/room-climate/mcp
+```
+
+Use `protocol: modern` or `protocol: legacy` only as diagnostic overrides.
+Remote MCP URLs and subprocess commands are trusted-code configuration and
+remain protected by the management API access controls.
+
 ## Python sandbox integration
 
 The `sandbox_python_run` tool delegates execution to a separately deployed FruitSpy service. FruitSpy is not included in this repository. Anomalo only exposes the tool when the service is ready and a shared token is configured.

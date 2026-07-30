@@ -1,1 +1,7 @@
-mcp_servers: {}
+mcp_servers:
+  fruitspy_room_climate:
+    enabled: true
+    description: Read temperature, humidity, CO2, and battery data from FruitSpy.
+    transport: streamable_http
+    protocol: auto
+    url: http://192.168.31.31:8848/api/v1/tools/room-climate/mcp

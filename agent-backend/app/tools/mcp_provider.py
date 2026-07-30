@@ -1,5 +1,8 @@
 import asyncio
 import hashlib
+import time
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -7,7 +10,6 @@ from typing import Any
 import yaml
 
 from app.tools.base import ToolContext, ToolProvider, ToolResult, ToolSpec, ensure_tool_name
-
 
 ACTIVATE_MCP_TOOL_NAME = "mcp_activate"
 DEACTIVATE_MCP_TOOL_NAME = "mcp_deactivate"
@@ -19,9 +21,12 @@ class MCPServerDefinition:
     name: str
     description: str
     enabled: bool
+    transport: str
+    protocol: str
     command: str
     args: tuple[str, ...]
     env: dict[str, str]
+    url: str
 
 
 @dataclass(frozen=True)
@@ -32,11 +37,49 @@ class MCPToolDefinition:
     parameters: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class MCPConnectionInfo:
+    protocol_version: str
+    protocol_era: str
+    transport: str
+
+
+@dataclass(frozen=True)
+class MCPToolCatalog:
+    tools: tuple[Any, ...]
+    ttl_ms: int
+    connection: MCPConnectionInfo
+
+
+@dataclass(frozen=True)
+class MCPCallResponse:
+    result: Any
+    connection: MCPConnectionInfo
+
+
+@dataclass(frozen=True)
+class _MCPToolCacheEntry:
+    config_key: str
+    tools: tuple[MCPToolDefinition, ...]
+    mapping: dict[str, str]
+    expires_at: float
+
+
+MCPClientFactory = Callable[[MCPServerDefinition, float], Any]
+
+
 class MCPProvider(ToolProvider):
-    def __init__(self, config_path: Path, timeout_seconds: float = 8.0) -> None:
+    def __init__(
+        self,
+        config_path: Path,
+        timeout_seconds: float = 8.0,
+        client_factory: MCPClientFactory | None = None,
+    ) -> None:
         self.config_path = config_path
         self.timeout_seconds = timeout_seconds
-        self._tool_cache: dict[str, tuple[str, tuple[MCPToolDefinition, ...], dict[str, str]]] = {}
+        self._client_factory = client_factory or _open_mcp_client
+        self._tool_cache: dict[str, _MCPToolCacheEntry] = {}
+        self._connection_info: dict[str, MCPConnectionInfo] = {}
 
     async def list_tools(self, context: ToolContext | None = None) -> list[ToolSpec]:
         if not _mcp_available():
@@ -52,7 +95,9 @@ class MCPProvider(ToolProvider):
             if context is None
             else [name for name in sorted(context.active_mcp_servers) if name in definitions]
         )
-        active_specs, _ = await self._list_tools_with_errors(active_server_names=active_server_names)
+        active_specs, _ = await self._list_tools_with_errors(
+            active_server_names=active_server_names
+        )
         tools.extend(active_specs)
         return tools
 
@@ -77,7 +122,9 @@ class MCPProvider(ToolProvider):
         if name == DEACTIVATE_MCP_TOOL_NAME:
             return _deactivate_mcp_server(definitions, arguments, context)
 
-        active_server_names = set(definitions) if context is None else set(context.active_mcp_servers)
+        active_server_names = (
+            set(definitions) if context is None else set(context.active_mcp_servers)
+        )
         for definition in definitions.values():
             if not _tool_name_matches_server(definition.name, name):
                 continue
@@ -105,23 +152,29 @@ class MCPProvider(ToolProvider):
 
             try:
                 result = await _call_mcp_server_tool(
-                    _server_payload(definition),
+                    definition,
                     original_tool_name,
                     arguments,
                     self.timeout_seconds,
+                    self._client_factory,
                 )
             except TimeoutError:
                 return ToolResult(name=name, ok=False, content="MCP tool call timed out.")
             except Exception as exc:  # noqa: BLE001
                 return ToolResult(name=name, ok=False, content=f"MCP tool error: {exc}")
 
+            self._connection_info[definition.name] = result.connection
             return ToolResult(
                 name=name,
-                content=_stringify_mcp_result(result),
-                data={
-                    "raw": str(result),
+                ok=not bool(getattr(result.result, "is_error", False)),
+                content=_stringify_mcp_result(result.result),
+                data=_mcp_result_data(result.result)
+                | {
                     "original_tool_name": original_tool_name,
                     "mcp_server_name": definition.name,
+                    "protocol_version": result.connection.protocol_version,
+                    "protocol_era": result.connection.protocol_era,
+                    "transport": result.connection.transport,
                 },
             )
 
@@ -132,7 +185,11 @@ class MCPProvider(ToolProvider):
         active_server_names = (
             [definition.name for definition in definitions]
             if context is None
-            else [name for name in sorted(context.active_mcp_servers) if name in {d.name for d in definitions}]
+            else [
+                name
+                for name in sorted(context.active_mcp_servers)
+                if name in {d.name for d in definitions}
+            ]
         )
         tools, errors = await self._list_tools_with_errors(active_server_names=active_server_names)
         return {
@@ -144,6 +201,7 @@ class MCPProvider(ToolProvider):
                     definition,
                     active=definition.name in active_server_names,
                     error=errors.get(definition.name),
+                    connection=self._connection_info.get(definition.name),
                 )
                 for definition in definitions
             ],
@@ -189,30 +247,44 @@ class MCPProvider(ToolProvider):
     async def _tool_name_mapping(self, definition: MCPServerDefinition) -> dict[str, str]:
         cache_key = _server_cache_key(definition)
         cached = self._tool_cache.get(definition.name)
-        if cached and cached[0] == cache_key:
-            return dict(cached[2])
+        if cached and cached.config_key == cache_key and cached.expires_at > time.monotonic():
+            return dict(cached.mapping)
         await self._server_tools(definition)
         cached = self._tool_cache.get(definition.name)
-        return {} if cached is None else dict(cached[2])
+        return {} if cached is None else dict(cached.mapping)
 
     async def _server_tools(self, definition: MCPServerDefinition) -> tuple[MCPToolDefinition, ...]:
         cache_key = _server_cache_key(definition)
         cached = self._tool_cache.get(definition.name)
-        if cached and cached[0] == cache_key:
-            return cached[1]
+        if cached and cached.config_key == cache_key and cached.expires_at > time.monotonic():
+            return cached.tools
 
-        tools = await _list_mcp_server_tools(_server_payload(definition), self.timeout_seconds)
+        catalog = await _list_mcp_server_tools(
+            definition,
+            self.timeout_seconds,
+            self._client_factory,
+        )
         discovered = tuple(
             MCPToolDefinition(
-                public_name=_public_mcp_tool_name(definition.name, str(getattr(tool, "name", "tool"))),
+                public_name=_public_mcp_tool_name(
+                    definition.name,
+                    str(getattr(tool, "name", "tool")),
+                ),
                 original_name=str(getattr(tool, "name", "tool")),
                 description=str(getattr(tool, "description", "") or ""),
                 parameters=_tool_schema(tool),
             )
-            for tool in tools
+            for tool in catalog.tools
         )
         mapping = {tool.public_name: tool.original_name for tool in discovered}
-        self._tool_cache[definition.name] = (cache_key, discovered, mapping)
+        ttl_seconds = max(0.0, catalog.ttl_ms / 1000)
+        self._tool_cache[definition.name] = _MCPToolCacheEntry(
+            config_key=cache_key,
+            tools=discovered,
+            mapping=mapping,
+            expires_at=time.monotonic() + ttl_seconds,
+        )
+        self._connection_info[definition.name] = catalog.connection
         return discovered
 
     def _enabled_server_definitions(self) -> dict[str, MCPServerDefinition]:
@@ -241,7 +313,11 @@ class MCPManager:
         ]
 
     def catalog_message(self) -> dict[str, str] | None:
-        definitions = [definition for definition in _load_server_definitions(self.config_path) if definition.enabled]
+        definitions = [
+            definition
+            for definition in _load_server_definitions(self.config_path)
+            if definition.enabled
+        ]
         if not definitions:
             return None
 
@@ -253,8 +329,11 @@ class MCPManager:
             "role": "system",
             "content": "\n".join(
                 [
-                    "Available MCP servers are large tool packs. Activate one only when the request clearly needs it.",
-                    f"Use {ACTIVATE_MCP_TOOL_NAME} before calling tools from a server, and {DEACTIVATE_MCP_TOOL_NAME} when the tool pack is no longer needed.",
+                    "Available MCP servers are large tool packs. Activate one only "
+                    "when the request clearly needs it.",
+                    f"Use {ACTIVATE_MCP_TOOL_NAME} before calling tools from a server, "
+                    f"and {DEACTIVATE_MCP_TOOL_NAME} when the tool pack "
+                    "is no longer needed.",
                     "Manual session MCP selection may already have activated some servers.",
                     "",
                     *entries,
@@ -290,9 +369,12 @@ class MCPManager:
     def upsert_server(
         self,
         name: str,
-        command: str,
+        command: str = "",
         args: list[str] | None = None,
         env: dict[str, str] | None = None,
+        transport: str = "stdio",
+        url: str = "",
+        protocol: str = "auto",
         description: str = "",
         enabled: bool = True,
     ) -> dict[str, Any]:
@@ -302,9 +384,12 @@ class MCPManager:
         servers[safe_name] = {
             "enabled": enabled,
             "description": description,
+            "transport": transport,
+            "protocol": protocol,
             "command": command,
             "args": args or [],
             "env": env or {},
+            "url": url,
         }
         self._save_config(config)
         return servers[safe_name]
@@ -345,63 +430,102 @@ def _mcp_available() -> bool:
     return True
 
 
-async def _list_mcp_server_tools(server: dict[str, Any], timeout_seconds: float) -> list[Any]:
-    return await asyncio.wait_for(_list_mcp_server_tools_once(server), timeout=timeout_seconds)
-
-
-async def _list_mcp_server_tools_once(server: dict[str, Any]) -> list[Any]:
-    from mcp import ClientSession
-    from mcp.client.stdio import stdio_client
-
-    params = _server_parameters(server)
-    async with stdio_client(params) as (read, write):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            result = await session.list_tools()
-            return list(result.tools)
+async def _list_mcp_server_tools(
+    server: MCPServerDefinition,
+    timeout_seconds: float,
+    client_factory: MCPClientFactory,
+) -> MCPToolCatalog:
+    async with asyncio.timeout(timeout_seconds):
+        async with client_factory(server, timeout_seconds) as client:
+            result = await client.list_tools()
+            ttl_ms = getattr(result, "ttl_ms", None)
+            return MCPToolCatalog(
+                tools=tuple(result.tools),
+                ttl_ms=30_000 if ttl_ms is None else max(0, int(ttl_ms)),
+                connection=_client_connection_info(client, server.transport),
+            )
 
 
 async def _call_mcp_server_tool(
-    server: dict[str, Any],
+    server: MCPServerDefinition,
     tool_name: str,
     arguments: dict[str, Any],
     timeout_seconds: float,
-) -> Any:
-    return await asyncio.wait_for(
-        _call_mcp_server_tool_once(server, tool_name, arguments),
-        timeout=timeout_seconds,
+    client_factory: MCPClientFactory,
+) -> MCPCallResponse:
+    async with asyncio.timeout(timeout_seconds):
+        async with client_factory(server, timeout_seconds) as client:
+            result = await client.call_tool(tool_name, arguments)
+            return MCPCallResponse(
+                result=result,
+                connection=_client_connection_info(client, server.transport),
+            )
+
+
+@asynccontextmanager
+async def _open_mcp_client(
+    server: MCPServerDefinition,
+    timeout_seconds: float,
+) -> AsyncIterator[Any]:
+    from mcp import Client
+    from mcp.client.stdio import StdioServerParameters, stdio_client
+    from mcp_types import Implementation
+
+    mode = _client_mode(server.protocol)
+    target: Any
+    if server.transport == "streamable_http":
+        if not server.url:
+            raise ValueError(f"MCP server '{server.name}' requires a URL")
+        target = server.url
+    elif server.transport == "stdio":
+        if not server.command:
+            raise ValueError(f"MCP server '{server.name}' requires a command")
+        target = stdio_client(
+            StdioServerParameters(
+                command=server.command,
+                args=list(server.args),
+                env=dict(server.env),
+            )
+        )
+    else:
+        raise ValueError(f"Unsupported MCP transport: {server.transport}")
+
+    client = Client(
+        target,
+        mode=mode,
+        read_timeout_seconds=timeout_seconds,
+        client_info=Implementation(name="anomalo", version="0.1.0"),
     )
+    async with client:
+        yield client
 
 
-async def _call_mcp_server_tool_once(
-    server: dict[str, Any],
-    tool_name: str,
-    arguments: dict[str, Any],
-) -> Any:
-    from mcp import ClientSession
-    from mcp.client.stdio import stdio_client
-
-    params = _server_parameters(server)
-    async with stdio_client(params) as (read, write):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            return await session.call_tool(tool_name, arguments)
+def _client_mode(protocol: str) -> str:
+    normalized = protocol.strip().lower()
+    if normalized in {"", "auto"}:
+        return "auto"
+    if normalized == "legacy":
+        return "legacy"
+    if normalized in {"modern", "2026-07-28"}:
+        return "2026-07-28"
+    raise ValueError(f"Unsupported MCP protocol mode: {protocol}")
 
 
-def _server_parameters(server: dict[str, Any]) -> Any:
-    from mcp import StdioServerParameters
+def _client_connection_info(client: Any, transport: str) -> MCPConnectionInfo:
+    from mcp_types.version import MODERN_PROTOCOL_VERSIONS
 
-    return StdioServerParameters(
-        command=str(server["command"]),
-        args=[str(arg) for arg in server.get("args", [])],
-        env={str(key): str(value) for key, value in server.get("env", {}).items()},
+    protocol_version = str(client.protocol_version)
+    return MCPConnectionInfo(
+        protocol_version=protocol_version,
+        protocol_era="modern" if protocol_version in MODERN_PROTOCOL_VERSIONS else "legacy",
+        transport=transport,
     )
 
 
 def _public_mcp_tool_name(server_name: str, original_tool_name: str) -> str:
     safe_server = ensure_tool_name(server_name)[:20]
     safe_tool = ensure_tool_name(original_tool_name)
-    digest = hashlib.sha1(f"{server_name}:{original_tool_name}".encode("utf-8")).hexdigest()[:8]
+    digest = hashlib.sha1(f"{server_name}:{original_tool_name}".encode()).hexdigest()[:8]
     suffix = f"_{digest}"
     prefix = f"mcp_{safe_server}_"
     available = max(1, 64 - len(prefix) - len(suffix))
@@ -427,6 +551,17 @@ def _stringify_mcp_result(result: Any) -> str:
     return str(result)
 
 
+def _mcp_result_data(result: Any) -> dict[str, Any]:
+    structured = getattr(result, "structured_content", None)
+    meta = getattr(result, "meta", None)
+    data: dict[str, Any] = {"raw": str(result)}
+    if structured is not None:
+        data["structured_content"] = structured
+    if meta:
+        data["meta"] = dict(meta)
+    return data
+
+
 def _load_server_definitions(config_path: Path) -> list[MCPServerDefinition]:
     config_path.parent.mkdir(parents=True, exist_ok=True)
     if not config_path.exists():
@@ -443,9 +578,12 @@ def _load_server_definitions(config_path: Path) -> list[MCPServerDefinition]:
                 name=safe_name,
                 description=str(raw_server.get("description") or "").strip(),
                 enabled=bool(raw_server.get("enabled", True)),
+                transport=_normalized_transport(raw_server),
+                protocol=str(raw_server.get("protocol") or "auto").strip().lower(),
                 command=str(raw_server.get("command") or ""),
                 args=tuple(str(arg) for arg in raw_server.get("args", [])),
                 env={str(key): str(value) for key, value in raw_server.get("env", {}).items()},
+                url=str(raw_server.get("url") or "").strip(),
             )
         )
     return definitions
@@ -456,14 +594,20 @@ def _server_definition_payload(
     *,
     active: bool,
     error: str | None = None,
+    connection: MCPConnectionInfo | None = None,
 ) -> dict[str, Any]:
     return {
         "name": definition.name,
         "description": definition.description,
         "enabled": definition.enabled,
         "active": active,
+        "transport": definition.transport,
+        "protocol": definition.protocol,
         "command": definition.command,
         "args": list(definition.args),
+        "url": definition.url,
+        "protocol_version": connection.protocol_version if connection else None,
+        "protocol_era": connection.protocol_era if connection else None,
         "error": error,
     }
 
@@ -523,14 +667,17 @@ def _activate_mcp_server(
     server_name = ensure_tool_name(str(arguments.get("server_name") or ""))
     definition = definitions.get(server_name)
     if definition is None:
-        return ToolResult(name=ACTIVATE_MCP_TOOL_NAME, ok=False, content=f"Unknown MCP server: {server_name}")
+        return ToolResult(
+            name=ACTIVATE_MCP_TOOL_NAME, ok=False, content=f"Unknown MCP server: {server_name}"
+        )
 
     already_active = server_name in (set(context.active_mcp_servers) if context else set())
     state_text = "already active" if already_active else "activated"
     return ToolResult(
         name=ACTIVATE_MCP_TOOL_NAME,
         content=(
-            f"MCP server '{definition.name}' {state_text}. Its tool pack will be loaded in the next model turn."
+            f"MCP server '{definition.name}' {state_text}. "
+            "Its tool pack will be loaded in the next model turn."
         ),
         data={
             "mcp_action": "activate",
@@ -548,7 +695,9 @@ def _deactivate_mcp_server(
     server_name = ensure_tool_name(str(arguments.get("server_name") or ""))
     definition = definitions.get(server_name)
     if definition is None:
-        return ToolResult(name=DEACTIVATE_MCP_TOOL_NAME, ok=False, content=f"Unknown MCP server: {server_name}")
+        return ToolResult(
+            name=DEACTIVATE_MCP_TOOL_NAME, ok=False, content=f"Unknown MCP server: {server_name}"
+        )
 
     was_active = server_name in (set(context.active_mcp_servers) if context else set())
     return ToolResult(
@@ -566,9 +715,12 @@ def _deactivate_mcp_server(
 
 def _server_payload(definition: MCPServerDefinition) -> dict[str, Any]:
     return {
+        "transport": definition.transport,
+        "protocol": definition.protocol,
         "command": definition.command,
         "args": list(definition.args),
         "env": dict(definition.env),
+        "url": definition.url,
     }
 
 
@@ -580,3 +732,10 @@ def _server_cache_key(definition: MCPServerDefinition) -> str:
 def _tool_name_matches_server(server_name: str, tool_name: str) -> bool:
     safe_server = ensure_tool_name(server_name)[:20]
     return tool_name.startswith(f"mcp_{safe_server}_")
+
+
+def _normalized_transport(raw_server: dict[str, Any]) -> str:
+    explicit = str(raw_server.get("transport") or "").strip().lower()
+    if explicit:
+        return explicit
+    return "streamable_http" if raw_server.get("url") else "stdio"
