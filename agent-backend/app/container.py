@@ -29,7 +29,7 @@ from app.tools.web import WebToolProvider
 
 @lru_cache
 def get_session_store() -> SessionStore:
-    return SessionStore()
+    return SessionStore(get_settings().session_db_path)
 
 
 @lru_cache

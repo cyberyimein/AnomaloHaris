@@ -266,6 +266,7 @@ class Settings(BaseSettings):
         le=59,
         alias="ANOMALO_STOCK_SCHEDULE_MINUTE",
     )
+    data_dir: Path = Field(default=REPO_ROOT / "data", alias="ANOMALO_DATA_DIR")
 
     config_dir: Path = AGENT_BACKEND_ROOT / "config"
     skills_dir: Path = AGENT_BACKEND_ROOT / "skills"
@@ -283,6 +284,10 @@ class Settings(BaseSettings):
     @property
     def frontend_assets_dir(self) -> Path:
         return self.frontend_dir / "assets"
+
+    @property
+    def session_db_path(self) -> Path:
+        return self.data_dir / "sessions.sqlite3"
 
     @property
     def normalized_environment(self) -> str:

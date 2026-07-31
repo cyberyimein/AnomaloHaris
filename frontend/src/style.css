@@ -3653,6 +3653,24 @@ button {
   background: linear-gradient(135deg, #1d4ed8, #0f766e);
 }
 
+.stop-button {
+  background: linear-gradient(135deg, #dc2626, #b91c1c);
+  box-shadow: 0 10px 26px rgba(185, 28, 28, 0.2);
+}
+
+.stop-button:hover {
+  background: linear-gradient(135deg, #b91c1c, #991b1b);
+}
+
+.resume-button {
+  background: linear-gradient(135deg, #0f766e, #15803d);
+  box-shadow: 0 10px 26px rgba(21, 128, 61, 0.18);
+}
+
+.resume-button:hover {
+  background: linear-gradient(135deg, #0f766e, #166534);
+}
+
 button:disabled,
 .send-button:disabled {
   cursor: not-allowed;

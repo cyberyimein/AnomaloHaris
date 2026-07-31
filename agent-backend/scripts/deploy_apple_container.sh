@@ -21,7 +21,7 @@ Environment:
                           defaults REMOTE_DIR to ROOT/anomalo-deploy and REMOTE_DATA_DIR
                           to ROOT/anomalo-data
   REMOTE_DIR              Remote deploy directory. Default: .anomalo/anomalo-deploy
-  REMOTE_DATA_DIR         Remote data directory for artifact persistence. Default: .anomalo/anomalo-data
+  REMOTE_DATA_DIR         Remote data directory for SQLite and artifact persistence. Default: .anomalo/anomalo-data
   CONTAINER_NAME          Remote container name. Default: anomalo
   HOST_PORT               Remote host HTTP port. Default: 8000
   APP_PORT                Container HTTP port. Default: 8000
@@ -29,6 +29,7 @@ Environment:
   BUDDY_TCP_PORT          Buddy TCP port. Default: 8787
   SITE_URL                Public site URL. Default: http://<ssh-host>:HOST_PORT
   MOUNT_ARTIFACTS         Mount persistent agent artifacts and stock runtime data. Default: 1
+  ALLOW_EPHEMERAL_DATA    Allow starting without the persistent data volume after a mount failure. Default: 0
   START_CONTAINER_SYSTEM  Start Apple container system before deploy. Default: 1
   REMOTE_CONTAINER_CLI    Remote Apple container CLI path. Default: container
   CONTAINER_NETWORK       Dedicated container network. Default: anomalo-external
@@ -102,6 +103,7 @@ APP_PORT="${APP_PORT:-8000}"
 BUDDY_TRANSPORT="${BUDDY_TRANSPORT:-tcp}"
 BUDDY_TCP_PORT="${BUDDY_TCP_PORT:-8787}"
 MOUNT_ARTIFACTS="${MOUNT_ARTIFACTS:-1}"
+ALLOW_EPHEMERAL_DATA="${ALLOW_EPHEMERAL_DATA:-0}"
 START_CONTAINER_SYSTEM="${START_CONTAINER_SYSTEM:-1}"
 CONTAINER_NETWORK="${CONTAINER_NETWORK:-anomalo-external}"
 
@@ -145,6 +147,7 @@ ssh "${ssh_args[@]}" "$ssh_target" "bash -s" -- \
     "$REMOTE_ENV_FILE" \
     "$REMOTE_DATA_DIR" \
     "$MOUNT_ARTIFACTS" \
+    "$ALLOW_EPHEMERAL_DATA" \
     "$START_CONTAINER_SYSTEM" \
     "$CONTAINER_NETWORK" <<'REMOTE_SCRIPT'
 set -Eeuo pipefail
@@ -161,8 +164,9 @@ site_url="$9"
 remote_env_file="${10}"
 remote_data_dir="${11}"
 mount_artifacts="${12}"
-start_container_system="${13}"
-container_network="${14}"
+allow_ephemeral_data="${13}"
+start_container_system="${14}"
+container_network="${15}"
 
 if [[ "$start_container_system" == "1" ]]; then
     "$container_cli" system start >/dev/null 2>&1 || true
@@ -187,6 +191,7 @@ remove_existing_container() {
 
 build_run_args() {
     local include_mount="$1"
+    local include_data="${2:-1}"
     run_args=(run --detach --name "$container_name")
     if [[ -n "$container_network" ]]; then
         run_args+=(--network "$container_network")
@@ -204,6 +209,13 @@ build_run_args() {
         run_args+=(--env "ANOMALO_BUDDY_TCP_HOST=0.0.0.0")
         run_args+=(--env "ANOMALO_BUDDY_TCP_PORT=$buddy_tcp_port")
     fi
+    if [[ "$include_data" == "1" ]]; then
+        mkdir -p "$remote_data_dir"
+        run_args+=(--env "ANOMALO_DATA_DIR=/data")
+        run_args+=(--volume "$remote_data_dir:/data")
+    else
+        run_args+=(--env "ANOMALO_DATA_DIR=/tmp/anomalo-data")
+    fi
     if [[ "$include_mount" == "1" ]]; then
         mkdir -p "$remote_data_dir/artifacts"
         mkdir -p "$remote_data_dir/stocks/outputs"
@@ -218,14 +230,15 @@ build_run_args() {
 load_image
 remove_existing_container
 
-build_run_args "$mount_artifacts"
+build_run_args "$mount_artifacts" "1"
 if ! "$container_cli" "${run_args[@]}"; then
-    if [[ "$mount_artifacts" == "1" ]]; then
-        echo "container run with artifacts volume failed; retrying without volume" >&2
+    if [[ "$allow_ephemeral_data" == "1" ]]; then
+        echo "container run with persistent data volume failed; retrying without volumes" >&2
         remove_existing_container
-        build_run_args "0"
+        build_run_args "0" "0"
         "$container_cli" "${run_args[@]}"
     else
+        echo "container run failed; refusing to start without the persistent data volume" >&2
         exit 1
     fi
 fi

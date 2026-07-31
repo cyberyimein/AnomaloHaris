@@ -318,6 +318,8 @@ ENV_FILE=agent-backend/deploy/anomalo.container.env \
 
 The private deployment environment file is ignored by Git. Review both scripts and adapt the network, storage, SSH, and host-loopback settings to your machine before running them.
 
+The deployment script mounts `REMOTE_DATA_DIR` from the deployment host to `/data` in the container. Session history and Stop/Resume checkpoints are stored in `/data/sessions.sqlite3`, so keep this directory on persistent host storage and do not delete it when replacing the container. By default it is `.anomalo/anomalo-data` under the remote user's home; set `REMOTE_STORAGE_ROOT` or `REMOTE_DATA_DIR` to an explicit host path when needed.
+
 ## Tests and linting
 
 Install development dependencies, then run:

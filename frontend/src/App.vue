@@ -336,18 +336,57 @@
             ref="messageInputEl"
             class="composer-input"
             v-model="messageInput"
+            :disabled="runActive"
             placeholder="Message Anomalo"
             rows="1"
             @input="resizeComposer"
             @keydown="handleComposerKeydown"
           ></textarea>
-          <span class="send-button-wrap" :data-tooltip="sendShortcutTooltip" :title="sendShortcutTooltip">
+          <span
+            v-if="runActive"
+            class="send-button-wrap"
+            data-tooltip="Stop run"
+            title="Stop run"
+          >
+            <button
+              id="stopButton"
+              class="send-button stop-button"
+              type="button"
+              aria-label="Stop run"
+              @click="stopRun"
+            >
+              <Square :size="17" fill="currentColor" />
+            </button>
+          </span>
+          <span
+            v-else-if="resumeAvailable"
+            class="send-button-wrap"
+            data-tooltip="Resume run"
+            title="Resume run"
+          >
+            <button
+              id="resumeButton"
+              class="send-button resume-button"
+              type="button"
+              aria-label="Resume run"
+              :disabled="sendDisabled"
+              @click="resumeRun"
+            >
+              <Play :size="18" fill="currentColor" />
+            </button>
+          </span>
+          <span
+            v-else
+            class="send-button-wrap"
+            :data-tooltip="sendShortcutTooltip"
+            :title="sendShortcutTooltip"
+          >
             <button
               id="sendButton"
               class="send-button"
               type="submit"
               :aria-label="`Send message (${SEND_SHORTCUT})`"
-              :disabled="sendDisabled"
+              :disabled="sendDisabled || resumeAvailable"
             >
               <SendHorizontal :size="19" />
             </button>
@@ -767,11 +806,13 @@ import {
   Layers3,
   LoaderCircle,
   PanelRightOpen,
+  Play,
   Plus,
   RefreshCw,
   Search,
   SendHorizontal,
   SlidersHorizontal,
+  Square,
   Upload,
   Wrench,
   X,
@@ -881,7 +922,14 @@ const agentTransport = createAgentTransport({
   onState: setAgentState,
   onError: (error) => addEventLog("ws.error", String(error), true),
 });
-const { sessionId, connectionStatus, connectionClass, sendDisabled } = agentTransport.state;
+const {
+  sessionId,
+  connectionStatus,
+  connectionClass,
+  sendDisabled,
+  runActive,
+  resumeAvailable,
+} = agentTransport.state;
 
 const skills = ref([]);
 const skillStatus = ref("Loading skills...");
@@ -1184,13 +1232,27 @@ function formatDateTime(value, { includeSeconds = false } = {}) {
 
 function submitMessage() {
   const content = messageInput.value.trim();
-  if (!content || sendDisabled.value || !agentTransport.send(content)) {
+  if (
+    !content ||
+    sendDisabled.value ||
+    runActive.value ||
+    resumeAvailable.value ||
+    !agentTransport.send(content)
+  ) {
     return;
   }
 
   beginUserTurn(content);
   messageInput.value = "";
   void nextTick(resizeComposer);
+}
+
+function stopRun() {
+  agentTransport.stopRun();
+}
+
+function resumeRun() {
+  agentTransport.resumeRun();
 }
 
 function startNewConversation() {

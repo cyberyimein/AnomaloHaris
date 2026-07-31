@@ -21,10 +21,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     ANOMALO_ENV=production \
     ANOMALO_BUDDY_AUDIO_AI_ENABLED=false \
     ANOMALO_BUDDY_AUDIO_DEBUG_STORAGE=off \
+    ANOMALO_DATA_DIR=/data \
     PYTHON_SANDBOX_ENABLED=true \
     FRUITSPY_PYTHON_TOOL_BASE_URL=http://127.0.0.1:8848
 
 WORKDIR /app
+
+RUN mkdir -p /data
 
 RUN set -eux; \
     apt_packages=""; \

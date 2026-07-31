@@ -69,10 +69,26 @@ describe("AgentTransport", () => {
     expect(onState).toHaveBeenCalledWith("Idle", "Connected. Waiting for input.");
     expect(onEvent).toHaveBeenCalledWith({ type: "run.started" });
     expect(transport.send("hello")).toBe(true);
+    expect(transport.state.runActive.value).toBe(true);
     expect(JSON.parse(sockets[0].sent[0])).toEqual({
       type: "user.message",
       content: "hello",
     });
+    expect(transport.stopRun()).toBe(true);
+    expect(JSON.parse(sockets[0].sent[1])).toEqual({ type: "run.stop" });
+    sockets[0].emit("message", {
+      data: JSON.stringify({ type: "run.stopped", data: { can_resume: true } }),
+    });
+    expect(transport.state.runActive.value).toBe(false);
+    expect(transport.state.resumeAvailable.value).toBe(true);
+    expect(transport.resumeRun()).toBe(true);
+    expect(JSON.parse(sockets[0].sent[2])).toEqual({ type: "run.resume" });
+    expect(transport.state.runActive.value).toBe(true);
+    sockets[0].emit("message", {
+      data: JSON.stringify({ type: "run.error", data: { can_resume: true } }),
+    });
+    expect(transport.state.runActive.value).toBe(false);
+    expect(transport.state.resumeAvailable.value).toBe(true);
   });
 
   it("reconnects after the active socket closes and ignores stale sockets", () => {

@@ -24,6 +24,7 @@ export function createAgentSessionProjection({
   const iterationCount = ref("0");
   const stateDetail = ref("Waiting for input.");
   const runTitle = ref("Ready");
+  const resumeAvailable = ref(false);
   const contextStats = ref([]);
   const contextSegments = ref([]);
   const contextMessages = ref([]);
@@ -42,7 +43,8 @@ export function createAgentSessionProjection({
     switch (event.type) {
       case "run.started":
         runId.value = event.run_id;
-        runTitle.value = "Running";
+        runTitle.value = data.resumed ? "Resuming" : "Running";
+        resumeAvailable.value = false;
         activeActivityGroupIndex = null;
         setAgentState("Thinking", "Building context and preparing tools.");
         addEventLog("run.started", event.run_id);
@@ -117,6 +119,7 @@ export function createAgentSessionProjection({
         break;
       case "run.error":
         runTitle.value = "Error";
+        resumeAvailable.value = Boolean(data.can_resume);
         flushMarkdownRender(activeAssistantIndex);
         activeAssistantIndex = null;
         finishThinkingActivity({
@@ -129,8 +132,19 @@ export function createAgentSessionProjection({
         setAgentState("Error", data.error || "Run error.");
         addEventLog(event.type, data.error || "error", true);
         break;
+      case "run.stopped":
+        runTitle.value = "Paused";
+        resumeAvailable.value = Boolean(data.can_resume);
+        flushMarkdownRender(activeAssistantIndex);
+        finishThinkingActivity({ status: "done", title: "已暂停" });
+        completeActivityGroup("stopped");
+        activeToolActivityIds.clear();
+        setAgentState("Stopped", "Run paused. Resume to continue.");
+        addEventLog(event.type, data.reason || "user_stop");
+        break;
       case "run.finished":
         runTitle.value = "Complete";
+        resumeAvailable.value = false;
         reconcileFinalAssistantContent(data.final_text || "");
         finishThinkingActivity({ status: "done", title: "已完成思考" });
         completeActivityGroup("done");
@@ -165,6 +179,7 @@ export function createAgentSessionProjection({
     runId.value = "none";
     iterationCount.value = "0";
     runTitle.value = "Ready";
+    resumeAvailable.value = false;
     contextStats.value = [];
     contextSegments.value = [];
     contextMessages.value = [];
@@ -274,6 +289,12 @@ export function createAgentSessionProjection({
         for (const item of group.items) {
           if (item.status === "running") {
             item.status = "error";
+          }
+        }
+      } else if (status === "stopped") {
+        for (const item of group.items) {
+          if (item.status === "running") {
+            item.status = "stopped";
           }
         }
       }
@@ -539,6 +560,7 @@ export function createAgentSessionProjection({
       iterationCount,
       stateDetail,
       runTitle,
+      resumeAvailable,
       contextStats,
       contextSegments,
       contextMessages,
@@ -567,7 +589,13 @@ export function activityGroupFading(group) {
 }
 
 export function activityGroupSummary(group) {
-  return group.status === "error" ? "执行中断" : "已完成";
+  if (group.status === "error") {
+    return "执行中断";
+  }
+  if (group.status === "stopped") {
+    return "已暂停";
+  }
+  return "已完成";
 }
 
 export function activityGroupSubtitle(group) {

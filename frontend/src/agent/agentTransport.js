@@ -15,6 +15,8 @@ export function createAgentTransport({
   const connectionStatus = ref("Disconnected");
   const connectionClass = ref("error");
   const sendDisabled = ref(true);
+  const runActive = ref(false);
+  const resumeAvailable = ref(false);
 
   let socket = null;
   let reconnectTimer = null;
@@ -43,6 +45,7 @@ export function createAgentTransport({
       connectionStatus.value = "Disconnected";
       connectionClass.value = "error";
       sendDisabled.value = true;
+      runActive.value = false;
       onState?.("Offline", "WebSocket disconnected. Reconnecting...");
       clearReconnectTimer();
       reconnectTimer = setTimeout(connect, reconnectDelayMs);
@@ -53,7 +56,24 @@ export function createAgentTransport({
         return;
       }
       try {
-        onEvent?.(JSON.parse(message.data));
+        const event = JSON.parse(message.data);
+        if (event.type === "session.state") {
+          runActive.value = false;
+          resumeAvailable.value = Boolean(event.data?.can_resume);
+        } else if (event.type === "run.started") {
+          runActive.value = true;
+          resumeAvailable.value = false;
+        } else if (event.type === "run.finished") {
+          runActive.value = false;
+          resumeAvailable.value = false;
+        } else if (event.type === "run.error") {
+          runActive.value = false;
+          resumeAvailable.value = Boolean(event.data?.can_resume);
+        } else if (event.type === "run.stopped") {
+          runActive.value = false;
+          resumeAvailable.value = Boolean(event.data?.can_resume);
+        }
+        onEvent?.(event);
       } catch (error) {
         onError?.(error);
       }
@@ -65,7 +85,31 @@ export function createAgentTransport({
     if (!value.trim() || socket?.readyState !== socketOpenState(socket)) {
       return false;
     }
+    runActive.value = true;
+    resumeAvailable.value = false;
     socket.send(JSON.stringify({ type: "user.message", content: value }));
+    return true;
+  }
+
+  function stopRun() {
+    if (!runActive.value || socket?.readyState !== socketOpenState(socket)) {
+      return false;
+    }
+    socket.send(JSON.stringify({ type: "run.stop" }));
+    return true;
+  }
+
+  function resumeRun() {
+    if (
+      !resumeAvailable.value ||
+      runActive.value ||
+      socket?.readyState !== socketOpenState(socket)
+    ) {
+      return false;
+    }
+    runActive.value = true;
+    resumeAvailable.value = false;
+    socket.send(JSON.stringify({ type: "run.resume" }));
     return true;
   }
 
@@ -79,6 +123,8 @@ export function createAgentTransport({
     connectionStatus.value = "Connecting";
     connectionClass.value = "muted";
     sendDisabled.value = true;
+    runActive.value = false;
+    resumeAvailable.value = false;
     connect();
     return sessionId.value;
   }
@@ -90,6 +136,7 @@ export function createAgentTransport({
     socket = null;
     previousSocket?.close();
     sendDisabled.value = true;
+    runActive.value = false;
   }
 
   function clearReconnectTimer() {
@@ -105,9 +152,13 @@ export function createAgentTransport({
       connectionStatus,
       connectionClass,
       sendDisabled,
+      runActive,
+      resumeAvailable,
     },
     connect,
     send,
+    stopRun,
+    resumeRun,
     startNewSession,
     stop,
   };

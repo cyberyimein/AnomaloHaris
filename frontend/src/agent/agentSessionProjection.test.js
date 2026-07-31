@@ -104,6 +104,25 @@ describe("AgentSessionProjection", () => {
     });
   });
 
+  it("keeps partial output and exposes a resumable paused state", () => {
+    const projection = createProjection();
+
+    projection.beginUserTurn("执行长任务");
+    projection.handle(event("run.started"));
+    projection.handle(event("message.delta", { content: "已完成一部分" }));
+    projection.handle(
+      event("run.stopped", { reason: "user_stop", can_resume: true }),
+    );
+
+    expect(projection.state.runTitle.value).toBe("Paused");
+    expect(projection.state.agentState.value).toBe("Stopped");
+    expect(projection.state.resumeAvailable.value).toBe(true);
+    expect(projection.state.conversationTurns.value.at(-1)).toMatchObject({
+      role: "assistant",
+      content: "已完成一部分",
+    });
+  });
+
   it("reconciles web traces and artifact-producing tools", () => {
     const onRefresh = vi.fn();
     const projection = createProjection({ onRefresh });

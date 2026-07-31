@@ -1,3 +1,4 @@
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from copy import deepcopy
@@ -21,6 +22,13 @@ class LLMStreamEvent:
     type: str
     content: str = ""
     tool_calls: list[LLMToolCall] = field(default_factory=list)
+
+
+class LLMStreamInterrupted(Exception):
+    def __init__(self, content: str, tool_calls: list[LLMToolCall]) -> None:
+        super().__init__("LLM stream interrupted")
+        self.content = content
+        self.tool_calls = tool_calls
 
 
 class OpenAIChatClient:
@@ -51,44 +59,45 @@ class OpenAIChatClient:
         )
 
         pending_tool_calls: dict[int, dict[str, str]] = {}
-        async for chunk in stream:
-            choice = chunk.choices[0]
-            delta = choice.delta
+        assistant_content = ""
+        try:
+            async for chunk in stream:
+                choice = chunk.choices[0]
+                delta = choice.delta
 
-            if delta.content:
-                yield LLMStreamEvent(type="message.delta", content=delta.content)
+                if delta.content:
+                    assistant_content += delta.content
+                    yield LLMStreamEvent(type="message.delta", content=delta.content)
 
-            if delta.tool_calls:
-                for tool_delta in delta.tool_calls:
-                    index = tool_delta.index
-                    pending = pending_tool_calls.setdefault(
-                        index,
-                        {"id": "", "name": "", "arguments": ""},
-                    )
-                    if tool_delta.id:
-                        pending["id"] += tool_delta.id
-                    if tool_delta.function and tool_delta.function.name:
-                        pending["name"] += tool_delta.function.name
-                    if tool_delta.function and tool_delta.function.arguments:
-                        pending["arguments"] += tool_delta.function.arguments
-
-            if choice.finish_reason == "tool_calls":
-                yield LLMStreamEvent(
-                    type="tool_calls",
-                    tool_calls=[
-                        LLMToolCall(
-                            id=value["id"] or f"call_{index}",
-                            name=value["name"],
-                            arguments=_parse_tool_arguments(value["arguments"]),
+                if delta.tool_calls:
+                    for tool_delta in delta.tool_calls:
+                        index = tool_delta.index
+                        pending = pending_tool_calls.setdefault(
+                            index,
+                            {"id": "", "name": "", "arguments": ""},
                         )
-                        for index, value in sorted(pending_tool_calls.items())
-                    ],
-                )
-                return
+                        if tool_delta.id:
+                            pending["id"] += tool_delta.id
+                        if tool_delta.function and tool_delta.function.name:
+                            pending["name"] += tool_delta.function.name
+                        if tool_delta.function and tool_delta.function.arguments:
+                            pending["arguments"] += tool_delta.function.arguments
 
-            if choice.finish_reason in {"stop", "length", "content_filter"}:
-                yield LLMStreamEvent(type="message.done")
-                return
+                if choice.finish_reason == "tool_calls":
+                    yield LLMStreamEvent(
+                        type="tool_calls",
+                        tool_calls=_tool_calls_from_pending(pending_tool_calls),
+                    )
+                    return
+
+                if choice.finish_reason in {"stop", "length", "content_filter"}:
+                    yield LLMStreamEvent(type="message.done")
+                    return
+        except asyncio.CancelledError as exc:
+            raise LLMStreamInterrupted(
+                content=assistant_content,
+                tool_calls=_tool_calls_from_pending(pending_tool_calls),
+            ) from exc
 
     def request_payload(
         self,
@@ -129,3 +138,14 @@ def _parse_tool_arguments(raw: str) -> dict[str, Any]:
     if isinstance(value, dict):
         return value
     return {"value": value}
+
+
+def _tool_calls_from_pending(pending_tool_calls: dict[int, dict[str, str]]) -> list[LLMToolCall]:
+    return [
+        LLMToolCall(
+            id=value["id"] or f"call_{index}",
+            name=value["name"],
+            arguments=_parse_tool_arguments(value["arguments"]),
+        )
+        for index, value in sorted(pending_tool_calls.items())
+    ]

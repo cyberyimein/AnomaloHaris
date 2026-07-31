@@ -1,6 +1,8 @@
+import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
 from typing import Any
 
 from app.agent.events import AgentEvent, event, make_run_id
@@ -8,13 +10,39 @@ from app.agent.memory import load_agent_memory_message
 from app.agent.prompts import load_prompt_messages
 from app.agent.session import SessionStore
 from app.config import Settings
-from app.llm.openai_client import LLMToolCall, OpenAIChatClient
+from app.llm.openai_client import LLMStreamInterrupted, LLMToolCall, OpenAIChatClient
 from app.tools.base import ToolContext, ToolResult
 from app.tools.mcp_provider import MCPManager
 from app.tools.registry import ToolRegistry
 from app.tools.skills import SkillManager
 
 logger = logging.getLogger(__name__)
+RESUME_PROMPT = (
+    "Continue the interrupted task from the saved context. Preserve completed work, "
+    "recover from any interrupted tool call, and finish the user's request."
+)
+
+
+@dataclass
+class _RunState:
+    session_id: str
+    run_id: str
+    prompt_profile: str
+    checkpoint_user_content: str
+    history_messages: list[dict[str, Any]]
+    current_user_message: dict[str, Any]
+    iteration: int = 0
+    loop_messages: list[dict[str, Any]] = field(default_factory=list)
+    assistant_text: str = ""
+    final_assistant_text: str = ""
+    pending_tool_calls: list[LLMToolCall] = field(default_factory=list)
+    completed_tool_call_ids: set[str] = field(default_factory=set)
+    active_tool_index: int | None = None
+    tool_message_added: bool = False
+    stop_requested: bool = False
+    stop_reason: str = "stopped"
+    checkpoint_saved: bool = False
+    completed: bool = False
 
 
 class AgentRuntime:
@@ -33,33 +61,152 @@ class AgentRuntime:
         self.mcp = mcp
         self.tools = tools
         self.llm = llm
+        self._active_runs: dict[str, _RunState] = {}
+
+    def request_stop(self, session_id: str, *, reason: str = "user_stop") -> str | None:
+        state = self._active_runs.get(session_id)
+        if state is None:
+            return None
+        state.stop_requested = True
+        state.stop_reason = reason
+        return state.run_id
+
+    def has_checkpoint(self, session_id: str) -> bool:
+        return self.sessions.has_checkpoint(session_id)
 
     async def run(
         self,
         session_id: str,
-        user_content: str,
+        user_content: str | None = None,
         *,
         prompt_profile: str | None = None,
+        resume: bool = False,
     ) -> AsyncIterator[AgentEvent]:
         run_id = make_run_id()
-        profile_name = prompt_profile or self.settings.agent_prompt_profile
-        logger.info(
-            "Agent run started: session_id=%s profile=%s",
-            session_id,
-            profile_name,
-        )
-        yield event("run.started", session_id, run_id)
-
-        try:
-            prompt_messages = load_prompt_messages(
-                self.settings.prompts_config_path,
-                profile_name,
+        if session_id in self._active_runs:
+            yield event(
+                "run.error",
+                session_id,
+                run_id,
+                error="A run is already active for this session.",
             )
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("Prompt loading failed for session_id=%s", session_id)
-            yield event("run.error", session_id, run_id, error=str(exc))
+            return
+        if not resume and not str(user_content or "").strip():
+            yield event("run.error", session_id, run_id, error="Message content is required.")
             return
 
+        checkpoint = self.sessions.get_checkpoint(session_id) if resume else None
+        if resume and checkpoint is None:
+            yield event(
+                "run.error",
+                session_id,
+                run_id,
+                error="No paused run is available for this session.",
+            )
+            return
+        if not resume and self.sessions.has_checkpoint(session_id):
+            yield event(
+                "run.error",
+                session_id,
+                run_id,
+                error=(
+                    "A paused run exists for this session. "
+                    "Resume it before sending a new message."
+                ),
+                can_resume=True,
+            )
+            return
+
+        if checkpoint is not None:
+            self.sessions.replace(session_id, checkpoint.messages)
+
+        profile_name = prompt_profile or (
+            checkpoint.prompt_profile
+            if checkpoint is not None
+            else self.settings.agent_prompt_profile
+        )
+        history_messages = self.sessions.get_messages(session_id)
+        checkpoint_user_content = (
+            checkpoint.user_content
+            if resume and checkpoint is not None
+            else str(user_content or "")
+        )
+        current_user_message = {
+            "role": "user",
+            "content": RESUME_PROMPT if resume else str(user_content or ""),
+        }
+        state = _RunState(
+            session_id=session_id,
+            run_id=run_id,
+            prompt_profile=profile_name,
+            checkpoint_user_content=checkpoint_user_content,
+            history_messages=history_messages,
+            current_user_message=current_user_message,
+            iteration=checkpoint.iteration if resume and checkpoint is not None else 0,
+        )
+        self._active_runs[session_id] = state
+        self.sessions.append(session_id, current_user_message)
+        logger.info(
+            "Agent run started: session_id=%s run_id=%s profile=%s resume=%s",
+            session_id,
+            run_id,
+            profile_name,
+            resume,
+        )
+
+        try:
+            yield event("run.started", session_id, run_id, resumed=resume)
+            async for item in self._run(state, profile_name):
+                if item.type == "run.finished":
+                    state.completed = True
+                    if resume:
+                        self.sessions.clear_checkpoint(session_id)
+                elif item.type == "run.error" and resume:
+                    item.data.setdefault("can_resume", self.sessions.has_checkpoint(session_id))
+                yield item
+        except LLMStreamInterrupted as exc:
+            state.assistant_text = exc.content
+            state.pending_tool_calls = exc.tool_calls
+            self._save_checkpoint(state)
+            yield event(
+                "run.stopped",
+                session_id,
+                run_id,
+                reason=state.stop_reason,
+                checkpointed=True,
+                can_resume=True,
+            )
+        except asyncio.CancelledError:
+            self._save_checkpoint(state)
+            yield event(
+                "run.stopped",
+                session_id,
+                run_id,
+                reason=state.stop_reason,
+                checkpointed=True,
+                can_resume=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Agent run failed for session_id=%s", session_id)
+            state.completed = True
+            yield event(
+                "run.error",
+                session_id,
+                run_id,
+                error=str(exc),
+                can_resume=resume and self.sessions.has_checkpoint(session_id),
+            )
+        finally:
+            if not state.completed and not state.checkpoint_saved:
+                self._save_checkpoint(state)
+            if self._active_runs.get(session_id) is state:
+                self._active_runs.pop(session_id, None)
+
+    async def _run(self, state: _RunState, profile_name: str) -> AsyncIterator[AgentEvent]:
+        prompt_messages = load_prompt_messages(
+            self.settings.prompts_config_path,
+            profile_name,
+        )
         memory_message = load_agent_memory_message(self.settings.agent_memory_path)
         memory_messages = [memory_message] if memory_message is not None else []
         skill_catalog_message = self.skills.skill_catalog_message()
@@ -68,27 +215,27 @@ class AgentRuntime:
         )
         mcp_catalog_message = self.mcp.catalog_message()
         mcp_catalog_messages = [mcp_catalog_message] if mcp_catalog_message is not None else []
-        history_messages = self.sessions.get_messages(session_id)
-        current_user_message = {"role": "user", "content": user_content}
-        loop_messages: list[dict[str, Any]] = []
-        self.sessions.append(session_id, {"role": "user", "content": user_content})
 
-        debug_result = await self._maybe_run_debug_command(session_id, run_id, user_content)
+        debug_result = await self._maybe_run_debug_command(
+            state.session_id,
+            state.run_id,
+            str(state.current_user_message["content"]),
+        )
         if debug_result is not None:
             async for item in debug_result:
                 yield item
             return
 
-        iteration = 0
-        final_assistant_text = ""
-
-        while iteration <= self.settings.max_tool_iterations:
-            iteration += 1
-            assistant_text = ""
-            tool_calls: list[LLMToolCall] = []
-            active_skill_names = self.sessions.get_active_skills(session_id)
+        while state.iteration <= self.settings.max_tool_iterations:
+            state.iteration += 1
+            state.assistant_text = ""
+            state.pending_tool_calls = []
+            state.completed_tool_call_ids = set()
+            state.active_tool_index = None
+            state.tool_message_added = False
+            active_skill_names = self.sessions.get_active_skills(state.session_id)
             active_skill_messages = self.skills.build_active_skill_messages(active_skill_names)
-            active_mcp_server_names = self.sessions.get_active_mcp_servers(session_id)
+            active_mcp_server_names = self.sessions.get_active_mcp_servers(state.session_id)
             active_mcp_messages = self.mcp.build_active_server_messages(active_mcp_server_names)
             messages = [
                 *prompt_messages,
@@ -97,11 +244,11 @@ class AgentRuntime:
                 *active_skill_messages,
                 *mcp_catalog_messages,
                 *active_mcp_messages,
-                *history_messages,
-                current_user_message,
-                *loop_messages,
+                *state.history_messages,
+                state.current_user_message,
+                *state.loop_messages,
             ]
-            all_tools = await self.tools.openai_tools(self._tool_context(session_id))
+            all_tools = await self.tools.openai_tools(self._tool_context(state.session_id))
             current_user_message_index = (
                 len(prompt_messages)
                 + len(memory_messages)
@@ -109,113 +256,96 @@ class AgentRuntime:
                 + len(active_skill_messages)
                 + len(mcp_catalog_messages)
                 + len(active_mcp_messages)
-                + len(history_messages)
+                + len(state.history_messages)
             )
 
-            try:
-                yield event(
-                    "llm.request",
-                    session_id,
-                    run_id,
+            yield event(
+                "llm.request",
+                state.session_id,
+                state.run_id,
+                profile=profile_name,
+                iteration=state.iteration,
+                context=_context_assembly(
                     profile=profile_name,
-                    iteration=iteration,
-                    context=_context_assembly(
-                        profile=profile_name,
-                        prompt_message_count=len(prompt_messages),
-                        memory_message_count=len(memory_messages),
-                        skill_catalog_message_count=len(skill_catalog_messages),
-                        active_skill_message_count=len(active_skill_messages),
-                        mcp_catalog_message_count=len(mcp_catalog_messages),
-                        active_mcp_message_count=len(active_mcp_messages),
-                        history_message_count=len(history_messages),
-                        current_user_message_index=current_user_message_index,
-                        total_message_count=len(messages),
-                        tool_count=len(all_tools),
-                        active_skills=sorted(active_skill_names),
-                        active_mcp_servers=sorted(active_mcp_server_names),
-                    ),
-                    request=self.llm.request_payload(messages, all_tools),
-                )
-                async for item in self.llm.stream_chat(messages, all_tools):
-                    if item.type == "message.delta":
-                        assistant_text += item.content
-                        final_assistant_text += item.content
-                        yield event("message.delta", session_id, run_id, content=item.content)
-                    elif item.type == "tool_calls":
-                        tool_calls = item.tool_calls
-                        break
-                    elif item.type == "message.done":
-                        self.sessions.append(
-                            session_id,
-                            {"role": "assistant", "content": assistant_text},
-                        )
-                        yield event("message.done", session_id, run_id)
-                        logger.info(
-                            "Agent run finished: session_id=%s text=%s",
-                            session_id,
-                            final_assistant_text[:160],
-                        )
-                        yield event(
-                            "run.finished",
-                            session_id,
-                            run_id,
-                            final_text=final_assistant_text,
-                        )
-                        return
-            except Exception as exc:  # noqa: BLE001
-                logger.exception("LLM streaming failed for session_id=%s", session_id)
-                yield event("run.error", session_id, run_id, error=str(exc))
-                return
+                    prompt_message_count=len(prompt_messages),
+                    memory_message_count=len(memory_messages),
+                    skill_catalog_message_count=len(skill_catalog_messages),
+                    active_skill_message_count=len(active_skill_messages),
+                    mcp_catalog_message_count=len(mcp_catalog_messages),
+                    active_mcp_message_count=len(active_mcp_messages),
+                    history_message_count=len(state.history_messages),
+                    current_user_message_index=current_user_message_index,
+                    total_message_count=len(messages),
+                    tool_count=len(all_tools),
+                    active_skills=sorted(active_skill_names),
+                    active_mcp_servers=sorted(active_mcp_server_names),
+                ),
+                request=self.llm.request_payload(messages, all_tools),
+            )
+
+            tool_calls: list[LLMToolCall] = []
+            async for item in self.llm.stream_chat(messages, all_tools):
+                if item.type == "message.delta":
+                    state.assistant_text += item.content
+                    state.final_assistant_text += item.content
+                    yield event(
+                        "message.delta",
+                        state.session_id,
+                        state.run_id,
+                        content=item.content,
+                    )
+                elif item.type == "tool_calls":
+                    tool_calls = item.tool_calls
+                    state.pending_tool_calls = tool_calls
+                    break
+                elif item.type == "message.done":
+                    self._persist_completed_response(state, state.assistant_text)
+                    yield event("message.done", state.session_id, state.run_id)
+                    state.completed = True
+                    yield event(
+                        "run.finished",
+                        state.session_id,
+                        state.run_id,
+                        final_text=state.final_assistant_text,
+                    )
+                    return
 
             if not tool_calls:
-                self.sessions.append(session_id, {"role": "assistant", "content": assistant_text})
-                yield event("message.done", session_id, run_id)
-                logger.info(
-                    "Agent run finished without tool calls: session_id=%s text=%s",
-                    session_id,
-                    final_assistant_text[:160],
+                self._persist_completed_response(state, state.assistant_text)
+                yield event("message.done", state.session_id, state.run_id)
+                state.completed = True
+                yield event(
+                    "run.finished",
+                    state.session_id,
+                    state.run_id,
+                    final_text=state.final_assistant_text,
                 )
-                yield event("run.finished", session_id, run_id, final_text=final_assistant_text)
                 return
 
-            assistant_tool_message = {
-                "role": "assistant",
-                "content": assistant_text or None,
-                "tool_calls": [
-                    {
-                        "id": call.id,
-                        "type": "function",
-                        "function": {
-                            "name": call.name,
-                            "arguments": json.dumps(call.arguments, ensure_ascii=False),
-                        },
-                    }
-                    for call in tool_calls
-                ],
-            }
-            loop_messages.append(assistant_tool_message)
-
-            for call in tool_calls:
-                tool_context = self._tool_context(session_id)
+            state.loop_messages.append(_assistant_tool_message(tool_calls, state.assistant_text))
+            state.tool_message_added = True
+            for index, call in enumerate(tool_calls):
+                state.active_tool_index = index
+                tool_context = self._tool_context(state.session_id)
                 yield event(
                     "tool.started",
-                    session_id,
-                    run_id,
+                    state.session_id,
+                    state.run_id,
                     tool_call_id=call.id,
                     tool=call.name,
                     arguments=call.arguments,
                 )
-                logger.info("Tool call started: session_id=%s tool=%s", session_id, call.name)
+                logger.info("Tool call started: session_id=%s tool=%s", state.session_id, call.name)
                 result = await self._call_tool_safely(call.name, call.arguments, tool_context)
-                self._apply_skill_state(session_id, result)
-                self._apply_mcp_state(session_id, result)
+                self._apply_skill_state(state.session_id, result)
+                self._apply_mcp_state(state.session_id, result)
                 if result.data.get("trace_kind") in {"web_search", "web_fetch"}:
                     self.sessions.append_web_trace(
-                        session_id,
+                        state.session_id,
                         {
                             "id": call.id,
                             "tool_call_id": call.id,
-                            "run_id": run_id,
+                            "run_id": state.run_id,
                             "tool": call.name,
                             "ok": result.ok,
                             "arguments": call.arguments,
@@ -223,10 +353,19 @@ class AgentRuntime:
                             "data": result.data,
                         },
                     )
+                state.loop_messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call.id,
+                        "name": call.name,
+                        "content": result.content,
+                    }
+                )
+                state.completed_tool_call_ids.add(call.id)
                 yield event(
                     "tool.finished" if result.ok else "tool.error",
-                    session_id,
-                    run_id,
+                    state.session_id,
+                    state.run_id,
                     tool_call_id=call.id,
                     tool=call.name,
                     ok=result.ok,
@@ -235,25 +374,66 @@ class AgentRuntime:
                 )
                 logger.info(
                     "Tool call finished: session_id=%s tool=%s ok=%s",
-                    session_id,
+                    state.session_id,
                     call.name,
                     result.ok,
                 )
-                loop_messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": call.id,
-                        "name": call.name,
-                        "content": result.content,
-                    }
-                )
 
+            state.pending_tool_calls = []
+            state.completed_tool_call_ids = set()
+            state.active_tool_index = None
+
+        self._persist_loop_messages(state)
+        state.completed = True
         yield event(
             "run.error",
-            session_id,
-            run_id,
+            state.session_id,
+            state.run_id,
             error="Maximum tool iterations reached.",
         )
+
+    def _persist_completed_response(self, state: _RunState, assistant_text: str) -> None:
+        self._persist_loop_messages(state)
+        self.sessions.append(
+            state.session_id,
+            {"role": "assistant", "content": assistant_text},
+        )
+
+    def _persist_loop_messages(self, state: _RunState) -> None:
+        if not state.loop_messages:
+            return
+        self.sessions.append_many(state.session_id, state.loop_messages)
+        state.loop_messages = []
+
+    def _save_checkpoint(self, state: _RunState) -> None:
+        if state.checkpoint_saved:
+            return
+        messages = [*state.history_messages, state.current_user_message, *state.loop_messages]
+        if state.pending_tool_calls and not state.tool_message_added:
+            messages.append(_assistant_tool_message(state.pending_tool_calls, state.assistant_text))
+            messages.extend(
+                _recovery_tool_message(call, state.stop_reason, index)
+                for index, call in enumerate(state.pending_tool_calls)
+            )
+        elif state.pending_tool_calls:
+            messages.extend(
+                _recovery_tool_message(call, state.stop_reason, index)
+                for index, call in enumerate(state.pending_tool_calls)
+                if call.id not in state.completed_tool_call_ids
+            )
+        elif state.assistant_text and not state.tool_message_added:
+            messages.append({"role": "assistant", "content": state.assistant_text})
+
+        self.sessions.save_checkpoint(
+            state.session_id,
+            messages,
+            run_id=state.run_id,
+            prompt_profile=state.prompt_profile,
+            user_content=state.checkpoint_user_content,
+            iteration=state.iteration,
+            reason=state.stop_reason,
+        )
+        state.checkpoint_saved = True
 
     async def _call_tool_safely(
         self,
@@ -351,6 +531,44 @@ class AgentRuntime:
             yield event("run.finished", session_id, run_id, final_text=final_text)
 
         return stream()
+
+
+def _assistant_tool_message(
+    tool_calls: list[LLMToolCall],
+    content: str,
+) -> dict[str, Any]:
+    return {
+        "role": "assistant",
+        "content": content or None,
+        "tool_calls": [
+            {
+                "id": call.id or f"call_{index}",
+                "type": "function",
+                "function": {
+                    "name": call.name or "__interrupted_tool_call__",
+                    "arguments": json.dumps(
+                        call.arguments if isinstance(call.arguments, dict) else {},
+                        ensure_ascii=False,
+                    ),
+                },
+            }
+            for index, call in enumerate(tool_calls)
+        ],
+    }
+
+
+def _recovery_tool_message(call: LLMToolCall, reason: str, index: int = 0) -> dict[str, Any]:
+    tool_id = call.id or f"call_{index}"
+    tool_name = call.name or "__interrupted_tool_call__"
+    return {
+        "role": "tool",
+        "tool_call_id": tool_id,
+        "name": tool_name,
+        "content": (
+            "[recovery] This tool call was interrupted before a usable result was returned "
+            f"(reason: {reason}). Do not assume it succeeded; retry it if needed."
+        ),
+    }
 
 
 def _context_assembly(
