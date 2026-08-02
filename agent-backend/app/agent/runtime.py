@@ -8,7 +8,15 @@ from typing import Any
 from app.agent.events import AgentEvent, event, make_run_id
 from app.agent.memory import load_agent_memory_message
 from app.agent.prompts import load_prompt_messages
-from app.agent.session import SessionStore
+from app.agent.response_format import (
+    ResponseFormatInput,
+    StructuredOutputValidationError,
+    finalizer_instruction,
+    normalize_response_format,
+    response_format_type,
+    validate_final_output,
+)
+from app.agent.session import RESUME_PROMPT_MARKER, SessionStore
 from app.config import Settings
 from app.llm.openai_client import LLMStreamInterrupted, LLMToolCall, OpenAIChatClient
 from app.tools.base import ToolContext, ToolResult
@@ -18,7 +26,7 @@ from app.tools.skills import SkillManager
 
 logger = logging.getLogger(__name__)
 RESUME_PROMPT = (
-    "Continue the interrupted task from the saved context. Preserve completed work, "
+    f"{RESUME_PROMPT_MARKER} Preserve completed work, "
     "recover from any interrupted tool call, and finish the user's request."
 )
 
@@ -31,6 +39,8 @@ class _RunState:
     checkpoint_user_content: str
     history_messages: list[dict[str, Any]]
     current_user_message: dict[str, Any]
+    final_response_format: dict[str, Any] | None = None
+    final_output: Any = None
     iteration: int = 0
     loop_messages: list[dict[str, Any]] = field(default_factory=list)
     assistant_text: str = ""
@@ -74,6 +84,9 @@ class AgentRuntime:
     def has_checkpoint(self, session_id: str) -> bool:
         return self.sessions.has_checkpoint(session_id)
 
+    def has_active_run(self, session_id: str) -> bool:
+        return session_id in self._active_runs
+
     async def run(
         self,
         session_id: str,
@@ -81,6 +94,7 @@ class AgentRuntime:
         *,
         prompt_profile: str | None = None,
         resume: bool = False,
+        response_format: ResponseFormatInput = None,
     ) -> AsyncIterator[AgentEvent]:
         run_id = make_run_id()
         if session_id in self._active_runs:
@@ -93,6 +107,18 @@ class AgentRuntime:
             return
         if not resume and not str(user_content or "").strip():
             yield event("run.error", session_id, run_id, error="Message content is required.")
+            return
+
+        try:
+            requested_response_format = normalize_response_format(response_format)
+        except ValueError as exc:
+            yield event(
+                "run.error",
+                session_id,
+                run_id,
+                error=str(exc),
+                error_code="invalid_response_format",
+            )
             return
 
         checkpoint = self.sessions.get_checkpoint(session_id) if resume else None
@@ -117,6 +143,21 @@ class AgentRuntime:
             )
             return
 
+        if (
+            resume
+            and response_format is not None
+            and requested_response_format != (checkpoint.response_format if checkpoint else None)
+        ):
+            yield event(
+                "run.error",
+                session_id,
+                run_id,
+                error="The requested response_format does not match the paused run.",
+                error_code="response_format_mismatch",
+                can_resume=True,
+            )
+            return
+
         if checkpoint is not None:
             self.sessions.replace(session_id, checkpoint.messages)
 
@@ -131,6 +172,11 @@ class AgentRuntime:
             if resume and checkpoint is not None
             else str(user_content or "")
         )
+        final_response_format = (
+            checkpoint.response_format
+            if resume and checkpoint is not None
+            else requested_response_format
+        )
         current_user_message = {
             "role": "user",
             "content": RESUME_PROMPT if resume else str(user_content or ""),
@@ -142,16 +188,18 @@ class AgentRuntime:
             checkpoint_user_content=checkpoint_user_content,
             history_messages=history_messages,
             current_user_message=current_user_message,
+            final_response_format=final_response_format,
             iteration=checkpoint.iteration if resume and checkpoint is not None else 0,
         )
         self._active_runs[session_id] = state
         self.sessions.append(session_id, current_user_message)
         logger.info(
-            "Agent run started: session_id=%s run_id=%s profile=%s resume=%s",
+            "Agent run started: session_id=%s run_id=%s profile=%s resume=%s output=%s",
             session_id,
             run_id,
             profile_name,
             resume,
+            response_format_type(final_response_format),
         )
 
         try:
@@ -287,30 +335,26 @@ class AgentRuntime:
             async for item in self.llm.stream_chat(messages, all_tools):
                 if item.type == "message.delta":
                     state.assistant_text += item.content
-                    state.final_assistant_text += item.content
-                    yield event(
-                        "message.delta",
-                        state.session_id,
-                        state.run_id,
-                        content=item.content,
-                    )
+                    if not _requires_structured_finalizer(state):
+                        state.final_assistant_text += item.content
+                        yield event(
+                            "message.delta",
+                            state.session_id,
+                            state.run_id,
+                            content=item.content,
+                        )
                 elif item.type == "tool_calls":
                     tool_calls = item.tool_calls
                     state.pending_tool_calls = tool_calls
                     break
                 elif item.type == "message.done":
-                    self._persist_completed_response(state, state.assistant_text)
-                    yield event("message.done", state.session_id, state.run_id)
-                    state.completed = True
-                    yield event(
-                        "run.finished",
-                        state.session_id,
-                        state.run_id,
-                        final_text=state.final_assistant_text,
-                    )
-                    return
+                    break
 
             if not tool_calls:
+                if _requires_structured_finalizer(state):
+                    async for final_event in self._run_finalizer(state, messages, profile_name):
+                        yield final_event
+                    return
                 self._persist_completed_response(state, state.assistant_text)
                 yield event("message.done", state.session_id, state.run_id)
                 state.completed = True
@@ -392,6 +436,126 @@ class AgentRuntime:
             error="Maximum tool iterations reached.",
         )
 
+    async def _run_finalizer(
+        self,
+        state: _RunState,
+        messages: list[dict[str, Any]],
+        profile_name: str,
+    ) -> AsyncIterator[AgentEvent]:
+        response_format = state.final_response_format
+        if not _requires_structured_finalizer(state) or response_format is None:
+            return
+
+        validation_error: str | None = None
+        final_text = ""
+        final_output: Any = None
+        finalizer_messages: list[dict[str, Any]] = [
+            *messages,
+            {"role": "user", "content": finalizer_instruction(response_format)},
+        ]
+
+        for attempt in range(2):
+            if attempt:
+                finalizer_messages = [
+                    *messages,
+                    {
+                        "role": "user",
+                        "content": finalizer_instruction(response_format),
+                    },
+                    {"role": "assistant", "content": final_text},
+                    {
+                        "role": "user",
+                        "content": finalizer_instruction(response_format, validation_error),
+                    },
+                ]
+
+            try:
+                request = self.llm.request_payload(
+                    finalizer_messages,
+                    [],
+                    response_format=response_format,
+                )
+            except Exception as exc:  # noqa: BLE001
+                state.stop_reason = "finalizer_error"
+                self._save_checkpoint(state)
+                state.completed = True
+                yield event(
+                    "run.error",
+                    state.session_id,
+                    state.run_id,
+                    error=str(exc),
+                    error_code="finalizer_failed",
+                    can_resume=True,
+                )
+                return
+            yield event(
+                "llm.request",
+                state.session_id,
+                state.run_id,
+                profile=profile_name,
+                iteration=state.iteration,
+                phase="finalizer",
+                attempt=attempt + 1,
+                context={
+                    "phase": "finalizer",
+                    "total_message_count": len(finalizer_messages),
+                    "tool_count": 0,
+                },
+                request=request,
+            )
+
+            try:
+                final_text = await self.llm.complete_chat(
+                    finalizer_messages,
+                    response_format=response_format,
+                )
+            except Exception as exc:  # noqa: BLE001
+                state.stop_reason = "finalizer_error"
+                self._save_checkpoint(state)
+                state.completed = True
+                yield event(
+                    "run.error",
+                    state.session_id,
+                    state.run_id,
+                    error=str(exc),
+                    error_code="finalizer_failed",
+                    can_resume=True,
+                )
+                return
+            try:
+                final_output = validate_final_output(final_text, response_format)
+            except StructuredOutputValidationError as exc:
+                validation_error = str(exc)
+                if attempt == 0:
+                    continue
+                self._persist_loop_messages(state)
+                state.completed = True
+                yield event(
+                    "run.error",
+                    state.session_id,
+                    state.run_id,
+                    error=validation_error,
+                    error_code="structured_output_invalid",
+                    output_format=response_format_type(response_format),
+                )
+                return
+            break
+
+        state.final_assistant_text = final_text
+        state.final_output = final_output
+        self._persist_completed_response(state, final_text)
+        yield event("message.delta", state.session_id, state.run_id, content=final_text)
+        yield event("message.done", state.session_id, state.run_id)
+        state.completed = True
+        yield event(
+            "run.finished",
+            state.session_id,
+            state.run_id,
+            final_text=final_text,
+            output=final_output,
+            output_format=response_format_type(response_format),
+        )
+
     def _persist_completed_response(self, state: _RunState, assistant_text: str) -> None:
         self._persist_loop_messages(state)
         self.sessions.append(
@@ -421,7 +585,11 @@ class AgentRuntime:
                 for index, call in enumerate(state.pending_tool_calls)
                 if call.id not in state.completed_tool_call_ids
             )
-        elif state.assistant_text and not state.tool_message_added:
+        elif (
+            state.assistant_text
+            and not state.tool_message_added
+            and not _requires_structured_finalizer(state)
+        ):
             messages.append({"role": "assistant", "content": state.assistant_text})
 
         self.sessions.save_checkpoint(
@@ -432,6 +600,7 @@ class AgentRuntime:
             user_content=state.checkpoint_user_content,
             iteration=state.iteration,
             reason=state.stop_reason,
+            response_format=state.final_response_format,
         )
         state.checkpoint_saved = True
 
@@ -569,6 +738,10 @@ def _recovery_tool_message(call: LLMToolCall, reason: str, index: int = 0) -> di
             f"(reason: {reason}). Do not assume it succeeded; retry it if needed."
         ),
     }
+
+
+def _requires_structured_finalizer(state: _RunState) -> bool:
+    return response_format_type(state.final_response_format) in {"json_object", "json_schema"}
 
 
 def _context_assembly(

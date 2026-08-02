@@ -99,33 +99,88 @@ class OpenAIChatClient:
                 tool_calls=_tool_calls_from_pending(pending_tool_calls),
             ) from exc
 
+    async def complete_chat(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        response_format: dict[str, Any] | None = None,
+    ) -> str:
+        """Run a non-streaming completion for the final answer stage."""
+        if not self.settings.openrouter_api_key:
+            return self._mock_completion(messages, response_format)
+
+        response = await self.client.chat.completions.create(
+            **self.request_payload(messages, [], response_format=response_format),
+            stream=False,
+        )
+        if not response.choices:
+            raise RuntimeError("The model returned no completion choices")
+        message = response.choices[0].message
+        refusal = getattr(message, "refusal", None)
+        if refusal:
+            raise RuntimeError(f"The model refused the final response: {refusal}")
+        content = message.content
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return "".join(
+                str(part.get("text") or "")
+                for part in content
+                if isinstance(part, dict)
+            )
+        return str(content or "")
+
     def request_payload(
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
+        *,
+        response_format: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "model": self.settings.openrouter_model,
             "messages": deepcopy(messages),
             "tools": deepcopy(tools) if tools else None,
             "tool_choice": "auto" if tools else None,
             "temperature": self.settings.llm_temperature,
         }
+        if response_format is not None:
+            payload["response_format"] = deepcopy(response_format)
+            if "openrouter.ai" in str(self.settings.openai_base_url):
+                payload["provider"] = {"require_parameters": True}
+        return payload
 
     async def _mock_stream(self, messages: list[dict[str, Any]]) -> AsyncIterator[LLMStreamEvent]:
+        text = self._mock_text(messages)
+        for word in text.split(" "):
+            yield LLMStreamEvent(type="message.delta", content=word + " ")
+        yield LLMStreamEvent(type="message.done")
+
+    def _mock_completion(
+        self,
+        messages: list[dict[str, Any]],
+        response_format: dict[str, Any] | None,
+    ) -> str:
+        text = self._mock_text(messages)
+        output_type = str((response_format or {}).get("type") or "text")
+        if output_type == "json_schema":
+            definition = (response_format or {}).get("json_schema") or {}
+            schema = definition.get("schema") if isinstance(definition, dict) else {}
+            return json.dumps(_mock_value_for_schema(schema, text), ensure_ascii=False)
+        if output_type == "json_object":
+            return json.dumps({"result": text}, ensure_ascii=False)
+        return text
+
+    def _mock_text(self, messages: list[dict[str, Any]]) -> str:
         user_text = ""
         for message in reversed(messages):
             if message.get("role") == "user":
                 user_text = str(message.get("content") or "")
                 break
-
-        text = (
+        return (
             "Anomalo dev mode is running. Add OPENROUTER_API_KEY to .env to enable "
             f"OpenRouter. Last user message: {user_text}"
         )
-        for word in text.split(" "):
-            yield LLMStreamEvent(type="message.delta", content=word + " ")
-        yield LLMStreamEvent(type="message.done")
 
 
 def _parse_tool_arguments(raw: str) -> dict[str, Any]:
@@ -149,3 +204,38 @@ def _tool_calls_from_pending(pending_tool_calls: dict[int, dict[str, str]]) -> l
         )
         for index, value in sorted(pending_tool_calls.items())
     ]
+
+
+def _mock_value_for_schema(schema: Any, fallback: str) -> Any:
+    if not isinstance(schema, dict):
+        return fallback
+    if "const" in schema:
+        return schema["const"]
+    if isinstance(schema.get("enum"), list) and schema["enum"]:
+        return schema["enum"][0]
+
+    schema_type = schema.get("type")
+    if schema_type == "object" or "properties" in schema:
+        properties = schema.get("properties")
+        if not isinstance(properties, dict):
+            return {}
+        required = schema.get("required")
+        names = required if isinstance(required, list) else list(properties)
+        return {
+            str(name): _mock_value_for_schema(properties.get(name), fallback)
+            for name in names
+            if name in properties
+        }
+    if schema_type == "array":
+        return []
+    if schema_type == "string":
+        return fallback
+    if schema_type == "integer":
+        return 0
+    if schema_type == "number":
+        return 0
+    if schema_type == "boolean":
+        return False
+    if schema_type == "null":
+        return None
+    return fallback

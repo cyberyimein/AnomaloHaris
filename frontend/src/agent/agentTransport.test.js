@@ -140,4 +140,28 @@ describe("AgentTransport", () => {
     expect(storage.setItem).toHaveBeenLastCalledWith("anomalo.session", nextSessionId);
     expect(sockets[1].url).toContain(nextSessionId);
   });
+
+  it("switches to an existing persisted session", () => {
+    const sockets = [];
+    const storage = createStorage();
+    const transport = createAgentTransport({
+      storage,
+      location: { protocol: "http:", host: "anomalo.test" },
+      socketFactory: (url) => {
+        const socket = new FakeSocket(url);
+        sockets.push(socket);
+        return socket;
+      },
+    });
+
+    transport.connect();
+    const activeSessionId = transport.switchSession("session_history");
+
+    expect(activeSessionId).toBe("session_history");
+    expect(sockets[0].closed).toBe(true);
+    expect(sockets[1].url).toContain("session_history");
+    expect(storage.setItem).toHaveBeenLastCalledWith("anomalo.session", "session_history");
+    expect(transport.state.runActive.value).toBe(false);
+    expect(transport.state.resumeAvailable.value).toBe(false);
+  });
 });

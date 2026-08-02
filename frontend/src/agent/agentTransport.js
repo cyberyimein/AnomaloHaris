@@ -113,12 +113,16 @@ export function createAgentTransport({
     return true;
   }
 
-  function startNewSession() {
+  function switchSession(nextSessionId) {
+    const normalizedSessionId = String(nextSessionId || "").trim();
+    if (!normalizedSessionId) {
+      return sessionId.value;
+    }
     clearReconnectTimer();
     const previousSocket = socket;
     socket = null;
     previousSocket?.close();
-    sessionId.value = createSessionId();
+    sessionId.value = normalizedSessionId;
     storage?.setItem("anomalo.session", sessionId.value);
     connectionStatus.value = "Connecting";
     connectionClass.value = "muted";
@@ -127,6 +131,10 @@ export function createAgentTransport({
     resumeAvailable.value = false;
     connect();
     return sessionId.value;
+  }
+
+  function startNewSession() {
+    return switchSession(createSessionId());
   }
 
   function stop() {
@@ -159,6 +167,7 @@ export function createAgentTransport({
     send,
     stopRun,
     resumeRun,
+    switchSession,
     startNewSession,
     stop,
   };

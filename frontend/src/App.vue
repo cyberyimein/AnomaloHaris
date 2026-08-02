@@ -52,6 +52,17 @@
             v-if="activeView === 'agent'"
             class="toolbar-button"
             type="button"
+            title="Open conversation history"
+            aria-label="Open conversation history"
+            @click="toggleHistory"
+          >
+            <History :size="18" />
+            <span>History</span>
+          </button>
+          <button
+            v-if="activeView === 'agent'"
+            class="toolbar-button"
+            type="button"
             title="Open agent inspector"
             aria-label="Open agent inspector"
             @click="inspectorOpen = true"
@@ -397,12 +408,86 @@
 
     <Transition name="fade">
       <button
-        v-if="inspectorOpen"
+        v-if="inspectorOpen || historyOpen"
         class="inspector-backdrop"
         type="button"
-        aria-label="Close agent inspector"
-        @click="inspectorOpen = false"
+        aria-label="Close panel"
+        @click="closePanels"
       ></button>
+    </Transition>
+
+    <Transition name="history-drawer">
+      <aside
+        v-if="historyOpen"
+        class="inspector-drawer history-drawer"
+        aria-label="Conversation history"
+      >
+        <header class="drawer-header">
+          <div>
+            <span class="drawer-kicker">Saved sessions</span>
+            <h2>Conversation history</h2>
+          </div>
+          <button
+            class="icon-button"
+            type="button"
+            title="Close"
+            aria-label="Close conversation history"
+            @click="historyOpen = false"
+          >
+            <X :size="18" />
+          </button>
+        </header>
+
+        <div class="history-content">
+          <button class="history-new-button" type="button" @click="startNewConversation">
+            <Plus :size="17" />
+            <span>New conversation</span>
+          </button>
+
+          <p v-if="historyError" class="history-message history-message-error">
+            {{ historyError }}
+          </p>
+          <p v-else-if="historyLoading && !historySessions.length" class="history-message">
+            Loading conversations...
+          </p>
+          <p v-else-if="!historySessions.length" class="history-message">
+            No saved conversations yet.
+          </p>
+
+          <div v-else class="history-list">
+            <div
+              v-for="historySession in historySessions"
+              :key="historySession.session_id"
+              class="history-item"
+              :class="{ active: historySession.session_id === sessionId }"
+            >
+              <button
+                class="history-item-main"
+                type="button"
+                :disabled="runActive"
+                @click="switchHistorySession(historySession.session_id)"
+              >
+                <strong>{{ historySession.title }}</strong>
+                <span>
+                  {{ formatHistoryDate(historySession.updated_at) }} ·
+                  {{ historySession.message_count }} messages
+                  <em v-if="historySession.can_resume"> · Paused</em>
+                </span>
+              </button>
+              <button
+                class="history-delete-button"
+                type="button"
+                title="Delete conversation"
+                :aria-label="`Delete ${historySession.title}`"
+                :disabled="runActive"
+                @click="deleteHistorySession(historySession)"
+              >
+                <Trash2 :size="16" />
+              </button>
+            </div>
+          </div>
+        </div>
+      </aside>
     </Transition>
 
     <Transition name="drawer">
@@ -803,6 +888,7 @@ import {
   Database,
   ExternalLink,
   Globe2,
+  History,
   Layers3,
   LoaderCircle,
   PanelRightOpen,
@@ -813,6 +899,7 @@ import {
   SendHorizontal,
   SlidersHorizontal,
   Square,
+  Trash2,
   Upload,
   Wrench,
   X,
@@ -840,6 +927,7 @@ const sendShortcutTooltip = SEND_SHORTCUT;
 
 const creditsRefreshTimer = ref(null);
 const inspectorOpen = ref(false);
+const historyOpen = ref(false);
 const composerActionsOpen = ref(false);
 const activeView = ref("agent");
 const managementAccess = createManagementAccess();
@@ -866,6 +954,10 @@ const { refreshInFlight: stockRefreshInFlight } = stockWorkspace.state;
 const refreshStockReport = stockWorkspace.refresh;
 
 const tools = ref([]);
+const historySessions = ref([]);
+const historyLoading = ref(false);
+const historyError = ref("");
+let historyRequestSequence = 0;
 const copiedWebTraceId = ref("");
 const conversationEl = ref(null);
 const composerActionsEl = ref(null);
@@ -912,13 +1004,14 @@ const {
   beginUserTurn,
   clearMarkdownRenderTimers,
   handle: handleAgentEvent,
+  replaceConversation,
   replaceWebTraces,
   reset: resetAgentProjection,
   setAgentState,
   setPromptOutput,
 } = agentProjection;
 const agentTransport = createAgentTransport({
-  onEvent: handleAgentEvent,
+  onEvent: handleAgentEventAndRefresh,
   onState: setAgentState,
   onError: (error) => addEventLog("ws.error", String(error), true),
 });
@@ -1005,6 +1098,8 @@ onMounted(() => {
   document.addEventListener("keydown", handleGlobalKeydown);
   document.addEventListener("pointerdown", handleGlobalPointerdown);
   agentTransport.connect();
+  void loadConversationHistory();
+  void loadHistorySessions();
   void loadTools();
   void loadWebTraces();
   void loadSkills();
@@ -1028,6 +1123,7 @@ onBeforeUnmount(() => {
 function handleGlobalKeydown(event) {
   if (event.key === "Escape") {
     inspectorOpen.value = false;
+    historyOpen.value = false;
     composerActionsOpen.value = false;
   }
 }
@@ -1045,7 +1141,28 @@ function handleGlobalPointerdown(event) {
 function setActiveView(view) {
   activeView.value = view;
   inspectorOpen.value = false;
+  historyOpen.value = false;
   composerActionsOpen.value = false;
+}
+
+function toggleHistory() {
+  inspectorOpen.value = false;
+  historyOpen.value = !historyOpen.value;
+  if (historyOpen.value) {
+    void loadHistorySessions({ silent: true });
+  }
+}
+
+function closePanels() {
+  inspectorOpen.value = false;
+  historyOpen.value = false;
+}
+
+function handleAgentEventAndRefresh(event) {
+  handleAgentEvent(event);
+  if (["run.started", "run.finished", "run.stopped", "run.error"].includes(event.type)) {
+    void loadHistorySessions({ silent: true });
+  }
 }
 
 function saveManagementToken() {
@@ -1081,6 +1198,57 @@ async function loadTools() {
     tools.value = data.tools || [];
   } catch (error) {
     addEventLog("tools.error", String(error), true);
+  }
+}
+
+async function loadHistorySessions({ silent = false } = {}) {
+  const requestId = ++historyRequestSequence;
+  if (!silent) {
+    historyLoading.value = true;
+  }
+  try {
+    const response = await fetch("/api/sessions");
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || "Conversation history failed to load.");
+    }
+    if (requestId !== historyRequestSequence) {
+      return;
+    }
+    historySessions.value = Array.isArray(data.sessions) ? data.sessions : [];
+    historyError.value = "";
+  } catch (error) {
+    if (requestId === historyRequestSequence) {
+      historyError.value = `History load failed: ${formatError(error)}`;
+    }
+  } finally {
+    if (requestId === historyRequestSequence) {
+      historyLoading.value = false;
+    }
+  }
+}
+
+async function loadConversationHistory(targetSessionId = sessionId.value) {
+  try {
+    const response = await fetch(
+      `/api/sessions/${encodeURIComponent(targetSessionId)}`,
+    );
+    if (response.status === 404) {
+      return;
+    }
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || "Conversation failed to load.");
+    }
+    if (sessionId.value !== targetSessionId) {
+      return;
+    }
+    replaceConversation(data.messages || [], { canResume: Boolean(data.can_resume) });
+    await nextTick(scrollConversation);
+  } catch (error) {
+    if (sessionId.value === targetSessionId) {
+      historyError.value = `Conversation load failed: ${formatError(error)}`;
+    }
   }
 }
 
@@ -1257,6 +1425,7 @@ function resumeRun() {
 
 function startNewConversation() {
   composerActionsOpen.value = false;
+  historyOpen.value = false;
   clearMarkdownRenderTimers();
   agentTransport.startNewSession();
 
@@ -1265,7 +1434,74 @@ function startNewConversation() {
   void loadWebTraces();
   void loadSkills();
   void loadMcpServers();
+  void loadHistorySessions({ silent: true });
   void nextTick(() => messageInputEl.value?.focus());
+}
+
+async function switchHistorySession(nextSessionId) {
+  if (!nextSessionId || nextSessionId === sessionId.value) {
+    historyOpen.value = false;
+    return;
+  }
+  if (runActive.value) {
+    historyError.value = "Stop the active run before switching conversations.";
+    return;
+  }
+
+  historyOpen.value = false;
+  inspectorOpen.value = false;
+  clearMarkdownRenderTimers();
+  resetConversationState();
+  agentTransport.switchSession(nextSessionId);
+  await loadConversationHistory(nextSessionId);
+  void loadTools();
+  void loadWebTraces();
+  void loadSkills();
+  void loadMcpServers();
+  void nextTick(() => messageInputEl.value?.focus());
+}
+
+async function deleteHistorySession(historySession) {
+  if (!historySession?.session_id || runActive.value) {
+    return;
+  }
+  if (
+    typeof window !== "undefined" &&
+    !window.confirm(`Delete conversation “${historySession.title}”?`)
+  ) {
+    return;
+  }
+
+  try {
+    const response = await fetch(
+      `/api/sessions/${encodeURIComponent(historySession.session_id)}`,
+      { method: "DELETE" },
+    );
+    const data = response.status === 204 ? null : await response.json();
+    if (!response.ok) {
+      throw new Error(data?.detail || "Conversation deletion failed.");
+    }
+    historySessions.value = historySessions.value.filter(
+      (item) => item.session_id !== historySession.session_id,
+    );
+    historyError.value = "";
+    if (sessionId.value === historySession.session_id) {
+      startNewConversation();
+    }
+  } catch (error) {
+    historyError.value = `Delete failed: ${formatError(error)}`;
+  }
+}
+
+function formatHistoryDate(value) {
+  if (!value) {
+    return "Unknown date";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+  return date.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
 function resetConversationState() {

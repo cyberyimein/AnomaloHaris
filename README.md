@@ -150,6 +150,34 @@ to FruitSpy Crawl4AI when a page appears to require JavaScript rendering.
 - `POST /api/chat` — collected JSON response.
 - `POST /api/chat/stream` — newline-delimited streaming JSON.
 
+HTTP callers can request a structured final answer with the OpenAI-compatible
+`response_format` field. The tool-calling loop remains streamed internally; Anomalo runs a
+non-streaming finalizer, validates its response, and returns the parsed value in `output`.
+
+```json
+{
+  "message": "Summarize the FOMC decision in one or two sentences.",
+  "session_id": "news-session-1",
+  "response_format": {
+    "type": "json_schema",
+    "json_schema": {
+      "name": "fomc_summary",
+      "strict": true,
+      "schema": {
+        "type": "object",
+        "properties": {"summary": {"type": "string"}},
+        "required": ["summary"],
+        "additionalProperties": false
+      }
+    }
+  }
+}
+```
+
+Omit `response_format` for the existing plain-text behavior. Supported types are `text`,
+`json_object`, and `json_schema`. A paused run stores this contract in its SQLite checkpoint and
+reuses it on resume.
+
 ### Prompt profiles and memory
 
 Edit `agent-backend/config/prompts.yaml` to add or update system prompt profiles. The file is read for each run, so prompt changes do not require a server restart.

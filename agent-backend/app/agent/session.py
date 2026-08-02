@@ -7,6 +7,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+RESUME_PROMPT_MARKER = "Continue the interrupted task from the saved context."
+
 
 @dataclass
 class SessionCheckpoint:
@@ -16,6 +18,7 @@ class SessionCheckpoint:
     user_content: str
     iteration: int
     reason: str = "stopped"
+    response_format: dict[str, Any] | None = None
 
 
 class SessionStore:
@@ -32,7 +35,10 @@ class SessionStore:
         self._connection.execute("PRAGMA busy_timeout = 5000")
         self._connection.execute("PRAGMA foreign_keys = ON")
         if self.db_path != ":memory:":
-            self._connection.execute("PRAGMA journal_mode = WAL")
+            # The persistent data directory is bind-mounted into Apple Container via
+            # virtiofs. DELETE journaling keeps the database self-contained on that
+            # mount; WAL sidecars can be lost when a container is replaced.
+            self._connection.execute("PRAGMA journal_mode = DELETE")
         self._connection.commit()
         self._initialize_schema()
 
@@ -53,11 +59,49 @@ class SessionStore:
                 active_mcp_servers_json TEXT NOT NULL DEFAULT '[]',
                 web_traces_json TEXT NOT NULL DEFAULT '[]',
                 checkpoint_json TEXT,
+                title TEXT NOT NULL DEFAULT '',
+                message_count INTEGER NOT NULL DEFAULT 0,
                 updated_at TEXT NOT NULL
             )
             """
         )
+        columns = {
+            row["name"]
+            for row in self._connection.execute("PRAGMA table_info(sessions)").fetchall()
+        }
+        if "title" not in columns:
+            self._connection.execute(
+                "ALTER TABLE sessions ADD COLUMN title TEXT NOT NULL DEFAULT ''"
+            )
+        if "message_count" not in columns:
+            self._connection.execute(
+                "ALTER TABLE sessions ADD COLUMN message_count INTEGER NOT NULL DEFAULT 0"
+            )
+        self._backfill_session_metadata()
         self._connection.commit()
+
+    def _backfill_session_metadata(self) -> None:
+        rows = self._connection.execute(
+            """
+            SELECT session_id, messages_json, checkpoint_json, title, message_count
+            FROM sessions
+            """
+        ).fetchall()
+        for row in rows:
+            if row["title"] and row["message_count"]:
+                continue
+            messages = _json_list(row["messages_json"])
+            checkpoint = _checkpoint_from_json(row["checkpoint_json"])
+            conversation_messages = checkpoint.messages if checkpoint is not None else messages
+            title, message_count = _session_summary(conversation_messages)
+            self._connection.execute(
+                """
+                UPDATE sessions
+                SET title = ?, message_count = ?
+                WHERE session_id = ?
+                """,
+                (title, message_count, row["session_id"]),
+            )
 
     def _ensure_loaded(self, session_id: str) -> None:
         if session_id in self._loaded_sessions:
@@ -85,16 +129,19 @@ class SessionStore:
                 _json_list(row["active_mcp_servers_json"])
             )
             self._web_traces[session_id] = _json_list(row["web_traces_json"])
-            if row["checkpoint_json"]:
-                self._checkpoints[session_id] = SessionCheckpoint(
-                    **json.loads(row["checkpoint_json"])
-                )
+            checkpoint = _checkpoint_from_json(row["checkpoint_json"])
+            if checkpoint is not None:
+                self._checkpoints[session_id] = checkpoint
             else:
                 self._checkpoints.pop(session_id, None)
         self._loaded_sessions.add(session_id)
 
     def _persist(self, session_id: str) -> None:
         checkpoint = self._checkpoints.get(session_id)
+        conversation_messages = (
+            checkpoint.messages if checkpoint is not None else self._messages[session_id]
+        )
+        title, message_count = _session_summary(conversation_messages)
         self._connection.execute(
             """
             INSERT INTO sessions (
@@ -104,14 +151,18 @@ class SessionStore:
                 active_mcp_servers_json,
                 web_traces_json,
                 checkpoint_json,
+                title,
+                message_count,
                 updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(session_id) DO UPDATE SET
                 messages_json = excluded.messages_json,
                 active_skills_json = excluded.active_skills_json,
                 active_mcp_servers_json = excluded.active_mcp_servers_json,
                 web_traces_json = excluded.web_traces_json,
                 checkpoint_json = excluded.checkpoint_json,
+                title = excluded.title,
+                message_count = excluded.message_count,
                 updated_at = excluded.updated_at
             """,
             (
@@ -121,10 +172,60 @@ class SessionStore:
                 json.dumps(sorted(self._active_mcp_servers[session_id]), ensure_ascii=False),
                 json.dumps(self._web_traces[session_id], ensure_ascii=False),
                 json.dumps(asdict(checkpoint), ensure_ascii=False) if checkpoint else None,
+                title,
+                message_count,
                 datetime.now(UTC).isoformat(),
             ),
         )
         self._connection.commit()
+
+    def list_sessions(self) -> list[dict[str, Any]]:
+        """Return persisted conversations ordered by most recent activity."""
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT session_id, title, message_count, checkpoint_json, updated_at
+                FROM sessions
+                ORDER BY updated_at DESC
+                """
+            ).fetchall()
+            summaries: list[dict[str, Any]] = []
+            for row in rows:
+                if row["message_count"] <= 0:
+                    continue
+                summaries.append(
+                    {
+                        "session_id": row["session_id"],
+                        "title": row["title"] or "Untitled conversation",
+                        "message_count": row["message_count"],
+                        "updated_at": row["updated_at"],
+                        "can_resume": row["checkpoint_json"] is not None,
+                    }
+                )
+            return summaries
+
+    def get_session_snapshot(self, session_id: str) -> dict[str, Any] | None:
+        """Return the latest persisted message chain, including a paused checkpoint."""
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT updated_at
+                FROM sessions
+                WHERE session_id = ?
+                """,
+                (session_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            self._ensure_loaded(session_id)
+            checkpoint = self._checkpoints.get(session_id)
+            messages = checkpoint.messages if checkpoint is not None else self._messages[session_id]
+            return {
+                "session_id": session_id,
+                "messages": deepcopy(messages),
+                "updated_at": row["updated_at"],
+                "can_resume": checkpoint is not None,
+            }
 
     def get_messages(self, session_id: str) -> list[dict[str, Any]]:
         with self._lock:
@@ -207,6 +308,7 @@ class SessionStore:
         user_content: str,
         iteration: int,
         reason: str = "stopped",
+        response_format: dict[str, Any] | None = None,
     ) -> None:
         with self._lock:
             self._ensure_loaded(session_id)
@@ -217,6 +319,7 @@ class SessionStore:
                 user_content=user_content,
                 iteration=iteration,
                 reason=reason,
+                response_format=deepcopy(response_format),
             )
             self._persist(session_id)
 
@@ -287,3 +390,39 @@ def _json_list(value: str) -> list[Any]:
     if not isinstance(parsed, list):
         raise ValueError("SessionStore JSON column must contain a list")
     return parsed
+
+
+def _checkpoint_from_json(value: str | None) -> SessionCheckpoint | None:
+    if not value:
+        return None
+    return SessionCheckpoint(**json.loads(value))
+
+
+def _visible_session_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep only renderable user/assistant messages for history summaries."""
+    visible: list[dict[str, Any]] = []
+    for message in messages:
+        if message.get("role") not in {"user", "assistant"}:
+            continue
+        content = message.get("content")
+        if (
+            not isinstance(content, str)
+            or not content.strip()
+            or content.startswith(RESUME_PROMPT_MARKER)
+        ):
+            continue
+        visible.append({"role": message["role"], "content": content})
+    return visible
+
+
+def _session_summary(messages: list[dict[str, Any]]) -> tuple[str, int]:
+    visible_messages = _visible_session_messages(messages)
+    title = next(
+        (
+            str(message.get("content") or "").strip()
+            for message in visible_messages
+            if message.get("role") == "user" and str(message.get("content") or "").strip()
+        ),
+        "Untitled conversation",
+    )
+    return title[:120], len(visible_messages)

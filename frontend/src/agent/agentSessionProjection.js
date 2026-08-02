@@ -193,6 +193,40 @@ export function createAgentSessionProjection({
     setAgentState("Idle", "New conversation ready.");
   }
 
+  function replaceConversation(messages, { canResume = false } = {}) {
+    clearMarkdownRenderTimers();
+    activeAssistantIndex = null;
+    pendingAssistantArtifacts = [];
+    activeThinkingActivityId = "";
+    activeActivityGroupIndex = null;
+    activeToolActivityIds.clear();
+    conversationTurns.value = (Array.isArray(messages) ? messages : [])
+      .filter(
+        (message) =>
+          (message?.role === "user" || message?.role === "assistant") &&
+          String(message.content || "").trim(),
+      )
+      .map((message) => {
+        const content = String(message.content || "");
+        if (message.role === "user") {
+          return { role: "user", content };
+        }
+        return {
+          role: "assistant",
+          content,
+          htmlContent: markdownRenderer(content, []),
+          artifacts: [],
+        };
+      });
+    resumeAvailable.value = canResume;
+    runTitle.value = canResume ? "Paused" : "Ready";
+    setAgentState(
+      canResume ? "Stopped" : "Idle",
+      canResume ? "Run paused. Resume to continue." : "Conversation loaded.",
+    );
+    void onScroll();
+  }
+
   function setAgentState(state, detail) {
     agentState.value = state;
     runStatus.value = state;
@@ -567,6 +601,7 @@ export function createAgentSessionProjection({
     },
     handle,
     beginUserTurn,
+    replaceConversation,
     reset,
     setAgentState,
     setPromptOutput,

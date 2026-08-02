@@ -1,4 +1,4 @@
-from app.agent.session import SessionStore
+from app.agent.session import RESUME_PROMPT_MARKER, SessionStore
 
 
 def test_session_store_keeps_web_traces_isolated_and_clears_them() -> None:
@@ -45,3 +45,44 @@ def test_session_store_persists_messages_and_checkpoints_to_sqlite(tmp_path) -> 
     assert second.get_checkpoint("session-1") is None
     assert second.get_messages("session-1") == restored.messages
     second.close()
+
+
+def test_session_store_lists_conversations_and_prefers_checkpoint_messages() -> None:
+    store = SessionStore()
+    store.append_many(
+        "session-1",
+        [
+            {"role": "user", "content": "历史任务"},
+            {"role": "assistant", "content": "已完成一部分"},
+            {"role": "tool", "tool_call_id": "call-1", "content": "工具结果"},
+        ],
+    )
+    store.save_checkpoint(
+        "session-1",
+        [
+            {"role": "user", "content": "历史任务"},
+            {"role": "assistant", "content": "已完成一部分"},
+            {
+                "role": "user",
+                "content": (
+                    f"{RESUME_PROMPT_MARKER} Preserve completed work, "
+                    "recover from any interrupted tool call, and finish the user's request."
+                ),
+            },
+        ],
+        run_id="run-1",
+        prompt_profile="agent",
+        user_content="历史任务",
+        iteration=2,
+    )
+
+    summaries = store.list_sessions()
+    snapshot = store.get_session_snapshot("session-1")
+
+    assert summaries[0]["session_id"] == "session-1"
+    assert summaries[0]["title"] == "历史任务"
+    assert summaries[0]["message_count"] == 2
+    assert summaries[0]["can_resume"] is True
+    assert snapshot is not None
+    assert snapshot["can_resume"] is True
+    assert snapshot["messages"][-1]["role"] == "user"

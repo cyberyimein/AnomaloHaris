@@ -18,6 +18,7 @@ from app.api import (
     memory,
     openrouter,
     prompts,
+    sessions,
     skills,
     stocks,
     tools,
@@ -139,6 +140,7 @@ def create_app() -> FastAPI:
     app.include_router(chat.router)
     app.include_router(artifacts.router)
     app.include_router(websocket.router)
+    app.include_router(sessions.router)
     app.include_router(skills.router)
     app.include_router(mcp_sessions.router)
     app.include_router(memory.router)

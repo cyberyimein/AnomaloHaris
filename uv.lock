@@ -42,6 +42,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "fastapi" },
+    { name = "jsonschema" },
     { name = "openai" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
@@ -83,6 +84,7 @@ vision = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115.0" },
+    { name = "jsonschema", specifier = ">=4.23.0" },
     { name = "faster-whisper", marker = "extra == 'audio'", specifier = ">=1.1.0" },
     { name = "futu-api", marker = "extra == 'stocks'", specifier = ">=10.8.6808" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27.0" },

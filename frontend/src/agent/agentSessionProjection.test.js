@@ -179,4 +179,25 @@ describe("AgentSessionProjection", () => {
     expect(projection.state.promptProfile.value).toBe("agent");
     expect(projection.state.promptOutput.value).toContain('"source": "config"');
   });
+
+  it("hydrates a persisted conversation without replaying tool messages", () => {
+    const projection = createProjection();
+
+    projection.replaceConversation([
+      { role: "user", content: "查看报告" },
+      { role: "assistant", tool_calls: [{ id: "call-1" }] },
+      { role: "tool", tool_call_id: "call-1", content: "tool result" },
+      { role: "assistant", content: "报告已准备好。" },
+    ]);
+
+    expect(projection.state.conversationTurns.value).toEqual([
+      { role: "user", content: "查看报告" },
+      {
+        role: "assistant",
+        content: "报告已准备好。",
+        htmlContent: "<p>报告已准备好。</p>",
+        artifacts: [],
+      },
+    ]);
+  });
 });
