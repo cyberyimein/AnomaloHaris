@@ -113,6 +113,8 @@ All runtime configuration comes from the root `.env`. The most commonly used var
 | `OPENROUTER_MANAGEMENT_API_KEY` | Enables the credits widget | unset |
 | `OPENAI_BASE_URL` | OpenAI-compatible API base URL | OpenRouter |
 | `OPENROUTER_MODEL` | Model identifier | `openai/gpt-4o-mini` |
+| `MAX_TOOL_ITERATIONS` | Maximum model/tool loop iterations per run | `50` |
+| `AGENT_RUN_TIMEOUT_SECONDS` | Maximum wall-clock duration for one resumable run | `300` |
 | `ANOMALO_ADMIN_TOKEN` | Authorizes remote management requests | unset |
 | `ANOMALO_AGENT_PROMPT_PROFILE` | Browser-agent prompt profile | `agent` |
 | `ANOMALO_BUDDY_PROMPT_PROFILE` | Buddy voice prompt profile | `buddy_voice` |
@@ -177,6 +179,46 @@ non-streaming finalizer, validates its response, and returns the parsed value in
 Omit `response_format` for the existing plain-text behavior. Supported types are `text`,
 `json_object`, and `json_schema`. A paused run stores this contract in its SQLite checkpoint and
 reuses it on resume.
+
+### Preset agents
+
+The **Preset Agents** tab creates reusable agents with their own ghost, system prompt, OpenRouter
+model, temperature, and tool allowlist. Definitions are stored in
+`ANOMALO_DATA_DIR/preset-agents.sqlite3`. Management requests use `GET/POST/PUT/DELETE
+/api/manage/agents` and require the same remote admin token as the Dashboard.
+The Agent composer uses the public `GET /api/agents` metadata endpoint to populate its preset
+selector; it intentionally omits system prompts and tool definitions.
+
+External applications can invoke a preset by its stable ID or case-insensitive name. The collected
+endpoint returns the normal event list plus `final_text` and parsed structured `output`:
+
+```bash
+curl -X POST http://localhost:8000/api/agents/fomc-brief/chat \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "message": "Summarize the latest FOMC decision in one or two sentences.",
+    "session_id": "stock-fomc-task-2026-08-03",
+    "response_format": {
+      "type": "json_schema",
+      "json_schema": {
+        "name": "fomc_summary",
+        "strict": true,
+        "schema": {
+          "type": "object",
+          "properties": {"summary": {"type": "string"}},
+          "required": ["summary"],
+          "additionalProperties": false
+        }
+      }
+    }
+  }'
+```
+
+Use `POST /api/agents/{id-or-name}/chat/stream` for NDJSON streaming. To resume an interrupted
+request, call the same preset with `{"session_id":"...","resume":true}`. A session ID is bound to
+its first preset agent and cannot be reused with another preset, preventing cross-agent history
+leaks. Preset invocation endpoints share the base chat API's deployment security boundary, so put
+an authenticated reverse proxy in front of non-local access.
 
 ### Prompt profiles and memory
 
@@ -346,7 +388,7 @@ ENV_FILE=agent-backend/deploy/anomalo.container.env \
 
 The private deployment environment file is ignored by Git. Review both scripts and adapt the network, storage, SSH, and host-loopback settings to your machine before running them.
 
-The deployment script mounts `REMOTE_DATA_DIR` from the deployment host to `/data` in the container. Session history and Stop/Resume checkpoints are stored in `/data/sessions.sqlite3`, so keep this directory on persistent host storage and do not delete it when replacing the container. By default it is `.anomalo/anomalo-data` under the remote user's home; set `REMOTE_STORAGE_ROOT` or `REMOTE_DATA_DIR` to an explicit host path when needed.
+The deployment script mounts `REMOTE_DATA_DIR` from the deployment host to `/data` in the container. Session history and Stop/Resume checkpoints are stored in `/data/sessions.sqlite3`; preset agents are stored in `/data/preset-agents.sqlite3`. Keep this directory on persistent host storage and do not delete it when replacing the container. By default it is `.anomalo/anomalo-data` under the remote user's home; set `REMOTE_STORAGE_ROOT` or `REMOTE_DATA_DIR` to an explicit host path when needed.
 
 ## Tests and linting
 

@@ -41,7 +41,12 @@ class Settings(BaseSettings):
     openai_base_url: str = Field(default="https://openrouter.ai/api/v1", alias="OPENAI_BASE_URL")
     openrouter_model: str = Field(default="openai/gpt-4o-mini", alias="OPENROUTER_MODEL")
     llm_temperature: float = Field(default=0.4, alias="LLM_TEMPERATURE")
-    max_tool_iterations: int = Field(default=5, alias="MAX_TOOL_ITERATIONS")
+    max_tool_iterations: int = Field(default=50, alias="MAX_TOOL_ITERATIONS")
+    agent_run_timeout_seconds: float = Field(
+        default=300.0,
+        gt=0,
+        alias="AGENT_RUN_TIMEOUT_SECONDS",
+    )
     admin_token: str | None = Field(default=None, alias="ANOMALO_ADMIN_TOKEN")
     mcp_timeout_seconds: float = Field(default=8.0, alias="MCP_TIMEOUT_SECONDS")
     agent_prompt_profile: str = Field(default="agent", alias="ANOMALO_AGENT_PROMPT_PROFILE")
@@ -288,6 +293,10 @@ class Settings(BaseSettings):
     @property
     def session_db_path(self) -> Path:
         return self.data_dir / "sessions.sqlite3"
+
+    @property
+    def preset_agent_db_path(self) -> Path:
+        return self.data_dir / "preset-agents.sqlite3"
 
     @property
     def normalized_environment(self) -> str:

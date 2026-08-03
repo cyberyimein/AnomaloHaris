@@ -17,6 +17,7 @@ from app.api import (
     mcp_sessions,
     memory,
     openrouter,
+    preset_agents,
     prompts,
     sessions,
     skills,
@@ -145,6 +146,8 @@ def create_app() -> FastAPI:
     app.include_router(mcp_sessions.router)
     app.include_router(memory.router)
     app.include_router(openrouter.router)
+    app.include_router(preset_agents.management_router)
+    app.include_router(preset_agents.invocation_router)
     app.include_router(prompts.router)
     app.include_router(stocks.router)
     app.include_router(tools.router)

@@ -39,6 +39,9 @@ class _RunState:
     checkpoint_user_content: str
     history_messages: list[dict[str, Any]]
     current_user_message: dict[str, Any]
+    system_prompt: str | None = None
+    allowed_tool_names: frozenset[str] | None = None
+    llm: Any = None
     final_response_format: dict[str, Any] | None = None
     final_output: Any = None
     iteration: int = 0
@@ -95,6 +98,10 @@ class AgentRuntime:
         prompt_profile: str | None = None,
         resume: bool = False,
         response_format: ResponseFormatInput = None,
+        system_prompt: str | None = None,
+        allowed_tool_names: set[str] | frozenset[str] | None = None,
+        model: str | None = None,
+        temperature: float | None = None,
     ) -> AsyncIterator[AgentEvent]:
         run_id = make_run_id()
         if session_id in self._active_runs:
@@ -188,6 +195,11 @@ class AgentRuntime:
             checkpoint_user_content=checkpoint_user_content,
             history_messages=history_messages,
             current_user_message=current_user_message,
+            system_prompt=system_prompt.strip() if system_prompt else None,
+            allowed_tool_names=(
+                frozenset(allowed_tool_names) if allowed_tool_names is not None else None
+            ),
+            llm=self._configured_llm(model=model, temperature=temperature),
             final_response_format=final_response_format,
             iteration=checkpoint.iteration if resume and checkpoint is not None else 0,
         )
@@ -202,19 +214,26 @@ class AgentRuntime:
             response_format_type(final_response_format),
         )
 
+        timeout_scope = asyncio.timeout(self.settings.agent_run_timeout_seconds)
         try:
             yield event("run.started", session_id, run_id, resumed=resume)
-            async for item in self._run(state, profile_name):
-                if item.type == "run.finished":
-                    state.completed = True
-                    if resume:
-                        self.sessions.clear_checkpoint(session_id)
-                elif item.type == "run.error" and resume:
-                    item.data.setdefault("can_resume", self.sessions.has_checkpoint(session_id))
-                yield item
+            async with timeout_scope:
+                async for item in self._run(state, profile_name):
+                    if item.type == "run.finished":
+                        state.completed = True
+                        if resume:
+                            self.sessions.clear_checkpoint(session_id)
+                    elif item.type == "run.error" and resume:
+                        item.data.setdefault("can_resume", self.sessions.has_checkpoint(session_id))
+                    yield item
+        except TimeoutError:
+            yield self._run_timeout_event(state)
         except LLMStreamInterrupted as exc:
             state.assistant_text = exc.content
             state.pending_tool_calls = exc.tool_calls
+            if timeout_scope.expired():
+                yield self._run_timeout_event(state)
+                return
             self._save_checkpoint(state)
             yield event(
                 "run.stopped",
@@ -251,9 +270,10 @@ class AgentRuntime:
                 self._active_runs.pop(session_id, None)
 
     async def _run(self, state: _RunState, profile_name: str) -> AsyncIterator[AgentEvent]:
-        prompt_messages = load_prompt_messages(
-            self.settings.prompts_config_path,
-            profile_name,
+        prompt_messages = (
+            [{"role": "system", "content": state.system_prompt}]
+            if state.system_prompt is not None
+            else load_prompt_messages(self.settings.prompts_config_path, profile_name)
         )
         memory_message = load_agent_memory_message(self.settings.agent_memory_path)
         memory_messages = [memory_message] if memory_message is not None else []
@@ -264,17 +284,22 @@ class AgentRuntime:
         mcp_catalog_message = self.mcp.catalog_message()
         mcp_catalog_messages = [mcp_catalog_message] if mcp_catalog_message is not None else []
 
-        debug_result = await self._maybe_run_debug_command(
-            state.session_id,
-            state.run_id,
-            str(state.current_user_message["content"]),
-        )
+        debug_result = None
+        if (
+            state.allowed_tool_names is None
+            or "sandbox_python_run" in state.allowed_tool_names
+        ):
+            debug_result = await self._maybe_run_debug_command(
+                state.session_id,
+                state.run_id,
+                str(state.current_user_message["content"]),
+            )
         if debug_result is not None:
             async for item in debug_result:
                 yield item
             return
 
-        while state.iteration <= self.settings.max_tool_iterations:
+        while state.iteration < self.settings.max_tool_iterations:
             state.iteration += 1
             state.assistant_text = ""
             state.pending_tool_calls = []
@@ -297,6 +322,12 @@ class AgentRuntime:
                 *state.loop_messages,
             ]
             all_tools = await self.tools.openai_tools(self._tool_context(state.session_id))
+            if state.allowed_tool_names is not None:
+                all_tools = [
+                    tool
+                    for tool in all_tools
+                    if str(tool.get("function", {}).get("name")) in state.allowed_tool_names
+                ]
             current_user_message_index = (
                 len(prompt_messages)
                 + len(memory_messages)
@@ -328,11 +359,11 @@ class AgentRuntime:
                     active_skills=sorted(active_skill_names),
                     active_mcp_servers=sorted(active_mcp_server_names),
                 ),
-                request=self.llm.request_payload(messages, all_tools),
+                request=state.llm.request_payload(messages, all_tools),
             )
 
             tool_calls: list[LLMToolCall] = []
-            async for item in self.llm.stream_chat(messages, all_tools):
+            async for item in state.llm.stream_chat(messages, all_tools):
                 if item.type == "message.delta":
                     state.assistant_text += item.content
                     if not _requires_structured_finalizer(state):
@@ -380,7 +411,17 @@ class AgentRuntime:
                     arguments=call.arguments,
                 )
                 logger.info("Tool call started: session_id=%s tool=%s", state.session_id, call.name)
-                result = await self._call_tool_safely(call.name, call.arguments, tool_context)
+                if (
+                    state.allowed_tool_names is not None
+                    and call.name not in state.allowed_tool_names
+                ):
+                    result = ToolResult(
+                        name=call.name,
+                        ok=False,
+                        content=f"Tool is not enabled for this preset agent: {call.name}",
+                    )
+                else:
+                    result = await self._call_tool_safely(call.name, call.arguments, tool_context)
                 self._apply_skill_state(state.session_id, result)
                 self._apply_mcp_state(state.session_id, result)
                 if result.data.get("trace_kind") in {"web_search", "web_fetch"}:
@@ -470,7 +511,7 @@ class AgentRuntime:
                 ]
 
             try:
-                request = self.llm.request_payload(
+                request = state.llm.request_payload(
                     finalizer_messages,
                     [],
                     response_format=response_format,
@@ -505,7 +546,7 @@ class AgentRuntime:
             )
 
             try:
-                final_text = await self.llm.complete_chat(
+                final_text = await state.llm.complete_chat(
                     finalizer_messages,
                     response_format=response_format,
                 )
@@ -554,6 +595,39 @@ class AgentRuntime:
             final_text=final_text,
             output=final_output,
             output_format=response_format_type(response_format),
+        )
+
+    def _configured_llm(
+        self,
+        *,
+        model: str | None,
+        temperature: float | None,
+    ) -> Any:
+        if model is None and temperature is None:
+            return self.llm
+        configured = getattr(self.llm, "configured", None)
+        if configured is None:
+            return self.llm
+        return configured(
+            model=model or self.settings.openrouter_model,
+            temperature=(
+                self.settings.llm_temperature if temperature is None else temperature
+            ),
+        )
+
+    def _run_timeout_event(self, state: _RunState) -> AgentEvent:
+        state.stop_reason = "run_timeout"
+        self._save_checkpoint(state)
+        return event(
+            "run.error",
+            state.session_id,
+            state.run_id,
+            error=(
+                "Agent run exceeded the configured timeout of "
+                f"{self.settings.agent_run_timeout_seconds:g} seconds."
+            ),
+            error_code="run_timeout",
+            can_resume=True,
         )
 
     def _persist_completed_response(self, state: _RunState, assistant_text: str) -> None:

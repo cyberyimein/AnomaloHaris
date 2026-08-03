@@ -3,14 +3,19 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Response, status
 
 from app.agent.session import RESUME_PROMPT_MARKER
-from app.container import get_agent_runtime, get_session_store
+from app.container import get_agent_runtime, get_preset_agent_store, get_session_store
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 
 
 @router.get("")
 async def list_sessions() -> dict[str, Any]:
-    return {"sessions": get_session_store().list_sessions()}
+    return {
+        "sessions": [
+            {**summary, "preset_agent": _preset_agent_summary(summary["session_id"])}
+            for summary in get_session_store().list_sessions()
+        ]
+    }
 
 
 @router.get("/{session_id}")
@@ -21,6 +26,7 @@ async def get_session(session_id: str) -> dict[str, Any]:
     return {
         **snapshot,
         "messages": _visible_messages(snapshot["messages"]),
+        "preset_agent": _preset_agent_summary(session_id),
     }
 
 
@@ -32,7 +38,27 @@ async def delete_session(session_id: str) -> Response:
     if get_session_store().get_session_snapshot(session_id) is None:
         raise HTTPException(status_code=404, detail="Session not found.")
     get_session_store().clear(session_id)
+    get_preset_agent_store().unbind_session(session_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+def _preset_agent_summary(session_id: str) -> dict[str, object] | None:
+    store = get_preset_agent_store()
+    agent_id = store.get_bound_agent_id(session_id)
+    if agent_id is None:
+        return None
+    agent = store.get(agent_id)
+    if agent is None:
+        return {"id": agent_id, "name": "Deleted preset agent", "deleted": True}
+    return {
+        "id": agent.id,
+        "name": agent.name,
+        "description": agent.description,
+        "ghost": agent.ghost,
+        "model": agent.model,
+        "tool_count": len(agent.tool_names),
+        "deleted": False,
+    }
 
 
 def _visible_messages(messages: list[dict[str, Any]]) -> list[dict[str, str]]:

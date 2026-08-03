@@ -122,15 +122,16 @@ export function createAgentSessionProjection({
         resumeAvailable.value = Boolean(data.can_resume);
         flushMarkdownRender(activeAssistantIndex);
         activeAssistantIndex = null;
+        const errorMessage = data.error || "Run error.";
         finishThinkingActivity({
           status: "error",
-          title: "思考中断",
-          body: data.error || "Run error.",
+          title: errorMessage,
+          body: errorMessage,
         });
         completeActivityGroup("error");
         activeToolActivityIds.clear();
-        setAgentState("Error", data.error || "Run error.");
-        addEventLog(event.type, data.error || "error", true);
+        setAgentState("Error", errorMessage);
+        addEventLog(event.type, errorMessage, true);
         break;
       case "run.stopped":
         runTitle.value = "Paused";

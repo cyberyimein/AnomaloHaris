@@ -8,6 +8,7 @@ from buddy_backend.vision import BuddyVisionService
 
 from app.agent.runtime import AgentRuntime
 from app.agent.session import SessionStore
+from app.agents.store import PresetAgentStore
 from app.audio.base import TextToSpeechProvider
 from app.audio.providers import (
     CosyVoiceTTSProvider,
@@ -30,6 +31,11 @@ from app.tools.web import WebToolProvider
 @lru_cache
 def get_session_store() -> SessionStore:
     return SessionStore(get_settings().session_db_path)
+
+
+@lru_cache
+def get_preset_agent_store() -> PresetAgentStore:
+    return PresetAgentStore(get_settings().preset_agent_db_path)
 
 
 @lru_cache

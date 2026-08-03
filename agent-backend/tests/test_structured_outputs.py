@@ -264,4 +264,5 @@ def test_openrouter_finalizer_payload_requires_structured_output_parameters() ->
     assert payload["tools"] is None
     assert payload["tool_choice"] is None
     assert payload["response_format"] == RESPONSE_FORMAT
-    assert payload["provider"] == {"require_parameters": True}
+    assert "provider" not in payload
+    assert payload["extra_body"] == {"provider": {"require_parameters": True}}

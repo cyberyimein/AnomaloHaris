@@ -5,7 +5,7 @@ from app.agent.events import AgentEvent
 from app.agent.runtime import AgentRuntime
 from app.agent.session import SessionStore
 from app.config import Settings
-from app.llm.openai_client import LLMStreamEvent, LLMToolCall
+from app.llm.openai_client import LLMStreamEvent, LLMStreamInterrupted, LLMToolCall
 from app.tools.base import ToolResult
 
 
@@ -108,9 +108,51 @@ class FailingLlm:
         raise RuntimeError("temporary model failure")
 
 
-def make_runtime(llm, tools=None):
+class RepeatingToolLlm:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def request_payload(self, messages, tools):
+        return {"messages": messages, "tools": tools}
+
+    async def stream_chat(self, messages, tools):
+        del messages, tools
+        self.calls += 1
+        yield LLMStreamEvent(
+            type="tool_calls",
+            tool_calls=[
+                LLMToolCall(
+                    id=f"call-{self.calls}",
+                    name="repeat_tool",
+                    arguments={},
+                )
+            ],
+        )
+
+
+class SlowLlm:
+    def request_payload(self, messages, tools):
+        return {"messages": messages, "tools": tools}
+
+    async def stream_chat(self, messages, tools):
+        del messages, tools
+        await asyncio.sleep(1)
+        yield LLMStreamEvent(type="message.done")
+
+
+class TranslatingSlowLlm(SlowLlm):
+    async def stream_chat(self, messages, tools):
+        del messages, tools
+        try:
+            await asyncio.sleep(1)
+        except asyncio.CancelledError as exc:
+            raise LLMStreamInterrupted("partial", []) from exc
+        yield LLMStreamEvent(type="message.done")
+
+
+def make_runtime(llm, tools=None, settings=None):
     return AgentRuntime(
-        settings=Settings(MAX_TOOL_ITERATIONS=3),
+        settings=settings or Settings(MAX_TOOL_ITERATIONS=3),
         sessions=SessionStore(),
         skills=FakeSkills(),
         mcp=FakeMcp(),
@@ -215,3 +257,50 @@ async def test_new_message_does_not_consume_a_paused_checkpoint() -> None:
     assert events[-1].type == "run.error"
     assert events[-1].data["can_resume"] is True
     assert runtime.sessions.get_checkpoint("session-4") is not None
+
+
+@pytest.mark.asyncio
+async def test_tool_iteration_limit_is_exclusive() -> None:
+    llm = RepeatingToolLlm()
+    runtime = make_runtime(llm)
+
+    events = [item async for item in runtime.run("session-5", "keep working")]
+
+    assert llm.calls == 3
+    assert sum(item.type == "tool.started" for item in events) == 3
+    assert events[-1].type == "run.error"
+    assert events[-1].data["error"] == "Maximum tool iterations reached."
+
+
+@pytest.mark.asyncio
+async def test_run_timeout_saves_a_resumable_checkpoint() -> None:
+    runtime = make_runtime(
+        SlowLlm(),
+        settings=Settings(MAX_TOOL_ITERATIONS=3, AGENT_RUN_TIMEOUT_SECONDS=0.01),
+    )
+
+    events = [item async for item in runtime.run("session-timeout", "slow work")]
+
+    assert events[-1].type == "run.error"
+    assert events[-1].data["error_code"] == "run_timeout"
+    assert events[-1].data["can_resume"] is True
+    checkpoint = runtime.sessions.get_checkpoint("session-timeout")
+    assert checkpoint is not None
+    assert checkpoint.reason == "run_timeout"
+
+
+@pytest.mark.asyncio
+async def test_run_timeout_is_preserved_when_llm_translates_cancellation() -> None:
+    runtime = make_runtime(
+        TranslatingSlowLlm(),
+        settings=Settings(MAX_TOOL_ITERATIONS=3, AGENT_RUN_TIMEOUT_SECONDS=0.01),
+    )
+
+    events = [item async for item in runtime.run("session-timeout-stream", "slow work")]
+
+    assert events[-1].type == "run.error"
+    assert events[-1].data["error_code"] == "run_timeout"
+    checkpoint = runtime.sessions.get_checkpoint("session-timeout-stream")
+    assert checkpoint is not None
+    assert checkpoint.reason == "run_timeout"
+    assert checkpoint.messages[-1] == {"role": "assistant", "content": "partial"}

@@ -3,13 +3,16 @@ from contextlib import suppress
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from app.container import get_agent_runtime
+from app.container import get_agent_runtime, get_preset_agent_store
 
 router = APIRouter(tags=["websocket"])
 
 
 @router.websocket("/ws/chat/{session_id}")
 async def websocket_chat(websocket: WebSocket, session_id: str) -> None:
+    if get_preset_agent_store().get_bound_agent_id(session_id) is not None:
+        await websocket.close(code=1008, reason="Preset agent sessions require the preset API.")
+        return
     await websocket.accept()
     runtime = get_agent_runtime()
     active_task: asyncio.Task[None] | None = None

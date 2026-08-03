@@ -99,7 +99,7 @@ describe("AgentSessionProjection", () => {
     expect(group.items[0]).toMatchObject({
       kind: "thinking",
       status: "error",
-      title: "思考中断",
+      title: "model unavailable",
       body: "model unavailable",
     });
   });

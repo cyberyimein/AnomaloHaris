@@ -2,13 +2,13 @@ from collections.abc import AsyncIterator
 from typing import Any
 from uuid import uuid4
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.agent.events import AgentEvent
 from app.agent.response_format import ResponseFormat
-from app.container import get_agent_runtime
+from app.container import get_agent_runtime, get_preset_agent_store
 
 router = APIRouter(prefix="/api", tags=["chat"])
 
@@ -32,6 +32,7 @@ class ChatResponse(BaseModel):
 @router.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest) -> ChatResponse:
     session_id = request.session_id or f"session_{uuid4().hex}"
+    _ensure_default_agent_session(session_id)
     events: list[AgentEvent] = []
     final_text = ""
     output: Any | None = None
@@ -58,6 +59,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
 @router.post("/chat/stream")
 async def chat_stream(request: ChatRequest) -> StreamingResponse:
     session_id = request.session_id or f"session_{uuid4().hex}"
+    _ensure_default_agent_session(session_id)
 
     async def lines() -> AsyncIterator[str]:
         async for item in get_agent_runtime().run(
@@ -68,3 +70,15 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
             yield item.model_dump_json() + "\n"
 
     return StreamingResponse(lines(), media_type="application/x-ndjson")
+
+
+def _ensure_default_agent_session(session_id: str) -> None:
+    agent_id = get_preset_agent_store().get_bound_agent_id(session_id)
+    if agent_id is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This session belongs to a preset agent. "
+                f"Continue it through /api/agents/{agent_id}/chat."
+            ),
+        )

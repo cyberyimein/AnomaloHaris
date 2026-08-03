@@ -3471,6 +3471,246 @@ button {
   backdrop-filter: blur(18px);
 }
 
+.composer-box-preset {
+  padding: 9px;
+}
+
+.composer-preset-bar {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid rgba(203, 200, 191, 0.62);
+  padding: 2px 2px 9px;
+}
+
+.composer-preset-heading {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.composer-preset-select {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  padding: 0 10px;
+  text-align: left;
+  outline: none;
+  transition:
+    border-color 140ms ease,
+    background 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.composer-preset-select:hover,
+.composer-preset-select[aria-expanded="true"] {
+  border-color: var(--accent);
+  background: var(--surface-raised);
+}
+
+.composer-preset-select:focus-visible,
+.composer-preset-select[aria-expanded="true"] {
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.composer-preset-select:disabled {
+  cursor: not-allowed;
+  opacity: 0.56;
+}
+
+.composer-preset-select > svg {
+  flex: 0 0 auto;
+  color: var(--muted);
+  transition: transform 140ms ease;
+}
+
+.composer-preset-select[aria-expanded="true"] > svg {
+  transform: rotate(180deg);
+}
+
+.composer-preset-picker {
+  position: relative;
+  min-width: 0;
+}
+
+.composer-preset-selected {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-preset-selected.placeholder {
+  color: var(--subtle);
+}
+
+.composer-preset-selected-ghost {
+  flex: 0 0 auto;
+  font-size: 16px;
+}
+
+.composer-preset-options {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 60;
+  display: grid;
+  max-height: min(300px, 38vh);
+  overflow: auto;
+  border: 1px solid rgba(203, 200, 191, 0.86);
+  border-radius: 12px;
+  background: rgba(255, 254, 253, 0.98);
+  box-shadow: 0 18px 44px rgba(31, 32, 35, 0.18);
+  padding: 6px;
+  backdrop-filter: blur(18px);
+}
+
+.composer-preset-option {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 48px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  padding: 7px 9px;
+  text-align: left;
+  transition:
+    background 140ms ease,
+    color 140ms ease;
+}
+
+.composer-preset-option:hover,
+.composer-preset-option[aria-selected="true"] {
+  background: var(--accent-soft);
+}
+
+.composer-preset-option-ghost {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--surface-muted);
+  font-size: 16px;
+}
+
+.composer-preset-option-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.composer-preset-option-copy strong,
+.composer-preset-option-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-preset-option-copy strong {
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.composer-preset-option-copy small {
+  color: var(--muted);
+  font-family: var(--font-ui);
+  font-size: 10px;
+}
+
+.composer-preset-option > svg {
+  color: var(--accent);
+}
+
+.composer-preset-empty {
+  padding: 14px 10px;
+  color: var(--muted);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  line-height: 1.45;
+  text-align: center;
+}
+
+.composer-preset-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.composer-preset-close:hover {
+  background: var(--surface-muted);
+  color: var(--text);
+}
+
+.composer-preset-note {
+  grid-column: 1 / -1;
+  margin: -1px 2px 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-preset-note.error {
+  color: #a13a35;
+}
+
+.composer-select-enter-active,
+.composer-select-leave-active {
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease;
+}
+
+.composer-select-enter-from,
+.composer-select-leave-to {
+  opacity: 0;
+  transform: translateY(6px);
+}
+
+.composer-box-preset .composer-input {
+  min-height: 50px;
+}
+
 .composer-actions {
   position: relative;
   display: inline-flex;
@@ -4807,7 +5047,17 @@ button:disabled,
 
   .app-nav {
     justify-self: stretch;
-    justify-content: center;
+    justify-content: flex-start;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .app-nav::-webkit-scrollbar {
+    display: none;
+  }
+
+  .nav-tab {
+    flex: 0 0 auto;
   }
 
   .header-actions {

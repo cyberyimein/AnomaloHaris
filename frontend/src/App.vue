@@ -23,6 +23,14 @@
           </button>
           <button
             class="nav-tab"
+            :class="{ active: activeView === 'preset-agents' }"
+            type="button"
+            @click="setActiveView('preset-agents')"
+          >
+            Preset Agents
+          </button>
+          <button
+            class="nav-tab"
             :class="{ active: activeView === 'dashboard' }"
             type="button"
             @click="setActiveView('dashboard')"
@@ -295,6 +303,13 @@
         </template>
       </section>
 
+      <PresetAgents
+        v-else-if="activeView === 'preset-agents'"
+        ref="presetAgentsEl"
+        :management="managementAccess"
+        @save-management-token="saveManagementToken"
+      />
+
       <BuddyDashboard
         v-else-if="activeView === 'dashboard'"
         :controller="buddyDashboard"
@@ -316,7 +331,91 @@
         class="composer"
         @submit.prevent="submitMessage"
       >
-        <div class="composer-box">
+        <div class="composer-box" :class="{ 'composer-box-preset': presetMode }">
+          <div v-if="presetMode" class="composer-preset-bar">
+            <div class="composer-preset-heading">
+              <Bot :size="16" />
+              <span>Preset Agent</span>
+            </div>
+            <div ref="presetPickerEl" class="composer-preset-picker">
+              <button
+                class="composer-preset-select"
+                type="button"
+                role="combobox"
+                aria-haspopup="listbox"
+                aria-controls="presetAgentOptions"
+                aria-label="Select preset agent"
+                :aria-expanded="presetPickerOpen"
+                :disabled="chatRunActive || presetAgentsLoading"
+                @click="presetPickerOpen = !presetPickerOpen"
+                @keydown="handlePresetPickerKeydown"
+              >
+                <span
+                  class="composer-preset-selected"
+                  :class="{ placeholder: !selectedPresetAgent }"
+                >
+                  <span v-if="selectedPresetAgent" class="composer-preset-selected-ghost">
+                    {{ selectedPresetAgent.ghost || "👻" }}
+                  </span>
+                  <span>{{ selectedPresetAgent?.name || "Select a preset agent…" }}</span>
+                </span>
+                <ChevronDown :size="16" aria-hidden="true" />
+              </button>
+              <Transition name="composer-select">
+                <div
+                  v-if="presetPickerOpen"
+                  id="presetAgentOptions"
+                  class="composer-preset-options"
+                  role="listbox"
+                  aria-label="Preset agents"
+                >
+                  <div v-if="!presetAgents.length" class="composer-preset-empty">
+                    {{ presetAgentsError || "No preset agents yet." }}
+                  </div>
+                  <button
+                    v-for="agent in presetAgents"
+                    :key="agent.id"
+                    class="composer-preset-option"
+                    type="button"
+                    role="option"
+                    :aria-selected="agent.id === selectedPresetAgentId"
+                    @click="choosePresetAgent(agent.id)"
+                  >
+                    <span class="composer-preset-option-ghost">{{ agent.ghost || "👻" }}</span>
+                    <span class="composer-preset-option-copy">
+                      <strong>{{ agent.name }}</strong>
+                      <small>{{ agent.description || agent.model }}</small>
+                    </span>
+                    <CircleCheck
+                      v-if="agent.id === selectedPresetAgentId"
+                      :size="16"
+                      aria-hidden="true"
+                    />
+                  </button>
+                </div>
+              </Transition>
+            </div>
+            <button
+              class="composer-preset-close"
+              type="button"
+              title="Exit preset agent mode"
+              aria-label="Exit preset agent mode"
+              :disabled="chatRunActive"
+              @click="closePresetMode"
+            >
+              <X :size="16" />
+            </button>
+            <p v-if="presetAgentsLoading" class="composer-preset-note">Loading preset agents…</p>
+            <p v-else-if="presetAgentsError" class="composer-preset-note error">
+              {{ presetAgentsError }}
+            </p>
+            <p v-else-if="!presetAgents.length" class="composer-preset-note">
+              No preset agents yet. Create one in Preset Agents.
+            </p>
+            <p v-else-if="selectedPresetAgent" class="composer-preset-note">
+              {{ selectedPresetAgent.description || selectedPresetAgent.model }}
+            </p>
+          </div>
           <div ref="composerActionsEl" class="composer-actions">
             <button
               class="composer-action-trigger"
@@ -339,6 +438,10 @@
                   <RefreshCw :size="16" />
                   <span>New Chat</span>
                 </button>
+                <button class="composer-action-item" type="button" @click="openPresetPicker">
+                  <Bot :size="16" />
+                  <span>Use Preset Agent</span>
+                </button>
               </div>
             </Transition>
           </div>
@@ -347,14 +450,14 @@
             ref="messageInputEl"
             class="composer-input"
             v-model="messageInput"
-            :disabled="runActive"
-            placeholder="Message Anomalo"
+            :disabled="chatRunActive"
+            :placeholder="composerPlaceholder"
             rows="1"
             @input="resizeComposer"
             @keydown="handleComposerKeydown"
           ></textarea>
           <span
-            v-if="runActive"
+            v-if="chatRunActive"
             class="send-button-wrap"
             data-tooltip="Stop run"
             title="Stop run"
@@ -370,7 +473,7 @@
             </button>
           </span>
           <span
-            v-else-if="resumeAvailable"
+            v-else-if="chatResumeAvailable"
             class="send-button-wrap"
             data-tooltip="Resume run"
             title="Resume run"
@@ -380,7 +483,7 @@
               class="send-button resume-button"
               type="button"
               aria-label="Resume run"
-              :disabled="sendDisabled"
+              :disabled="chatSendDisabled"
               @click="resumeRun"
             >
               <Play :size="18" fill="currentColor" />
@@ -397,7 +500,7 @@
               class="send-button"
               type="submit"
               :aria-label="`Send message (${SEND_SHORTCUT})`"
-              :disabled="sendDisabled || resumeAvailable"
+              :disabled="chatSendDisabled || chatResumeAvailable"
             >
               <SendHorizontal :size="19" />
             </button>
@@ -464,13 +567,17 @@
               <button
                 class="history-item-main"
                 type="button"
-                :disabled="runActive"
-                @click="switchHistorySession(historySession.session_id)"
+                :disabled="chatRunActive"
+                @click="switchHistorySession(historySession)"
               >
                 <strong>{{ historySession.title }}</strong>
                 <span>
                   {{ formatHistoryDate(historySession.updated_at) }} ·
                   {{ historySession.message_count }} messages
+                  <em v-if="historySession.preset_agent">
+                    · {{ historySession.preset_agent.ghost || "👻" }}
+                    {{ historySession.preset_agent.name }}
+                  </em>
                   <em v-if="historySession.can_resume"> · Paused</em>
                 </span>
               </button>
@@ -479,7 +586,7 @@
                 type="button"
                 title="Delete conversation"
                 :aria-label="`Delete ${historySession.title}`"
-                :disabled="runActive"
+                :disabled="chatRunActive"
                 @click="deleteHistorySession(historySession)"
               >
                 <Trash2 :size="16" />
@@ -882,6 +989,8 @@
 import {
   Activity,
   AlertTriangle,
+  Bot,
+  ChevronDown,
   ChevronRight,
   CircleCheck,
   Copy,
@@ -915,10 +1024,12 @@ import {
   createAgentSessionProjection,
 } from "./agent/agentSessionProjection";
 import { createAgentTransport } from "./agent/agentTransport";
+import { createPresetAgentTransport } from "./agent/presetAgentTransport";
 import anomaloIconUrl from "./assets/anomalo-shrimp.png";
 import BuddyDashboard from "./dashboard/BuddyDashboard.vue";
 import { createBuddyDashboardController } from "./dashboard/buddyDashboardController";
 import { createManagementAccess } from "./management/managementAccess";
+import PresetAgents from "./preset-agents/PresetAgents.vue";
 import StockWorkspace from "./stock/StockWorkspace.vue";
 import { createStockWorkspaceController } from "./stock/stockWorkspaceController";
 
@@ -930,6 +1041,7 @@ const inspectorOpen = ref(false);
 const historyOpen = ref(false);
 const composerActionsOpen = ref(false);
 const activeView = ref("agent");
+const presetAgentsEl = ref(null);
 const managementAccess = createManagementAccess();
 const {
   input: managementTokenInput,
@@ -961,8 +1073,18 @@ let historyRequestSequence = 0;
 const copiedWebTraceId = ref("");
 const conversationEl = ref(null);
 const composerActionsEl = ref(null);
+const presetPickerEl = ref(null);
 const messageInputEl = ref(null);
 const messageInput = ref("");
+const presetMode = ref(false);
+const presetAgents = ref([]);
+const presetAgentsLoading = ref(false);
+const presetAgentsError = ref("");
+const selectedPresetAgentId = ref("");
+const presetPickerOpen = ref(false);
+const presetSessionId = ref("");
+const presetReturnSessionId = ref("");
+let presetAgentsRequest = null;
 
 const CREDITS_REFRESH_INTERVAL_MS = 82800000;
 
@@ -1016,13 +1138,21 @@ const agentTransport = createAgentTransport({
   onError: (error) => addEventLog("ws.error", String(error), true),
 });
 const {
-  sessionId,
+  sessionId: defaultSessionId,
   connectionStatus,
   connectionClass,
   sendDisabled,
   runActive,
   resumeAvailable,
 } = agentTransport.state;
+const presetAgentTransport = createPresetAgentTransport({
+  onEvent: handleAgentEventAndRefresh,
+  onError: (error) => addEventLog("preset.error", String(error), true),
+});
+const {
+  runActive: presetRunActive,
+  resumeAvailable: presetResumeAvailable,
+} = presetAgentTransport.state;
 
 const skills = ref([]);
 const skillStatus = ref("Loading skills...");
@@ -1036,8 +1166,34 @@ const memoryStatus = ref("No memory loaded.");
 const memoryPreview = ref("");
 const memoryUploadDisabled = ref(false);
 
+const sessionId = computed(() =>
+  presetMode.value ? presetSessionId.value : defaultSessionId.value,
+);
 const normalizedAgentState = computed(() => normalizeState(agentState.value));
 const normalizedRunStatus = computed(() => normalizeState(runStatus.value));
+const selectedPresetAgent = computed(
+  () => presetAgents.value.find((agent) => agent.id === selectedPresetAgentId.value) || null,
+);
+const chatRunActive = computed(() =>
+  presetMode.value ? presetRunActive.value : runActive.value,
+);
+const chatResumeAvailable = computed(() =>
+  presetMode.value ? presetResumeAvailable.value : resumeAvailable.value,
+);
+const chatSendDisabled = computed(() =>
+  presetMode.value
+    ? !selectedPresetAgent.value || presetAgentsLoading.value || Boolean(presetAgentsError.value)
+    : sendDisabled.value,
+);
+const composerPlaceholder = computed(() => {
+  if (selectedPresetAgent.value) {
+    return `Message ${selectedPresetAgent.value.name}`;
+  }
+  if (presetMode.value) {
+    return "Select a preset agent";
+  }
+  return "Message Anomalo";
+});
 const activeSkillCount = computed(() => skills.value.filter((skill) => skill.active).length);
 const activeMcpCount = computed(() => mcpServers.value.filter((server) => server.active).length);
 const webTraceCount = computed(() => webTraces.value.length);
@@ -1125,17 +1281,20 @@ function handleGlobalKeydown(event) {
     inspectorOpen.value = false;
     historyOpen.value = false;
     composerActionsOpen.value = false;
+    presetPickerOpen.value = false;
   }
 }
 
 function handleGlobalPointerdown(event) {
-  if (!composerActionsOpen.value) {
-    return;
+  if (
+    composerActionsOpen.value &&
+    !composerActionsEl.value?.contains(event.target)
+  ) {
+    composerActionsOpen.value = false;
   }
-  if (composerActionsEl.value?.contains(event.target)) {
-    return;
+  if (presetPickerOpen.value && !presetPickerEl.value?.contains(event.target)) {
+    presetPickerOpen.value = false;
   }
-  composerActionsOpen.value = false;
 }
 
 function setActiveView(view) {
@@ -1143,6 +1302,7 @@ function setActiveView(view) {
   inspectorOpen.value = false;
   historyOpen.value = false;
   composerActionsOpen.value = false;
+  presetPickerOpen.value = false;
 }
 
 function toggleHistory() {
@@ -1174,6 +1334,9 @@ function saveManagementToken() {
   if (activeView.value === "dashboard") {
     void refreshDashboard();
   }
+  if (activeView.value === "preset-agents") {
+    void presetAgentsEl.value?.refresh();
+  }
   if (retryStockScan) {
     void refreshStockReport();
   }
@@ -1184,6 +1347,39 @@ function clearManagementToken() {
   buddyDashboard.notify("Admin token cleared.");
   if (activeView.value === "dashboard") {
     void refreshDashboard();
+  }
+}
+
+async function loadPresetAgents() {
+  if (presetAgentsRequest) {
+    return presetAgentsRequest;
+  }
+  presetAgentsRequest = (async () => {
+    presetAgentsLoading.value = true;
+    presetAgentsError.value = "";
+    try {
+      const response = await fetch("/api/agents");
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || "Preset agents failed to load.");
+      }
+      presetAgents.value = Array.isArray(data.agents) ? data.agents : [];
+      if (
+        selectedPresetAgentId.value &&
+        !presetAgents.value.some((agent) => agent.id === selectedPresetAgentId.value)
+      ) {
+        selectedPresetAgentId.value = "";
+      }
+    } catch (error) {
+      presetAgentsError.value = `Preset agents failed to load: ${formatError(error)}`;
+    } finally {
+      presetAgentsLoading.value = false;
+    }
+  })();
+  try {
+    await presetAgentsRequest;
+  } finally {
+    presetAgentsRequest = null;
   }
 }
 
@@ -1398,8 +1594,29 @@ function formatDateTime(value, { includeSeconds = false } = {}) {
   });
 }
 
-function submitMessage() {
+async function submitMessage() {
   const content = messageInput.value.trim();
+  if (presetMode.value) {
+    if (
+      !content ||
+      chatSendDisabled.value ||
+      chatRunActive.value ||
+      chatResumeAvailable.value ||
+      !selectedPresetAgent.value
+    ) {
+      return;
+    }
+    beginUserTurn(content);
+    messageInput.value = "";
+    await presetAgentTransport.send(
+      selectedPresetAgent.value.id,
+      content,
+      presetSessionId.value,
+    );
+    void nextTick(resizeComposer);
+    return;
+  }
+
   if (
     !content ||
     sendDisabled.value ||
@@ -1416,16 +1633,132 @@ function submitMessage() {
 }
 
 function stopRun() {
+  if (presetMode.value) {
+    presetAgentTransport.stopRun();
+    return;
+  }
   agentTransport.stopRun();
 }
 
 function resumeRun() {
+  if (presetMode.value) {
+    if (selectedPresetAgent.value && presetSessionId.value) {
+      void presetAgentTransport.resume(
+        selectedPresetAgent.value.id,
+        presetSessionId.value,
+      );
+    }
+    return;
+  }
   agentTransport.resumeRun();
+}
+
+function openPresetPicker() {
+  composerActionsOpen.value = false;
+  presetPickerOpen.value = false;
+  if (chatRunActive.value) {
+    return;
+  }
+  if (!presetMode.value) {
+    presetReturnSessionId.value = sessionId.value;
+    presetSessionId.value = "";
+    selectedPresetAgentId.value = "";
+    presetMode.value = true;
+  }
+  void loadPresetAgents();
+  void nextTick(() => messageInputEl.value?.focus());
+}
+
+function handlePresetPickerKeydown(event) {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    presetPickerOpen.value = false;
+    return;
+  }
+  if (event.key === "ArrowDown" && !presetPickerOpen.value) {
+    event.preventDefault();
+    presetPickerOpen.value = true;
+  }
+}
+
+function choosePresetAgent(agentId) {
+  if (chatRunActive.value || !agentId) {
+    return;
+  }
+  selectedPresetAgentId.value = agentId;
+  presetPickerOpen.value = false;
+  selectPresetAgent();
+}
+
+function selectPresetAgent() {
+  if (chatRunActive.value || !selectedPresetAgent.value) {
+    return;
+  }
+  if (!presetReturnSessionId.value) {
+    presetReturnSessionId.value = sessionId.value;
+  }
+  presetMode.value = true;
+  startPresetConversation();
+  void nextTick(() => messageInputEl.value?.focus());
+}
+
+function startPresetConversation() {
+  if (!selectedPresetAgent.value) {
+    return;
+  }
+  presetPickerOpen.value = false;
+  const nextSessionId = `preset_${selectedPresetAgent.value.id}_${createClientId()}`;
+  presetSessionId.value = nextSessionId;
+  presetAgentTransport.switchSession(nextSessionId);
+  clearMarkdownRenderTimers();
+  resetConversationState();
+  void loadTools();
+  void loadWebTraces();
+  void loadSkills();
+  void loadMcpServers();
+  void loadHistorySessions({ silent: true });
+}
+
+async function closePresetMode() {
+  if (chatRunActive.value) {
+    return;
+  }
+  await leavePresetMode({ restoreDefaultSession: true });
+  void nextTick(() => messageInputEl.value?.focus());
+}
+
+async function leavePresetMode({ restoreDefaultSession }) {
+  presetPickerOpen.value = false;
+  const returnSessionId = presetReturnSessionId.value;
+  presetAgentTransport.switchSession("");
+  presetMode.value = false;
+  selectedPresetAgentId.value = "";
+  presetSessionId.value = "";
+  presetReturnSessionId.value = "";
+  if (restoreDefaultSession && returnSessionId) {
+    agentTransport.switchSession(returnSessionId);
+    resetConversationState();
+    await loadConversationHistory(returnSessionId);
+    void loadTools();
+    void loadWebTraces();
+    void loadSkills();
+    void loadMcpServers();
+    void loadHistorySessions({ silent: true });
+  }
 }
 
 function startNewConversation() {
   composerActionsOpen.value = false;
   historyOpen.value = false;
+  if (presetMode.value) {
+    if (selectedPresetAgent.value) {
+      startPresetConversation();
+    } else {
+      openPresetPicker();
+    }
+    void nextTick(() => messageInputEl.value?.focus());
+    return;
+  }
   clearMarkdownRenderTimers();
   agentTransport.startNewSession();
 
@@ -1438,13 +1771,24 @@ function startNewConversation() {
   void nextTick(() => messageInputEl.value?.focus());
 }
 
-async function switchHistorySession(nextSessionId) {
-  if (!nextSessionId || nextSessionId === sessionId.value) {
-    historyOpen.value = false;
+async function switchHistorySession(historySession) {
+  const nextSessionId = historySession?.session_id;
+  if (chatRunActive.value) {
+    historyError.value = "Stop the active run before switching conversations.";
     return;
   }
-  if (runActive.value) {
-    historyError.value = "Stop the active run before switching conversations.";
+
+  if (historySession?.preset_agent) {
+    await switchPresetHistorySession(historySession);
+    return;
+  }
+
+  const exitedPresetMode = presetMode.value;
+  if (exitedPresetMode) {
+    await leavePresetMode({ restoreDefaultSession: false });
+  }
+  if (!nextSessionId || (!exitedPresetMode && nextSessionId === sessionId.value)) {
+    historyOpen.value = false;
     return;
   }
 
@@ -1461,8 +1805,46 @@ async function switchHistorySession(nextSessionId) {
   void nextTick(() => messageInputEl.value?.focus());
 }
 
+async function switchPresetHistorySession(historySession) {
+  const nextSessionId = historySession.session_id;
+  const presetAgent = historySession.preset_agent;
+  if (!nextSessionId || !presetAgent?.id) {
+    return;
+  }
+  if (presetAgent.deleted) {
+    historyError.value = "This conversation belongs to a deleted preset agent.";
+    return;
+  }
+
+  if (!presetMode.value) {
+    presetReturnSessionId.value = defaultSessionId.value;
+  }
+  await loadPresetAgents();
+  if (!presetAgents.value.some((agent) => agent.id === presetAgent.id)) {
+    historyError.value = "The preset agent for this conversation is no longer available.";
+    return;
+  }
+
+  historyOpen.value = false;
+  inspectorOpen.value = false;
+  presetMode.value = true;
+  selectedPresetAgentId.value = presetAgent.id;
+  presetSessionId.value = nextSessionId;
+  presetAgentTransport.switchSession(nextSessionId, {
+    canResume: Boolean(historySession.can_resume),
+  });
+  clearMarkdownRenderTimers();
+  resetConversationState();
+  await loadConversationHistory(nextSessionId);
+  void loadTools();
+  void loadWebTraces();
+  void loadSkills();
+  void loadMcpServers();
+  void nextTick(() => messageInputEl.value?.focus());
+}
+
 async function deleteHistorySession(historySession) {
-  if (!historySession?.session_id || runActive.value) {
+  if (!historySession?.session_id || chatRunActive.value) {
     return;
   }
   if (
@@ -1472,6 +1854,7 @@ async function deleteHistorySession(historySession) {
     return;
   }
 
+  const deletingCurrentSession = sessionId.value === historySession.session_id;
   try {
     const response = await fetch(
       `/api/sessions/${encodeURIComponent(historySession.session_id)}`,
@@ -1485,8 +1868,12 @@ async function deleteHistorySession(historySession) {
       (item) => item.session_id !== historySession.session_id,
     );
     historyError.value = "";
-    if (sessionId.value === historySession.session_id) {
-      startNewConversation();
+    if (deletingCurrentSession) {
+      if (presetMode.value) {
+        await closePresetMode();
+      } else {
+        startNewConversation();
+      }
     }
   } catch (error) {
     historyError.value = `Delete failed: ${formatError(error)}`;
@@ -1502,6 +1889,13 @@ function formatHistoryDate(value) {
     return String(value);
   }
   return date.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+function createClientId() {
+  if (globalThis.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID().replaceAll("-", "");
+  }
+  return Math.random().toString(16).slice(2).padEnd(24, "0");
 }
 
 function resetConversationState() {

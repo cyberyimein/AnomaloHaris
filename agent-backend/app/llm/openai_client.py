@@ -32,8 +32,16 @@ class LLMStreamInterrupted(Exception):
 
 
 class OpenAIChatClient:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        model: str | None = None,
+        temperature: float | None = None,
+    ) -> None:
         self.settings = settings
+        self.model = model or settings.openrouter_model
+        self.temperature = settings.llm_temperature if temperature is None else temperature
         self.client = AsyncOpenAI(
             api_key=settings.openrouter_api_key or "missing",
             base_url=settings.openai_base_url,
@@ -42,6 +50,9 @@ class OpenAIChatClient:
                 "X-Title": settings.app_title,
             },
         )
+
+    def configured(self, *, model: str, temperature: float) -> "OpenAIChatClient":
+        return OpenAIChatClient(self.settings, model=model, temperature=temperature)
 
     async def stream_chat(
         self,
@@ -138,16 +149,18 @@ class OpenAIChatClient:
         response_format: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
-            "model": self.settings.openrouter_model,
+            "model": self.model,
             "messages": deepcopy(messages),
             "tools": deepcopy(tools) if tools else None,
             "tool_choice": "auto" if tools else None,
-            "temperature": self.settings.llm_temperature,
+            "temperature": self.temperature,
         }
         if response_format is not None:
             payload["response_format"] = deepcopy(response_format)
             if "openrouter.ai" in str(self.settings.openai_base_url):
-                payload["provider"] = {"require_parameters": True}
+                # `provider` is an OpenRouter request-body extension, not a
+                # parameter accepted by the OpenAI Python SDK method.
+                payload["extra_body"] = {"provider": {"require_parameters": True}}
         return payload
 
     async def _mock_stream(self, messages: list[dict[str, Any]]) -> AsyncIterator[LLMStreamEvent]:
