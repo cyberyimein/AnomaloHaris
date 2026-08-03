@@ -189,6 +189,32 @@ model, temperature, and tool allowlist. Definitions are stored in
 The Agent composer uses the public `GET /api/agents` metadata endpoint to populate its preset
 selector; it intentionally omits system prompts and tool definitions.
 
+Preset definitions may also include `bootstrap_tools`. These trusted runtime tools execute in
+parallel before the first model request and inject their results as authoritative system context;
+they are not exposed for model selection. Bootstrap context is checkpointed and reused on resume.
+Only `core_get_time` is currently approved for this path. For example, a market-focused preset can
+start with both local and US Eastern clocks:
+
+```json
+{
+  "tool_names": ["web_search", "web_fetch", "core_convert_time"],
+  "bootstrap_tools": [
+    {
+      "name": "core_get_time",
+      "arguments": {"timezone": "Asia/Tokyo"},
+      "result_key": "local_time",
+      "required": true
+    },
+    {
+      "name": "core_get_time",
+      "arguments": {"timezone": "America/New_York"},
+      "result_key": "us_eastern_time",
+      "required": true
+    }
+  ]
+}
+```
+
 External applications can invoke a preset by its stable ID or case-insensitive name. The collected
 endpoint returns the normal event list plus `final_text` and parsed structured `output`:
 

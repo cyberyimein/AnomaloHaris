@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.agent.events import AgentEvent
 from app.agent.response_format import ResponseFormat
+from app.agent.runtime import BOOTSTRAP_TOOL_NAMES
 from app.agents.store import PresetAgent
 from app.api.security import require_management_access
 from app.config import get_settings
@@ -27,6 +28,21 @@ management_router = APIRouter(
 invocation_router = APIRouter(prefix="/api/agents", tags=["preset-agent-invocation"])
 
 
+class BootstrapToolDefinition(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    result_key: str = Field(min_length=1, max_length=80)
+    required: bool = True
+
+    @field_validator("name", "result_key")
+    @classmethod
+    def normalize_identifier(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Value cannot be blank.")
+        return cleaned
+
+
 class PresetAgentDefinition(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     description: str = Field(default="", max_length=500)
@@ -35,6 +51,7 @@ class PresetAgentDefinition(BaseModel):
     model: str = Field(min_length=1, max_length=200)
     temperature: float = Field(default=0.4, ge=0, le=2)
     tool_names: list[str] = Field(default_factory=list, max_length=200)
+    bootstrap_tools: list[BootstrapToolDefinition] = Field(default_factory=list, max_length=20)
 
     @field_validator("name")
     @classmethod
@@ -58,6 +75,20 @@ class PresetAgentDefinition(BaseModel):
     def normalize_tool_names(cls, value: list[str]) -> list[str]:
         names = [name.strip() for name in value if name.strip()]
         return list(dict.fromkeys(names))
+
+    @model_validator(mode="after")
+    def validate_bootstrap_result_keys(self) -> "PresetAgentDefinition":
+        result_keys = [tool.result_key for tool in self.bootstrap_tools]
+        if len(result_keys) != len(set(result_keys)):
+            raise ValueError("Bootstrap result_key values must be unique.")
+        unsupported = sorted(
+            {tool.name for tool in self.bootstrap_tools} - BOOTSTRAP_TOOL_NAMES
+        )
+        if unsupported:
+            raise ValueError(
+                "Tools are not approved for bootstrap context: " + ", ".join(unsupported)
+            )
+        return self
 
 
 class PresetAgentInvocation(BaseModel):
@@ -117,9 +148,13 @@ async def list_preset_agents() -> dict[str, object]:
 @management_router.post("", status_code=status.HTTP_201_CREATED)
 async def create_preset_agent(request: PresetAgentDefinition) -> dict[str, object]:
     try:
+        bootstrap_tools = [tool.model_dump() for tool in request.bootstrap_tools]
         agent = get_preset_agent_store().create(
-            **request.model_dump(),
-            tool_sources=await _resolve_tool_sources(request.tool_names),
+            **request.model_dump(exclude={"bootstrap_tools"}),
+            bootstrap_tools=bootstrap_tools,
+            tool_sources=await _resolve_tool_sources(
+                [*request.tool_names, *(tool.name for tool in request.bootstrap_tools)]
+            ),
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -132,10 +167,14 @@ async def update_preset_agent(
     request: PresetAgentDefinition,
 ) -> dict[str, object]:
     try:
+        bootstrap_tools = [tool.model_dump() for tool in request.bootstrap_tools]
         agent = get_preset_agent_store().update(
             agent_id,
-            **request.model_dump(),
-            tool_sources=await _resolve_tool_sources(request.tool_names),
+            **request.model_dump(exclude={"bootstrap_tools"}),
+            bootstrap_tools=bootstrap_tools,
+            tool_sources=await _resolve_tool_sources(
+                [*request.tool_names, *(tool.name for tool in request.bootstrap_tools)]
+            ),
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Preset agent not found.") from exc
@@ -240,6 +279,7 @@ async def _run_agent(
         response_format=request.response_format,
         system_prompt=agent.system_prompt,
         allowed_tool_names=set(agent.tool_names),
+        bootstrap_tools=agent.bootstrap_tools,
         model=agent.model,
         temperature=agent.temperature,
     ):

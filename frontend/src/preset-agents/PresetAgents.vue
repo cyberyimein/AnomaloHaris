@@ -189,11 +189,15 @@ function emptyForm() {
     model: defaults?.model || "openai/gpt-4o-mini",
     temperature: defaults?.temperature ?? 0.4,
     tool_names: [],
+    bootstrap_tools: [],
   };
 }
 
 function replaceForm(value) {
-  Object.assign(form, emptyForm(), value, { tool_names: [...(value?.tool_names || [])] });
+  Object.assign(form, emptyForm(), value, {
+    tool_names: [...(value?.tool_names || [])],
+    bootstrap_tools: [...(value?.bootstrap_tools || [])],
+  });
 }
 
 function beginCreate() {
@@ -246,6 +250,7 @@ async function saveAgent() {
     model: form.model,
     temperature: form.temperature,
     tool_names: form.tool_names,
+    bootstrap_tools: form.bootstrap_tools,
   };
   try {
     const url = form.id ? `/api/manage/agents/${encodeURIComponent(form.id)}` : "/api/manage/agents";

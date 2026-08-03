@@ -6,7 +6,7 @@ from app.agent.runtime import AgentRuntime
 from app.agent.session import SessionStore
 from app.agents.store import PresetAgentStore
 from app.config import Settings
-from app.llm.openai_client import OpenAIChatClient
+from app.llm.openai_client import LLMStreamEvent, OpenAIChatClient
 from app.tools.base import ToolResult, ToolSpec
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -89,6 +89,20 @@ def _definition(name: str = "fomc-brief") -> dict[str, object]:
         "model": "deepseek/deepseek-v4-flash",
         "temperature": 0.1,
         "tool_names": ["web_search"],
+        "bootstrap_tools": [
+            {
+                "name": "core_get_time",
+                "arguments": {"timezone": "Asia/Tokyo"},
+                "result_key": "local_time",
+                "required": True,
+            },
+            {
+                "name": "core_get_time",
+                "arguments": {"timezone": "America/New_York"},
+                "result_key": "us_eastern_time",
+                "required": True,
+            },
+        ],
         "tool_sources": {"web_search": "web"},
     }
 
@@ -107,6 +121,10 @@ def test_preset_agent_store_persists_and_resolves_name_case_insensitively(
     assert loaded is not None
     assert loaded.id == created.id
     assert loaded.tool_names == ["web_search"]
+    assert [tool["result_key"] for tool in loaded.bootstrap_tools] == [
+        "local_time",
+        "us_eastern_time",
+    ]
     second.close()
 
 
@@ -138,6 +156,35 @@ def test_preset_agent_name_cannot_be_whitespace() -> None:
         PresetAgentDefinition(name="   ", system_prompt="Prompt", model="model")
 
 
+def test_preset_agent_bootstrap_result_keys_must_be_unique() -> None:
+    from app.api.preset_agents import PresetAgentDefinition
+
+    with pytest.raises(ValueError, match="result_key values must be unique"):
+        PresetAgentDefinition(
+            name="clock-agent",
+            system_prompt="Prompt",
+            model="model",
+            bootstrap_tools=[
+                {"name": "core_get_time", "result_key": "current_time"},
+                {"name": "core_get_time", "result_key": "current_time"},
+            ],
+        )
+
+
+def test_preset_agent_rejects_untrusted_bootstrap_tools() -> None:
+    from app.api.preset_agents import PresetAgentDefinition
+
+    with pytest.raises(ValueError, match="not approved for bootstrap context"):
+        PresetAgentDefinition(
+            name="unsafe-agent",
+            system_prompt="Prompt",
+            model="model",
+            bootstrap_tools=[
+                {"name": "web_fetch", "result_key": "untrusted_web_content"}
+            ],
+        )
+
+
 def test_preset_agent_can_be_invoked_by_name(monkeypatch) -> None:
     from app.api import preset_agents
 
@@ -162,6 +209,7 @@ def test_preset_agent_can_be_invoked_by_name(monkeypatch) -> None:
     assert response.json()["output"] == {"summary": "Rates held steady."}
     assert runtime.calls[0]["model"] == "deepseek/deepseek-v4-flash"
     assert runtime.calls[0]["allowed_tool_names"] == {"web_search"}
+    assert runtime.calls[0]["bootstrap_tools"] == agent.bootstrap_tools
     llm_request = next(
         item for item in response.json()["events"] if item["type"] == "llm.request"
     )
@@ -246,6 +294,155 @@ async def test_runtime_applies_custom_prompt_model_temperature_and_tool_allowlis
         "content": "You are the stock system's FOMC analyst.",
     }
     assert [tool["function"]["name"] for tool in request["tools"]] == ["web_search"]
+
+
+class TimeBootstrapTools:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, object]]] = []
+
+    async def openai_tools(self, context):
+        del context
+        return [
+            ToolSpec(name="web_search", description="Search", source="web").as_openai_tool(),
+            ToolSpec(
+                name="core_get_time", description="Clock", source="core"
+            ).as_openai_tool(),
+        ]
+
+    async def call_tool(self, name, arguments, *, context):
+        del context
+        self.calls.append((name, arguments))
+        timezone = str(arguments["timezone"])
+        offsets = {"Asia/Tokyo": "+09:00", "America/New_York": "-04:00"}
+        value = f"2026-08-03T12:00:00{offsets[timezone]}"
+        return ToolResult(name=name, content=value, data={"timezone": timezone, "iso": value})
+
+
+class RecordingLlm:
+    def __init__(self) -> None:
+        self.messages = []
+        self.tools = []
+
+    def request_payload(self, messages, tools):
+        return {"messages": messages, "tools": tools}
+
+    async def stream_chat(self, messages, tools):
+        self.messages = messages
+        self.tools = tools
+        yield LLMStreamEvent(type="message.delta", content="done")
+        yield LLMStreamEvent(type="message.done")
+
+
+@pytest.mark.asyncio
+async def test_runtime_bootstraps_two_clocks_before_first_llm_request() -> None:
+    tools = TimeBootstrapTools()
+    llm = RecordingLlm()
+    runtime = AgentRuntime(
+        settings=Settings(OPENROUTER_API_KEY=None),
+        sessions=SessionStore(),
+        skills=FakeSkills(),
+        mcp=FakeMcp(),
+        tools=tools,
+        llm=llm,
+    )
+    bootstrap_tools = [
+        {
+            "name": "core_get_time",
+            "arguments": {"timezone": "Asia/Tokyo"},
+            "result_key": "local_time",
+            "required": True,
+        },
+        {
+            "name": "core_get_time",
+            "arguments": {"timezone": "America/New_York"},
+            "result_key": "us_eastern_time",
+            "required": True,
+        },
+    ]
+
+    events = [
+        item
+        async for item in runtime.run(
+            "clock-session",
+            "Find the next FOMC events.",
+            allowed_tool_names={"web_search"},
+            bootstrap_tools=bootstrap_tools,
+        )
+    ]
+
+    assert [arguments["timezone"] for _, arguments in tools.calls] == [
+        "Asia/Tokyo",
+        "America/New_York",
+    ]
+    context_message = next(
+        message for message in llm.messages if "Authoritative runtime context" in message["content"]
+    )
+    assert '"key":"local_time"' in context_message["content"]
+    assert '"key":"us_eastern_time"' in context_message["content"]
+    assert [tool["function"]["name"] for tool in llm.tools] == ["web_search"]
+    bootstrap_events = [item for item in events if item.data.get("phase") == "bootstrap"]
+    assert [item.type for item in bootstrap_events] == [
+        "tool.started",
+        "tool.started",
+        "tool.finished",
+        "tool.finished",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_runtime_resume_reuses_checkpointed_bootstrap_context() -> None:
+    tools = TimeBootstrapTools()
+    llm = RecordingLlm()
+    sessions = SessionStore()
+    sessions.save_checkpoint(
+        "clock-resume-session",
+        [{"role": "user", "content": "Find the next FOMC events."}],
+        run_id="previous-run",
+        prompt_profile="agent",
+        user_content="Find the next FOMC events.",
+        iteration=1,
+        bootstrap_context=[
+            {
+                "key": "local_time",
+                "tool": "core_get_time",
+                "arguments": {"timezone": "Asia/Tokyo"},
+                "result": "2026-08-03T12:00:00+09:00",
+            }
+        ],
+    )
+    runtime = AgentRuntime(
+        settings=Settings(OPENROUTER_API_KEY=None),
+        sessions=sessions,
+        skills=FakeSkills(),
+        mcp=FakeMcp(),
+        tools=tools,
+        llm=llm,
+    )
+
+    events = [
+        item
+        async for item in runtime.run(
+            "clock-resume-session",
+            resume=True,
+            allowed_tool_names={"web_search"},
+            bootstrap_tools=[
+                {
+                    "name": "core_get_time",
+                    "arguments": {"timezone": "Asia/Tokyo"},
+                    "result_key": "local_time",
+                    "required": True,
+                }
+            ],
+        )
+    ]
+
+    assert tools.calls == []
+    assert all(item.data.get("phase") != "bootstrap" for item in events)
+    assert any(
+        "2026-08-03T12:00:00+09:00" in message["content"]
+        for message in llm.messages
+        if message["role"] == "system"
+    )
 
 
 @pytest.mark.asyncio

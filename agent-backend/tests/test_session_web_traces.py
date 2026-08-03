@@ -29,6 +29,7 @@ def test_session_store_persists_messages_and_checkpoints_to_sqlite(tmp_path) -> 
         user_content="hello",
         iteration=2,
         reason="user_stop",
+        bootstrap_context=[{"key": "local_time", "result": "2026-08-03T12:00:00+09:00"}],
     )
     first.close()
 
@@ -39,6 +40,9 @@ def test_session_store_persists_messages_and_checkpoints_to_sqlite(tmp_path) -> 
     assert checkpoint is not None
     assert checkpoint.run_id == "run-1"
     assert checkpoint.reason == "user_stop"
+    assert checkpoint.bootstrap_context == [
+        {"key": "local_time", "result": "2026-08-03T12:00:00+09:00"}
+    ]
 
     restored = second.restore_checkpoint("session-1")
     assert restored is not None

@@ -2,7 +2,7 @@ import json
 import sqlite3
 import threading
 from copy import deepcopy
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -19,6 +19,7 @@ class SessionCheckpoint:
     iteration: int
     reason: str = "stopped"
     response_format: dict[str, Any] | None = None
+    bootstrap_context: list[dict[str, Any]] = field(default_factory=list)
 
 
 class SessionStore:
@@ -309,6 +310,7 @@ class SessionStore:
         iteration: int,
         reason: str = "stopped",
         response_format: dict[str, Any] | None = None,
+        bootstrap_context: list[dict[str, Any]] | None = None,
     ) -> None:
         with self._lock:
             self._ensure_loaded(session_id)
@@ -320,6 +322,7 @@ class SessionStore:
                 iteration=iteration,
                 reason=reason,
                 response_format=deepcopy(response_format),
+                bootstrap_context=deepcopy(bootstrap_context or []),
             )
             self._persist(session_id)
 

@@ -19,6 +19,7 @@ class PresetAgent:
     model: str
     temperature: float
     tool_names: list[str]
+    bootstrap_tools: list[dict[str, object]]
     tool_sources: dict[str, str]
     created_at: str
     updated_at: str
@@ -51,6 +52,7 @@ class PresetAgentStore:
                 model TEXT NOT NULL,
                 temperature REAL NOT NULL DEFAULT 0.4,
                 tool_names_json TEXT NOT NULL DEFAULT '[]',
+                bootstrap_tools_json TEXT NOT NULL DEFAULT '[]',
                 tool_sources_json TEXT NOT NULL DEFAULT '{}',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
@@ -64,6 +66,11 @@ class PresetAgentStore:
         if "tool_sources_json" not in columns:
             self._connection.execute(
                 "ALTER TABLE preset_agents ADD COLUMN tool_sources_json TEXT NOT NULL DEFAULT '{}'"
+            )
+        if "bootstrap_tools_json" not in columns:
+            self._connection.execute(
+                "ALTER TABLE preset_agents "
+                "ADD COLUMN bootstrap_tools_json TEXT NOT NULL DEFAULT '[]'"
             )
         self._connection.execute(
             """
@@ -141,6 +148,7 @@ class PresetAgentStore:
         model: str,
         temperature: float,
         tool_names: list[str],
+        bootstrap_tools: list[dict[str, object]] | None = None,
         tool_sources: dict[str, str] | None = None,
     ) -> PresetAgent:
         now = datetime.now(UTC).isoformat()
@@ -153,6 +161,7 @@ class PresetAgentStore:
             model=model.strip(),
             temperature=temperature,
             tool_names=list(dict.fromkeys(tool_names)),
+            bootstrap_tools=list(bootstrap_tools or []),
             tool_sources=dict(tool_sources or {}),
             created_at=now,
             updated_at=now,
@@ -163,8 +172,9 @@ class PresetAgentStore:
                     """
                     INSERT INTO preset_agents (
                         id, name, description, ghost, system_prompt, model, temperature,
-                        tool_names_json, tool_sources_json, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        tool_names_json, bootstrap_tools_json, tool_sources_json,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         agent.id,
@@ -175,6 +185,7 @@ class PresetAgentStore:
                         agent.model,
                         agent.temperature,
                         json.dumps(agent.tool_names),
+                        json.dumps(agent.bootstrap_tools),
                         json.dumps(agent.tool_sources),
                         agent.created_at,
                         agent.updated_at,
@@ -198,6 +209,7 @@ class PresetAgentStore:
         values["model"] = str(values["model"]).strip()
         values["temperature"] = float(values["temperature"])
         values["tool_names"] = list(dict.fromkeys(values["tool_names"]))
+        values["bootstrap_tools"] = list(values["bootstrap_tools"])
         values["tool_sources"] = dict(values["tool_sources"])
         values["updated_at"] = datetime.now(UTC).isoformat()
         updated = PresetAgent(**values)
@@ -207,7 +219,8 @@ class PresetAgentStore:
                     """
                     UPDATE preset_agents SET name = ?, description = ?, ghost = ?,
                         system_prompt = ?, model = ?, temperature = ?, tool_names_json = ?,
-                        tool_sources_json = ?, updated_at = ? WHERE id = ?
+                        bootstrap_tools_json = ?, tool_sources_json = ?, updated_at = ?
+                        WHERE id = ?
                     """,
                     (
                         updated.name,
@@ -217,6 +230,7 @@ class PresetAgentStore:
                         updated.model,
                         updated.temperature,
                         json.dumps(updated.tool_names),
+                        json.dumps(updated.bootstrap_tools),
                         json.dumps(updated.tool_sources),
                         updated.updated_at,
                         agent_id,
@@ -250,6 +264,7 @@ class PresetAgentStore:
             model=str(row["model"]),
             temperature=float(row["temperature"]),
             tool_names=list(json.loads(row["tool_names_json"])),
+            bootstrap_tools=list(json.loads(row["bootstrap_tools_json"])),
             tool_sources=dict(json.loads(row["tool_sources_json"])),
             created_at=str(row["created_at"]),
             updated_at=str(row["updated_at"]),
