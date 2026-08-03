@@ -134,7 +134,18 @@ async def test_tool_loop_uses_a_non_streaming_structured_finalizer() -> None:
     assert len(llm.finalizer_calls) == 1
     finalizer_messages, finalizer_format = llm.finalizer_calls[0]
     assert finalizer_format == RESPONSE_FORMAT
-    assert any(message.get("role") == "tool" for message in finalizer_messages)
+    assert not any(message.get("role") == "tool" for message in finalizer_messages)
+    assert finalizer_messages[0]["role"] == "system"
+    assert "strict final-output formatter" in finalizer_messages[0]["content"]
+    assert finalizer_messages[1] == {
+        "role": "user",
+        "content": "Summarize the FOMC decision.",
+    }
+    assert finalizer_messages[2] == {
+        "role": "assistant",
+        "content": "unstructured draft",
+    }
+    assert "Produce the final answer now" in finalizer_messages[3]["content"]
 
     finalizer_request = llm.request_payloads[-1]
     assert finalizer_request["tools"] == []
@@ -171,6 +182,11 @@ async def test_invalid_structured_output_is_retried_once() -> None:
     ]
 
     assert len(llm.finalizer_calls) == 2
+    assert not any(
+        message.get("role") == "tool"
+        for messages, _response_format in llm.finalizer_calls
+        for message in messages
+    )
     assert "failed Anomalo validation" in llm.finalizer_calls[1][0][-1]["content"]
     assert events[-1].type == "run.finished"
     assert events[-1].data["output"] == {"summary": "corrected"}

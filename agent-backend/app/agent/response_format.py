@@ -134,13 +134,17 @@ def finalizer_instruction(
     if output_type == "json_schema":
         instruction = (
             "The tool-calling phase is complete. Produce the final answer now. "
+            "Use the supplied research draft as the source of truth; do not redo the research "
+            "or invent facts that are absent from the draft. "
             "Return only one JSON value that conforms to the requested JSON Schema. "
             "Do not use Markdown fences and do not add explanatory text."
         )
     else:
         instruction = (
             "The tool-calling phase is complete. Produce the final answer now as one valid JSON "
-            "object. Do not use Markdown fences and do not add explanatory text."
+            "object. Use the supplied research draft as the source of truth; do not redo the "
+            "research or invent facts that are absent from the draft. Do not use Markdown fences "
+            "and do not add explanatory text."
         )
 
     if validation_error:
