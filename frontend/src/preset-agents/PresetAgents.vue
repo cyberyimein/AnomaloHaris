@@ -58,6 +58,7 @@
           </span>
           <span class="preset-agent-card-meta">
             {{ agent.model }} · {{ agent.tool_names.length }} tools
+            <span v-if="agent.bootstrap_tools?.length"> · {{ agent.bootstrap_tools.length }} startup</span>
           </span>
           <ChevronRight :size="18" />
         </button>
@@ -124,6 +125,24 @@
           </div>
         </fieldset>
 
+        <fieldset class="preset-tools-fieldset preset-bootstrap-fieldset">
+          <legend>Startup context</legend>
+          <p>These runtime values are supplied before the first model request and are not model-selected tools.</p>
+          <div class="preset-bootstrap-grid">
+            <label v-for="clock in startupClocks" :key="clock.timezone" class="preset-bootstrap-option">
+              <input
+                type="checkbox"
+                :checked="hasBootstrapClock(clock.timezone)"
+                @change="setBootstrapClock(clock, $event.target.checked)"
+              />
+              <span>
+                <strong>{{ clock.label }}</strong>
+                <small>{{ clock.timezone }}</small>
+              </span>
+            </label>
+          </div>
+        </fieldset>
+
         <section v-if="form.id" class="preset-api-callout">
           <span>API reference</span>
           <code>POST /api/agents/{{ encodeURIComponent(form.name) }}/chat</code>
@@ -178,6 +197,10 @@ const notice = ref("");
 const noticeIsError = ref(false);
 const defaults = reactive({ model: "openai/gpt-4o-mini", temperature: 0.4 });
 const form = reactive(emptyForm());
+const startupClocks = [
+  { label: "Local time", timezone: "Asia/Tokyo" },
+  { label: "US Eastern time", timezone: "America/New_York" },
+];
 
 function emptyForm() {
   return {
@@ -210,6 +233,26 @@ function editAgent(agent) {
   replaceForm(agent);
   editing.value = true;
   notice.value = "";
+}
+
+function hasBootstrapClock(timezone) {
+  return form.bootstrap_tools.some(
+    (tool) => tool?.name === "core_get_time" && tool?.arguments?.timezone === timezone,
+  );
+}
+
+function setBootstrapClock(clock, enabled) {
+  form.bootstrap_tools = form.bootstrap_tools.filter(
+    (tool) => !(tool?.name === "core_get_time" && tool?.arguments?.timezone === clock.timezone),
+  );
+  if (enabled) {
+    form.bootstrap_tools.push({
+      name: "core_get_time",
+      arguments: { timezone: clock.timezone },
+      result_key: clock.timezone === "America/New_York" ? "us_eastern_time" : "local_time",
+      required: true,
+    });
+  }
 }
 
 function closeEditor() {
@@ -354,6 +397,11 @@ defineExpose({ refresh: load });
 .preset-tool-option span { display: grid; gap: 2px; min-width: 0; }
 .preset-tool-option strong { overflow-wrap: anywhere; font-size: 12px; }
 .preset-tool-option small { color: var(--muted); font-size: 10px; }
+.preset-bootstrap-fieldset { margin-top: 16px; }
+.preset-bootstrap-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
+.preset-bootstrap-option { display: flex; align-items: start; gap: 9px; border: 1px solid var(--line); border-radius: 9px; padding: 10px; cursor: pointer; }
+.preset-bootstrap-option span { display: grid; gap: 2px; }
+.preset-bootstrap-option small { color: var(--muted); font-size: 10px; }
 .preset-api-callout { display: grid; gap: 7px; margin-top: 20px; border-radius: 10px; background: var(--surface-muted); padding: 14px; }
 .preset-api-callout code { overflow-wrap: anywhere; font-size: 13px; }
 .preset-api-callout small { color: var(--muted); }
