@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     llm_temperature: float = Field(default=0.4, alias="LLM_TEMPERATURE")
     max_tool_iterations: int = Field(default=50, alias="MAX_TOOL_ITERATIONS")
     agent_run_timeout_seconds: float = Field(
-        default=300.0,
+        default=600.0,
         gt=0,
         alias="AGENT_RUN_TIMEOUT_SECONDS",
     )

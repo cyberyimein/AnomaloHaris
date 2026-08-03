@@ -114,7 +114,7 @@ All runtime configuration comes from the root `.env`. The most commonly used var
 | `OPENAI_BASE_URL` | OpenAI-compatible API base URL | OpenRouter |
 | `OPENROUTER_MODEL` | Model identifier | `openai/gpt-4o-mini` |
 | `MAX_TOOL_ITERATIONS` | Maximum model/tool loop iterations per run | `50` |
-| `AGENT_RUN_TIMEOUT_SECONDS` | Maximum wall-clock duration for one resumable run | `300` |
+| `AGENT_RUN_TIMEOUT_SECONDS` | Maximum wall-clock duration for one resumable run | `600` |
 | `ANOMALO_ADMIN_TOKEN` | Authorizes remote management requests | unset |
 | `ANOMALO_AGENT_PROMPT_PROFILE` | Browser-agent prompt profile | `agent` |
 | `ANOMALO_BUDDY_PROMPT_PROFILE` | Buddy voice prompt profile | `buddy_voice` |
