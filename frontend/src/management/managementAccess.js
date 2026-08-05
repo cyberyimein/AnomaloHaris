@@ -98,8 +98,7 @@ function requiresManagementAccess(url) {
   return (
     url.startsWith("/api/buddy") ||
     url.startsWith("/api/manage") ||
-    url.startsWith("/api/copilot-hooks") ||
-    url === "/api/stocks/scan"
+    url.startsWith("/api/copilot-hooks")
   );
 }
 

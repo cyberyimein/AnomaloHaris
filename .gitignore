@@ -38,4 +38,6 @@ build/
 data/
 artifacts/
 agent-backend/artifacts/
-stock-backend/artifacts/
+stock-backend/data/
+stock-backend/outputs/
+archives/

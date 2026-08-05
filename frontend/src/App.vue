@@ -37,14 +37,6 @@
           >
             Dashboard
           </button>
-          <button
-            class="nav-tab"
-            :class="{ active: activeView === 'stock-analysis' }"
-            type="button"
-            @click="setActiveView('stock-analysis')"
-          >
-            Stock Analysis
-          </button>
         </nav>
 
         <div class="header-actions">
@@ -89,18 +81,6 @@
           >
             <RefreshCw :size="17" />
             <span>Refresh</span>
-          </button>
-          <button
-            v-else-if="activeView === 'stock-analysis'"
-            class="toolbar-button"
-            type="button"
-            title="Run stock analysis"
-            aria-label="Run stock analysis"
-            :disabled="stockRefreshInFlight"
-            @click="refreshStockReport"
-          >
-            <RefreshCw :size="17" />
-            <span>Run Scan</span>
           </button>
         </div>
       </header>
@@ -314,15 +294,9 @@
         v-else-if="activeView === 'dashboard'"
         :controller="buddyDashboard"
         :management="managementAccess"
+        :model-settings="modelSettings"
         @save-management-token="saveManagementToken"
         @clear-management-token="clearManagementToken"
-      />
-
-      <StockWorkspace
-        v-else-if="activeView === 'stock-analysis'"
-        :controller="stockWorkspace"
-        :management="managementAccess"
-        @save-management-token="saveManagementToken"
       />
 
       <form
@@ -661,6 +635,36 @@
               <strong>{{ events.length }}</strong>
             </div>
           </div>
+        </details>
+
+        <details class="drawer-card retrieval-mode-card" open>
+          <summary>
+            <span>Retrieval Mode</span>
+            <Globe2 :size="16" />
+          </summary>
+          <div class="search-mode-list" role="radiogroup" aria-label="Retrieval mode">
+            <label
+              v-for="option in searchModeOptions"
+              :key="option.id"
+              class="search-mode-option"
+              :class="{ active: displayedSearchMode === option.id }"
+            >
+              <input
+                type="radio"
+                name="anomalo-search-mode"
+                :value="option.id"
+                :checked="displayedSearchMode === option.id"
+                :disabled="chatRunActive || searchModeSaveInFlight || presetMode"
+                @change="selectSearchMode(option.id)"
+              />
+              <span class="search-mode-radio" aria-hidden="true"></span>
+              <span class="search-mode-copy">
+                <strong>{{ option.label }}</strong>
+                <span>{{ option.description }}</span>
+              </span>
+            </label>
+          </div>
+          <div class="panel-note">{{ displayedSearchModeStatusMessage }}</div>
         </details>
 
         <details class="drawer-card">
@@ -1029,9 +1033,9 @@ import anomaloIconUrl from "./assets/anomalo-shrimp.png";
 import BuddyDashboard from "./dashboard/BuddyDashboard.vue";
 import { createBuddyDashboardController } from "./dashboard/buddyDashboardController";
 import { createManagementAccess } from "./management/managementAccess";
+import { createModelSettingsController } from "./management/modelSettingsController";
+import { createSearchModeController } from "./management/searchModeController";
 import PresetAgents from "./preset-agents/PresetAgents.vue";
-import StockWorkspace from "./stock/StockWorkspace.vue";
-import { createStockWorkspaceController } from "./stock/stockWorkspaceController";
 
 const SEND_SHORTCUT = "Alt+Enter";
 const sendShortcutTooltip = SEND_SHORTCUT;
@@ -1058,12 +1062,13 @@ const buddyDashboard = createBuddyDashboardController({
 });
 const { actionInFlight: buddyActionInFlight } = buddyDashboard.state;
 const refreshDashboard = buddyDashboard.refresh;
-const stockWorkspace = createStockWorkspaceController({
-  request: managementAccess.request,
+const modelSettings = createModelSettingsController({
+  requestJson: fetchJson,
   markAccessError: markManagementAccessError,
+  clearAccessError: () => {
+    managementAccessRequired.value = false;
+  },
 });
-const { refreshInFlight: stockRefreshInFlight } = stockWorkspace.state;
-const refreshStockReport = stockWorkspace.refresh;
 
 const tools = ref([]);
 const historySessions = ref([]);
@@ -1174,9 +1179,39 @@ const normalizedRunStatus = computed(() => normalizeState(runStatus.value));
 const selectedPresetAgent = computed(
   () => presetAgents.value.find((agent) => agent.id === selectedPresetAgentId.value) || null,
 );
+const presetSearchMode = computed(() => selectedPresetAgent.value?.search_mode || null);
+const displayedSearchMode = computed(() =>
+  presetMode.value ? presetSearchMode.value : searchModeValue.value,
+);
+const displayedSearchModeStatusMessage = computed(() => {
+  if (!presetMode.value) {
+    return searchModeStatusMessage.value;
+  }
+  if (!selectedPresetAgent.value) {
+    return "Select a preset Agent to see its retrieval mode.";
+  }
+  if (!presetSearchMode.value) {
+    return "This preset does not include the web_search tool.";
+  }
+  const option = searchModeOptions.value.find(
+    (candidate) => candidate.id === presetSearchMode.value,
+  );
+  return `Locked by preset Agent: ${option?.label || presetSearchMode.value}.`;
+});
 const chatRunActive = computed(() =>
   presetMode.value ? presetRunActive.value : runActive.value,
 );
+const searchModeController = createSearchModeController({
+  requestJson: fetchJson,
+  getSessionId: () => sessionId.value,
+  isDisabled: () => chatRunActive.value,
+});
+const {
+  mode: searchModeValue,
+  options: searchModeOptions,
+  saveInFlight: searchModeSaveInFlight,
+  statusMessage: searchModeStatusMessage,
+} = searchModeController.state;
 const chatResumeAvailable = computed(() =>
   presetMode.value ? presetResumeAvailable.value : resumeAvailable.value,
 );
@@ -1255,6 +1290,7 @@ onMounted(() => {
   document.addEventListener("pointerdown", handleGlobalPointerdown);
   agentTransport.connect();
   void loadConversationHistory();
+  void searchModeController.load();
   void loadHistorySessions();
   void loadTools();
   void loadWebTraces();
@@ -1320,6 +1356,12 @@ function closePanels() {
 
 function handleAgentEventAndRefresh(event) {
   handleAgentEvent(event);
+  if (event.type === "session.state" && event.data?.search_mode) {
+    searchModeController.applyEvent(event.data.search_mode);
+  }
+  if (event.type === "run.started" && event.data?.search_mode) {
+    searchModeController.applyEvent(event.data.search_mode);
+  }
   if (["run.started", "run.finished", "run.stopped", "run.error"].includes(event.type)) {
     void loadHistorySessions({ silent: true });
   }
@@ -1327,18 +1369,14 @@ function handleAgentEventAndRefresh(event) {
 
 function saveManagementToken() {
   const nextToken = managementTokenInput.value.trim();
-  const retryStockScan =
-    managementAccessRequired.value && activeView.value === "stock-analysis" && Boolean(nextToken);
   managementAccess.save();
   buddyDashboard.notify(nextToken ? "Admin token saved." : "Admin token cleared.");
   if (activeView.value === "dashboard") {
     void refreshDashboard();
+    void modelSettings.load();
   }
   if (activeView.value === "preset-agents") {
     void presetAgentsEl.value?.refresh();
-  }
-  if (retryStockScan) {
-    void refreshStockReport();
   }
 }
 
@@ -1397,6 +1435,17 @@ async function loadTools() {
   }
 }
 
+async function selectSearchMode(nextMode) {
+  if (presetMode.value) {
+    return;
+  }
+  const changed = await searchModeController.select(nextMode);
+  if (changed) {
+    addEventLog("search-mode", `Retrieval mode set to ${nextMode}.`);
+    void loadTools();
+  }
+}
+
 async function loadHistorySessions({ silent = false } = {}) {
   const requestId = ++historyRequestSequence;
   if (!silent) {
@@ -1425,6 +1474,7 @@ async function loadHistorySessions({ silent = false } = {}) {
 }
 
 async function loadConversationHistory(targetSessionId = sessionId.value) {
+  await searchModeController.load(targetSessionId);
   try {
     const response = await fetch(
       `/api/sessions/${encodeURIComponent(targetSessionId)}`,
@@ -1710,6 +1760,7 @@ function startPresetConversation() {
   const nextSessionId = `preset_${selectedPresetAgent.value.id}_${createClientId()}`;
   presetSessionId.value = nextSessionId;
   presetAgentTransport.switchSession(nextSessionId);
+  void searchModeController.load(nextSessionId);
   clearMarkdownRenderTimers();
   resetConversationState();
   void loadTools();
@@ -1761,6 +1812,7 @@ function startNewConversation() {
   }
   clearMarkdownRenderTimers();
   agentTransport.startNewSession();
+  void searchModeController.load(sessionId.value);
 
   resetConversationState();
   void loadTools();

@@ -112,7 +112,9 @@ def test_preset_agent_store_persists_and_resolves_name_case_insensitively(
 ) -> None:
     db_path = tmp_path / "preset-agents.sqlite3"
     first = PresetAgentStore(db_path)
-    created = first.create(**_definition())
+    definition = _definition()
+    definition["search_mode"] = "subagent"
+    created = first.create(**definition)
     first.close()
 
     second = PresetAgentStore(db_path)
@@ -121,6 +123,7 @@ def test_preset_agent_store_persists_and_resolves_name_case_insensitively(
     assert loaded is not None
     assert loaded.id == created.id
     assert loaded.tool_names == ["web_search"]
+    assert loaded.search_mode == "subagent"
     assert [tool["result_key"] for tool in loaded.bootstrap_tools] == [
         "local_time",
         "us_eastern_time",
@@ -171,6 +174,34 @@ def test_preset_agent_bootstrap_result_keys_must_be_unique() -> None:
         )
 
 
+def test_preset_agent_search_mode_requires_web_search_and_defaults_to_diy() -> None:
+    from app.api.preset_agents import PresetAgentDefinition
+
+    configured = PresetAgentDefinition(
+        name="web-agent",
+        system_prompt="Prompt",
+        model="model",
+        tool_names=["web_search"],
+        search_mode="subagent",
+    )
+    defaulted = PresetAgentDefinition(
+        name="default-web-agent",
+        system_prompt="Prompt",
+        model="model",
+        tool_names=["web_search"],
+    )
+
+    assert configured.search_mode == "subagent"
+    assert defaulted.search_mode == "diy"
+    with pytest.raises(ValueError, match="requires the web_search tool"):
+        PresetAgentDefinition(
+            name="without-web-agent",
+            system_prompt="Prompt",
+            model="model",
+            search_mode="native",
+        )
+
+
 def test_preset_agent_rejects_untrusted_bootstrap_tools() -> None:
     from app.api.preset_agents import PresetAgentDefinition
 
@@ -189,7 +220,9 @@ def test_preset_agent_can_be_invoked_by_name(monkeypatch) -> None:
     from app.api import preset_agents
 
     store = PresetAgentStore()
-    agent = store.create(**_definition())
+    definition = _definition()
+    definition["search_mode"] = "subagent"
+    agent = store.create(**definition)
     runtime = CapturingRuntime()
     sessions = SessionStore()
     monkeypatch.setattr(preset_agents, "get_preset_agent_store", lambda: store)
@@ -210,6 +243,7 @@ def test_preset_agent_can_be_invoked_by_name(monkeypatch) -> None:
     assert runtime.calls[0]["model"] == "deepseek/deepseek-v4-flash"
     assert runtime.calls[0]["allowed_tool_names"] == {"web_search"}
     assert runtime.calls[0]["bootstrap_tools"] == agent.bootstrap_tools
+    assert runtime.calls[0]["search_mode"] == "subagent"
     llm_request = next(
         item for item in response.json()["events"] if item["type"] == "llm.request"
     )
@@ -243,6 +277,7 @@ def test_invocable_preset_agent_list_does_not_expose_system_prompt(monkeypatch) 
                 "description": "FOMC summary agent",
                 "ghost": "📈",
                 "model": "deepseek/deepseek-v4-flash",
+                "search_mode": "diy",
                 "tool_count": 1,
             }
         ]
@@ -469,6 +504,10 @@ async def test_preset_tool_allowlist_blocks_python_debug_shortcut() -> None:
     assert all(item.type != "tool.started" for item in events)
     request = next(item for item in events if item.type == "llm.request")
     assert request.data["request"]["tools"] is None
+    assert not any(
+        "Search mode is" in str(message.get("content", ""))
+        for message in request.data["request"]["messages"]
+    )
 
 
 def test_default_chat_rejects_a_preset_bound_session(monkeypatch) -> None:

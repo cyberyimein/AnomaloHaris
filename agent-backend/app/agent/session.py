@@ -7,6 +7,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from app.search_modes import DEFAULT_SEARCH_MODE, SearchMode, normalize_search_mode
+
 RESUME_PROMPT_MARKER = "Continue the interrupted task from the saved context."
 
 
@@ -25,8 +27,14 @@ class SessionCheckpoint:
 class SessionStore:
     """Persistent session state backed by SQLite with a process-local read cache."""
 
-    def __init__(self, db_path: str | Path = ":memory:") -> None:
+    def __init__(
+        self,
+        db_path: str | Path = ":memory:",
+        *,
+        default_search_mode: str = DEFAULT_SEARCH_MODE,
+    ) -> None:
         self.db_path = str(db_path)
+        self.default_search_mode: SearchMode = normalize_search_mode(default_search_mode)
         if self.db_path != ":memory:":
             Path(self.db_path).expanduser().parent.mkdir(parents=True, exist_ok=True)
 
@@ -47,6 +55,7 @@ class SessionStore:
         self._active_skills: dict[str, set[str]] = {}
         self._active_mcp_servers: dict[str, set[str]] = {}
         self._web_traces: dict[str, list[dict[str, Any]]] = {}
+        self._search_modes: dict[str, SearchMode] = {}
         self._checkpoints: dict[str, SessionCheckpoint] = {}
         self._loaded_sessions: set[str] = set()
 
@@ -60,6 +69,7 @@ class SessionStore:
                 active_mcp_servers_json TEXT NOT NULL DEFAULT '[]',
                 web_traces_json TEXT NOT NULL DEFAULT '[]',
                 checkpoint_json TEXT,
+                search_mode TEXT NOT NULL DEFAULT 'diy',
                 title TEXT NOT NULL DEFAULT '',
                 message_count INTEGER NOT NULL DEFAULT 0,
                 updated_at TEXT NOT NULL
@@ -77,6 +87,11 @@ class SessionStore:
         if "message_count" not in columns:
             self._connection.execute(
                 "ALTER TABLE sessions ADD COLUMN message_count INTEGER NOT NULL DEFAULT 0"
+            )
+        if "search_mode" not in columns:
+            self._connection.execute(
+                "ALTER TABLE sessions ADD COLUMN search_mode TEXT NOT NULL DEFAULT "
+                f"'{self.default_search_mode}'"
             )
         self._backfill_session_metadata()
         self._connection.commit()
@@ -111,7 +126,7 @@ class SessionStore:
         row = self._connection.execute(
             """
             SELECT messages_json, active_skills_json, active_mcp_servers_json,
-                   web_traces_json, checkpoint_json
+                   web_traces_json, checkpoint_json, search_mode
             FROM sessions
             WHERE session_id = ?
             """,
@@ -122,6 +137,7 @@ class SessionStore:
             self._active_skills[session_id] = set()
             self._active_mcp_servers[session_id] = set()
             self._web_traces[session_id] = []
+            self._search_modes[session_id] = self.default_search_mode
             self._checkpoints.pop(session_id, None)
         else:
             self._messages[session_id] = _json_list(row["messages_json"])
@@ -130,6 +146,9 @@ class SessionStore:
                 _json_list(row["active_mcp_servers_json"])
             )
             self._web_traces[session_id] = _json_list(row["web_traces_json"])
+            self._search_modes[session_id] = normalize_search_mode(
+                row["search_mode"] or self.default_search_mode
+            )
             checkpoint = _checkpoint_from_json(row["checkpoint_json"])
             if checkpoint is not None:
                 self._checkpoints[session_id] = checkpoint
@@ -152,16 +171,18 @@ class SessionStore:
                 active_mcp_servers_json,
                 web_traces_json,
                 checkpoint_json,
+                search_mode,
                 title,
                 message_count,
                 updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(session_id) DO UPDATE SET
                 messages_json = excluded.messages_json,
                 active_skills_json = excluded.active_skills_json,
                 active_mcp_servers_json = excluded.active_mcp_servers_json,
                 web_traces_json = excluded.web_traces_json,
                 checkpoint_json = excluded.checkpoint_json,
+                search_mode = excluded.search_mode,
                 title = excluded.title,
                 message_count = excluded.message_count,
                 updated_at = excluded.updated_at
@@ -173,6 +194,7 @@ class SessionStore:
                 json.dumps(sorted(self._active_mcp_servers[session_id]), ensure_ascii=False),
                 json.dumps(self._web_traces[session_id], ensure_ascii=False),
                 json.dumps(asdict(checkpoint), ensure_ascii=False) if checkpoint else None,
+                self._search_modes[session_id],
                 title,
                 message_count,
                 datetime.now(UTC).isoformat(),
@@ -226,7 +248,21 @@ class SessionStore:
                 "messages": deepcopy(messages),
                 "updated_at": row["updated_at"],
                 "can_resume": checkpoint is not None,
+                "search_mode": self._search_modes[session_id],
             }
+
+    def get_search_mode(self, session_id: str) -> SearchMode:
+        with self._lock:
+            self._ensure_loaded(session_id)
+            return self._search_modes[session_id]
+
+    def set_search_mode(self, session_id: str, mode: str) -> SearchMode:
+        normalized = normalize_search_mode(mode)
+        with self._lock:
+            self._ensure_loaded(session_id)
+            self._search_modes[session_id] = normalized
+            self._persist(session_id)
+            return normalized
 
     def get_messages(self, session_id: str) -> list[dict[str, Any]]:
         with self._lock:
@@ -375,6 +411,7 @@ class SessionStore:
             self._active_skills.pop(session_id, None)
             self._active_mcp_servers.pop(session_id, None)
             self._web_traces.pop(session_id, None)
+            self._search_modes.pop(session_id, None)
             self._checkpoints.pop(session_id, None)
             self._loaded_sessions.discard(session_id)
             self._connection.execute(

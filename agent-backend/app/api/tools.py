@@ -15,6 +15,7 @@ async def list_tools(session_id: str | None = Query(default=None)) -> dict[str, 
             session_id=session_id,
             active_skills=frozenset(get_session_store().get_active_skills(session_id)),
             active_mcp_servers=frozenset(get_session_store().get_active_mcp_servers(session_id)),
+            search_mode=get_session_store().get_search_mode(session_id),
         )
     return {
         "tools": [tool.model_dump() for tool in await registry.list_tools(context=context)],

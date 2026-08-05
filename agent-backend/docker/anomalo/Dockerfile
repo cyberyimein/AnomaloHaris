@@ -13,7 +13,7 @@ RUN npm run build
 
 FROM python:3.12-slim AS runtime
 
-ARG ANOMALO_INSTALL_EXTRAS=buddy,stocks,vision
+ARG ANOMALO_INSTALL_EXTRAS=buddy,vision
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -46,7 +46,6 @@ RUN set -eux; \
 COPY pyproject.toml README.md ./
 COPY agent-backend ./agent-backend
 COPY buddy-backend ./buddy-backend
-COPY stock-backend ./stock-backend
 COPY --from=frontend /src/agent-backend/app/frontend ./agent-backend/app/frontend
 
 RUN if [ -z "$ANOMALO_INSTALL_EXTRAS" ] || [ "$ANOMALO_INSTALL_EXTRAS" = "none" ]; then \
@@ -57,6 +56,6 @@ RUN if [ -z "$ANOMALO_INSTALL_EXTRAS" ] || [ "$ANOMALO_INSTALL_EXTRAS" = "none" 
 
 EXPOSE 8000 8787
 
-ENV PYTHONPATH=/app/agent-backend:/app/buddy-backend:/app/stock-backend
+ENV PYTHONPATH=/app/agent-backend:/app/buddy-backend
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

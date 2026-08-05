@@ -1,6 +1,6 @@
 # Anomalo
 
-Anomalo is a personal AI engineering project built to explore how a modern agent can reason, use tools, control a physical StackChan robot, and eventually assist with personal stock analysis. It is implemented as an event-driven FastAPI agent host with a Vue control panel.
+Anomalo is a personal AI engineering project built to explore how a modern agent can reason, use tools, control a physical StackChan robot, and support personal research workflows. It is implemented as an event-driven FastAPI agent host with a Vue control panel.
 
 > [!IMPORTANT]
 > Anomalo is an experimental personal project, not a hardened multi-user service. Keep it on a trusted network unless you add authentication and deployment controls appropriate for your environment.
@@ -11,7 +11,7 @@ Anomalo has three primary goals:
 
 1. **Learn and track modern agent-harness techniques.** The project is a hands-on laboratory for streaming agent runtimes, tool calling, context assembly, prompt profiles, memory, skills, MCP, sandboxed execution, and human approval flows. Its purpose is to turn new agent patterns into working code that can be inspected and understood.
 2. **Provide a control panel for a StackChan robot.** Anomalo acts as the robot's host-side control plane. The web dashboard and Buddy bridge manage serial or TCP connections, state changes, touch events, approvals, voice turns, low-frequency vision, and movement-related commands.
-3. **Grow into an AI-assisted personal stock-analysis tool.** The repository already contains a deterministic market-analysis engine, live or mock market-data adapters, structured evidence, reports, and a stock dashboard. The longer-term goal is to connect these capabilities to the agent so AI can help explain market context, investigate setups, and support a personal research workflow without presenting itself as an autonomous trading system.
+3. **Keep the system extensible for focused research agents.** Domain-specific workflows should live in dedicated agents and services rather than expanding Anomalo's core control panel.
 
 These goals share one runtime: agent-harness experiments can be tested through the browser, embodied through StackChan, and applied to a concrete research domain instead of remaining isolated demos.
 
@@ -20,11 +20,10 @@ These goals share one runtime: agent-harness experiments can be tested through t
 - Streams agent lifecycle, message, and tool events over WebSocket or REST.
 - Uses an OpenAI SDK-compatible client with OpenRouter defaults and a local mock mode.
 - Loads prompt profiles, `AGENTS.md` memory, Python skills, and MCP servers at runtime.
-- Provides a Vue dashboard for chat, context inspection, Buddy control, and stock analysis.
+- Provides a Vue dashboard for chat, context inspection, and Buddy control.
 - Supports STT and TTS providers for local voice conversations.
 - Connects to a Buddy/StackChan-style device over serial or TCP.
 - Offers low-frequency face detection and Buddy look/roam commands.
-- Runs deterministic stock analysis with mock data or live data from Futu OpenD.
 - Delegates optional Python execution to a separate FruitSpy sandbox service.
 - Includes Apple Container build and remote deployment scripts.
 
@@ -35,7 +34,6 @@ These goals share one runtime: agent-harness experiments can be tested through t
 ├── agent-backend/   FastAPI app, agent runtime, tools, prompts, audio, and deployment files
 ├── buddy-backend/   Buddy gateway, device APIs, Copilot hooks, skills, and protocol docs
 ├── frontend/        Vue 3 and Vite source
-├── stock-backend/   Market-data clients, analysis engine, reports, configuration, and tests
 ├── .env.example     Shared runtime configuration template
 ├── pyproject.toml   Python package metadata and dependency groups
 └── uv.lock          Reproducible Python dependency lockfile
@@ -48,7 +46,7 @@ The production frontend build is committed under `agent-backend/app/frontend/` s
 - Python 3.12
 - [`uv`](https://docs.astral.sh/uv/)
 - Node.js and npm when developing or rebuilding the frontend
-- Optional services or hardware for OpenRouter, Futu OpenD, FruitSpy, or Buddy features
+- Optional services or hardware for OpenRouter, FruitSpy, or Buddy features
 
 ## Quick start
 
@@ -63,13 +61,13 @@ cp .env.example .env
 Install the core application plus the common development integrations:
 
 ```bash
-uv sync --extra buddy --extra stocks --extra dev
+uv sync --extra buddy --extra dev
 ```
 
 Start FastAPI from the repository root:
 
 ```bash
-PYTHONPATH=agent-backend:buddy-backend:stock-backend \
+PYTHONPATH=agent-backend:buddy-backend \
   uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
@@ -113,12 +111,14 @@ All runtime configuration comes from the root `.env`. The most commonly used var
 | `OPENROUTER_MANAGEMENT_API_KEY` | Enables the credits widget | unset |
 | `OPENAI_BASE_URL` | OpenAI-compatible API base URL | OpenRouter |
 | `OPENROUTER_MODEL` | Model identifier | `openai/gpt-4o-mini` |
+| `ANOMALO_SEARCH_MODE` | Default retrieval mode for new sessions: `native`, `subagent`, or `diy` | `diy` |
+| `WEB_RESEARCH_SUBAGENT_MODEL` | Fixed model used by the retrieval subagent | `deepseek/deepseek-v4-flash-0731` |
+| `SEARCH_MODE_TIMEOUT_SECONDS` | Timeout for Responses API retrieval calls | `90` |
 | `MAX_TOOL_ITERATIONS` | Maximum model/tool loop iterations per run | `50` |
 | `AGENT_RUN_TIMEOUT_SECONDS` | Maximum wall-clock duration for one resumable run | `600` |
 | `ANOMALO_ADMIN_TOKEN` | Authorizes remote management requests | unset |
 | `ANOMALO_AGENT_PROMPT_PROFILE` | Browser-agent prompt profile | `agent` |
 | `ANOMALO_BUDDY_PROMPT_PROFILE` | Buddy voice prompt profile | `buddy_voice` |
-| `ANOMALO_STOCK_DATA_MODE` | Stock data source: `opend` or `mock` | `opend` |
 | `ANOMALO_BUDDY_TRANSPORT` | Buddy transport: `serial` or `tcp` | `serial` |
 | `ANOMALO_BUDDY_AUDIO_AI_ENABLED` | Enables Buddy STT/LLM/TTS turns | `false` |
 | `ANOMALO_BUDDY_VISION_ENABLED` | Enables Buddy vision actions | `false` |
@@ -223,7 +223,7 @@ curl -X POST http://localhost:8000/api/agents/fomc-brief/chat \
   -H 'Content-Type: application/json' \
   -d '{
     "message": "Summarize the latest FOMC decision in one or two sentences.",
-    "session_id": "stock-fomc-task-2026-08-03",
+    "session_id": "fomc-task-2026-08-03",
     "response_format": {
       "type": "json_schema",
       "json_schema": {
@@ -365,32 +365,10 @@ See [`buddy-backend/BUDDY_BACKEND.md`](buddy-backend/BUDDY_BACKEND.md) and [`bud
 
 ## Stock analysis
 
-The integrated stock engine reads `stock-backend/config/settings.yaml` and `stock-backend/config/watchlists.yaml`, calculates market context and technical evidence, and writes ignored report artifacts under `stock-backend/outputs/`.
-
-The current calculation and ranking pipeline is intentionally deterministic and testable. AI-assisted interpretation is the project direction: the agent should consume structured evidence, explain why a setup received attention, answer follow-up questions, and help organize personal research while keeping the underlying measurements auditable.
-
-Run an offline deterministic scan without Futu OpenD:
-
-```dotenv
-ANOMALO_STOCK_DATA_MODE=mock
-```
-
-For live data, install the `stocks` extra, run Futu OpenD, and configure its host and port:
-
-```dotenv
-ANOMALO_STOCK_DATA_MODE=opend
-ANOMALO_STOCK_OPEND_HOST=127.0.0.1
-ANOMALO_STOCK_OPEND_PORT=11111
-```
-
-When `ANOMALO_ENV=production`, the in-process scheduler runs at 22:00 in `Asia/Tokyo` by default. The schedule can be changed or disabled with the `ANOMALO_STOCK_SCHEDULE_*` variables.
-
-The tracked watchlist is an example and can reveal your market interests if you customize it. Review it before publishing a fork.
-
-> [!WARNING]
-> Stock reports are analytical software output, not investment advice. Validate the data and methodology before relying on any result.
-
-See [`stock-backend/README.md`](stock-backend/README.md) and the documents in `stock-backend/docs/` for details.
+The integrated Anomalo stock-analysis feature is offline and has been replaced by the **Urus agent**.
+The retired implementation is preserved locally in the Git-ignored archive
+`archives/anomalo-stock-analysis-20260806.zip` for reference or recovery; it is not part of the
+application build or runtime.
 
 ## Apple Container deployment
 
@@ -416,17 +394,19 @@ The private deployment environment file is ignored by Git. Review both scripts a
 
 The deployment script mounts `REMOTE_DATA_DIR` from the deployment host to `/data` in the container. Session history and Stop/Resume checkpoints are stored in `/data/sessions.sqlite3`; preset agents are stored in `/data/preset-agents.sqlite3`. Keep this directory on persistent host storage and do not delete it when replacing the container. By default it is `.anomalo/anomalo-data` under the remote user's home; set `REMOTE_STORAGE_ROOT` or `REMOTE_DATA_DIR` to an explicit host path when needed.
 
+The deployed Dashboard can change the default OpenRouter model without rebuilding the image or restarting the container. Open Dashboard, enter the admin token, then edit **LLM Model** and apply the model identifier. The selected value is stored at `/data/runtime-settings.json`, overrides `OPENROUTER_MODEL` on later starts, and applies to new runs; an already active run keeps the model it started with.
+
 ## Tests and linting
 
 Install development dependencies, then run:
 
 ```bash
-uv sync --extra dev --extra buddy --extra stocks
+uv sync --extra dev --extra buddy
 uv run pytest
 uv run ruff check .
 ```
 
-The test suite covers the agent lifecycle, API routes, Python sandbox adapter, audio service, Buddy gateway and skills, vision, stock analysis, and prompt behavior.
+The test suite covers the agent lifecycle, API routes, Python sandbox adapter, audio service, Buddy gateway and skills, vision, and prompt behavior.
 
 ## Security notes
 

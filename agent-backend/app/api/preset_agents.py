@@ -19,6 +19,7 @@ from app.container import (
     get_session_store,
     get_tool_registry,
 )
+from app.search_modes import SearchMode, normalize_search_mode, search_mode_options
 
 management_router = APIRouter(
     prefix="/api/manage/agents",
@@ -51,6 +52,7 @@ class PresetAgentDefinition(BaseModel):
     model: str = Field(min_length=1, max_length=200)
     temperature: float = Field(default=0.4, ge=0, le=2)
     tool_names: list[str] = Field(default_factory=list, max_length=200)
+    search_mode: SearchMode | None = None
     bootstrap_tools: list[BootstrapToolDefinition] = Field(default_factory=list, max_length=20)
 
     @field_validator("name")
@@ -75,6 +77,15 @@ class PresetAgentDefinition(BaseModel):
     def normalize_tool_names(cls, value: list[str]) -> list[str]:
         names = [name.strip() for name in value if name.strip()]
         return list(dict.fromkeys(names))
+
+    @model_validator(mode="after")
+    def validate_search_mode(self) -> "PresetAgentDefinition":
+        if "web_search" not in self.tool_names:
+            if self.search_mode is not None:
+                raise ValueError("search_mode requires the web_search tool to be selected.")
+            return self
+        self.search_mode = normalize_search_mode(self.search_mode)
+        return self
 
     @model_validator(mode="after")
     def validate_bootstrap_result_keys(self) -> "PresetAgentDefinition":
@@ -126,6 +137,7 @@ async def list_invocable_preset_agents() -> dict[str, object]:
                 "description": agent.description,
                 "ghost": agent.ghost,
                 "model": agent.model,
+                "search_mode": agent.search_mode,
                 "tool_count": len(agent.tool_names),
             }
             for agent in get_preset_agent_store().list()
@@ -142,6 +154,7 @@ async def list_preset_agents() -> dict[str, object]:
             "model": settings.openrouter_model,
             "temperature": settings.llm_temperature,
         },
+        "search_modes": search_mode_options(settings.web_research_subagent_model),
     }
 
 
@@ -282,6 +295,7 @@ async def _run_agent(
         bootstrap_tools=agent.bootstrap_tools,
         model=agent.model,
         temperature=agent.temperature,
+        search_mode=agent.search_mode if "web_search" in agent.tool_names else None,
     ):
         yield item
 

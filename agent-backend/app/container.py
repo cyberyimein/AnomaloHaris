@@ -24,13 +24,15 @@ from app.tools.local import CoreToolProvider
 from app.tools.mcp_provider import MCPManager, MCPProvider
 from app.tools.python_sandbox import PythonSandboxProvider
 from app.tools.registry import ToolRegistry
+from app.tools.retrieval import RetrievalToolProvider
 from app.tools.skills import SkillManager, SkillProvider
 from app.tools.web import WebToolProvider
 
 
 @lru_cache
 def get_session_store() -> SessionStore:
-    return SessionStore(get_settings().session_db_path)
+    settings = get_settings()
+    return SessionStore(settings.session_db_path, default_search_mode=settings.default_search_mode)
 
 
 @lru_cache
@@ -44,6 +46,7 @@ def get_tool_registry() -> ToolRegistry:
     return ToolRegistry(
         providers=[
             CoreToolProvider(),
+            RetrievalToolProvider(settings),
             WebToolProvider(settings),
             BuddyToolProvider(get_buddy_gateway()),
             PythonSandboxProvider(settings),

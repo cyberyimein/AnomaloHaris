@@ -1,6 +1,5 @@
 import logging
-from asyncio import CancelledError, create_task
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 
 from buddy_backend import BuddyConfigurationError, BuddyConnectionError, copilot_api
 from buddy_backend import api as buddy_api
@@ -21,7 +20,6 @@ from app.api import (
     prompts,
     sessions,
     skills,
-    stocks,
     tools,
     websocket,
 )
@@ -44,7 +42,6 @@ async def _lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     settings = get_settings()
     gateway = get_buddy_gateway()
     audio_bridge = None
-    stock_scheduler_task = None
     if settings.buddy_transport.strip().lower() == "tcp":
         gateway.connect()
     if settings.buddy_audio_ai_enabled:
@@ -52,24 +49,9 @@ async def _lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
         audio_bridge.start()
     else:
         logger.info("Buddy audio AI bridge disabled; skipping STT/LLM/TTS startup.")
-    if getattr(settings, "is_production", False) and getattr(
-        settings,
-        "stock_schedule_enabled",
-        False,
-    ):
-        stock_scheduler_task = create_task(
-            stocks.run_stock_scheduler(),
-            name="anomalo-stock-scheduler",
-        )
-    else:
-        logger.info("Production stock scheduler disabled for this environment.")
     try:
         yield
     finally:
-        if stock_scheduler_task is not None:
-            stock_scheduler_task.cancel()
-            with suppress(CancelledError):
-                await stock_scheduler_task
         if audio_bridge is not None:
             audio_bridge.stop()
         try:
@@ -149,7 +131,6 @@ def create_app() -> FastAPI:
     app.include_router(preset_agents.management_router)
     app.include_router(preset_agents.invocation_router)
     app.include_router(prompts.router)
-    app.include_router(stocks.router)
     app.include_router(tools.router)
     app.include_router(manage.router)
     app.include_router(audio.router)

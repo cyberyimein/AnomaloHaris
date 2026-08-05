@@ -3,7 +3,7 @@ from contextlib import suppress
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from app.container import get_agent_runtime, get_preset_agent_store
+from app.container import get_agent_runtime, get_preset_agent_store, get_session_store
 
 router = APIRouter(tags=["websocket"])
 
@@ -24,21 +24,33 @@ async def websocket_chat(websocket: WebSocket, session_id: str) -> None:
         async with send_lock:
             await websocket.send_json(payload)
 
-    if runtime.has_checkpoint(session_id):
-        await send_json(
-            {
-                "type": "session.state",
-                "session_id": session_id,
-                "data": {"can_resume": True},
-            }
-        )
+    await send_json(
+        {
+            "type": "session.state",
+            "session_id": session_id,
+            "data": {
+                "can_resume": runtime.has_checkpoint(session_id),
+                "search_mode": get_session_store().get_search_mode(session_id),
+            },
+        }
+    )
 
-    async def stream_run(content: str | None = None, *, resume: bool = False) -> None:
+    async def stream_run(
+        content: str | None = None,
+        *,
+        resume: bool = False,
+        search_mode: str | None = None,
+    ) -> None:
         nonlocal active_run_id, stopped_event_sent
         active_run_id = None
         stopped_event_sent = False
         try:
-            async for item in runtime.run(session_id, content, resume=resume):
+            async for item in runtime.run(
+                session_id,
+                content,
+                resume=resume,
+                search_mode=search_mode,
+            ):
                 active_run_id = item.run_id
                 if item.type == "run.stopped":
                     stopped_event_sent = True
@@ -99,7 +111,16 @@ async def websocket_chat(websocket: WebSocket, session_id: str) -> None:
                         }
                     )
                     continue
-                active_task = asyncio.create_task(stream_run(resume=True))
+                active_task = asyncio.create_task(
+                    stream_run(
+                        resume=True,
+                        search_mode=(
+                            str(payload["search_mode"])
+                            if payload.get("search_mode") is not None
+                            else None
+                        ),
+                    )
+                )
                 continue
             if message_type != "user.message":
                 await send_json(
@@ -126,7 +147,16 @@ async def websocket_chat(websocket: WebSocket, session_id: str) -> None:
                 )
                 continue
 
-            active_task = asyncio.create_task(stream_run(content))
+            active_task = asyncio.create_task(
+                stream_run(
+                    content,
+                    search_mode=(
+                        str(payload["search_mode"])
+                        if payload.get("search_mode") is not None
+                        else None
+                    ),
+                )
+            )
     except WebSocketDisconnect:
         pass
     finally:

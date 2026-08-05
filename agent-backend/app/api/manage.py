@@ -1,10 +1,12 @@
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.api.security import require_management_access
-from app.container import get_mcp_manager, get_skill_manager
+from app.config import get_settings
+from app.container import get_agent_runtime, get_mcp_manager, get_skill_manager
+from app.runtime_config import RuntimeModelStore
 
 router = APIRouter(
     prefix="/api",
@@ -21,6 +23,18 @@ class SkillCreateRequest(BaseModel):
 
 class EnabledRequest(BaseModel):
     enabled: bool
+
+
+class ModelUpdateRequest(BaseModel):
+    model: str = Field(min_length=1, max_length=200)
+
+    @field_validator("model")
+    @classmethod
+    def normalize_model(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Model cannot be blank.")
+        return normalized
 
 
 class MCPServerRequest(BaseModel):
@@ -41,6 +55,37 @@ class MCPServerRequest(BaseModel):
         if self.transport == "streamable_http" and not self.url.strip():
             raise ValueError("url is required for streamable_http MCP servers")
         return self
+
+
+@router.get("/manage/model")
+async def get_model_settings() -> dict[str, Any]:
+    settings = get_settings()
+    override = RuntimeModelStore(settings.runtime_model_path).load()
+    return {
+        "model": settings.openrouter_model,
+        "source": "runtime" if override is not None else "environment",
+        "updated_at": override.updated_at if override is not None else None,
+    }
+
+
+@router.patch("/manage/model")
+async def update_model_settings(request: ModelUpdateRequest) -> dict[str, Any]:
+    settings = get_settings()
+    store = RuntimeModelStore(settings.runtime_model_path)
+    try:
+        override = store.save(request.model)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to persist the model setting.",
+        ) from exc
+
+    get_agent_runtime().update_model(override.model)
+    return {
+        "model": override.model,
+        "source": "runtime",
+        "updated_at": override.updated_at,
+    }
 
 
 @router.get("/skills")

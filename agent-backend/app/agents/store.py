@@ -8,6 +8,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
+from app.search_modes import SearchMode, normalize_search_mode
+
 
 @dataclass(frozen=True)
 class PresetAgent:
@@ -19,6 +21,7 @@ class PresetAgent:
     model: str
     temperature: float
     tool_names: list[str]
+    search_mode: SearchMode | None
     bootstrap_tools: list[dict[str, object]]
     tool_sources: dict[str, str]
     created_at: str
@@ -52,6 +55,7 @@ class PresetAgentStore:
                 model TEXT NOT NULL,
                 temperature REAL NOT NULL DEFAULT 0.4,
                 tool_names_json TEXT NOT NULL DEFAULT '[]',
+                search_mode TEXT,
                 bootstrap_tools_json TEXT NOT NULL DEFAULT '[]',
                 tool_sources_json TEXT NOT NULL DEFAULT '{}',
                 created_at TEXT NOT NULL,
@@ -71,6 +75,10 @@ class PresetAgentStore:
             self._connection.execute(
                 "ALTER TABLE preset_agents "
                 "ADD COLUMN bootstrap_tools_json TEXT NOT NULL DEFAULT '[]'"
+            )
+        if "search_mode" not in columns:
+            self._connection.execute(
+                "ALTER TABLE preset_agents ADD COLUMN search_mode TEXT"
             )
         self._connection.execute(
             """
@@ -148,10 +156,12 @@ class PresetAgentStore:
         model: str,
         temperature: float,
         tool_names: list[str],
+        search_mode: str | None = None,
         bootstrap_tools: list[dict[str, object]] | None = None,
         tool_sources: dict[str, str] | None = None,
     ) -> PresetAgent:
         now = datetime.now(UTC).isoformat()
+        normalized_tool_names = list(dict.fromkeys(tool_names))
         agent = PresetAgent(
             id=f"agent_{uuid4().hex}",
             name=name.strip(),
@@ -160,7 +170,8 @@ class PresetAgentStore:
             system_prompt=system_prompt.strip(),
             model=model.strip(),
             temperature=temperature,
-            tool_names=list(dict.fromkeys(tool_names)),
+            tool_names=normalized_tool_names,
+            search_mode=_normalize_preset_search_mode(search_mode, normalized_tool_names),
             bootstrap_tools=list(bootstrap_tools or []),
             tool_sources=dict(tool_sources or {}),
             created_at=now,
@@ -172,9 +183,9 @@ class PresetAgentStore:
                     """
                     INSERT INTO preset_agents (
                         id, name, description, ghost, system_prompt, model, temperature,
-                        tool_names_json, bootstrap_tools_json, tool_sources_json,
+                        tool_names_json, search_mode, bootstrap_tools_json, tool_sources_json,
                         created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         agent.id,
@@ -185,6 +196,7 @@ class PresetAgentStore:
                         agent.model,
                         agent.temperature,
                         json.dumps(agent.tool_names),
+                        agent.search_mode,
                         json.dumps(agent.bootstrap_tools),
                         json.dumps(agent.tool_sources),
                         agent.created_at,
@@ -209,6 +221,10 @@ class PresetAgentStore:
         values["model"] = str(values["model"]).strip()
         values["temperature"] = float(values["temperature"])
         values["tool_names"] = list(dict.fromkeys(values["tool_names"]))
+        values["search_mode"] = _normalize_preset_search_mode(
+            values.get("search_mode"),
+            values["tool_names"],
+        )
         values["bootstrap_tools"] = list(values["bootstrap_tools"])
         values["tool_sources"] = dict(values["tool_sources"])
         values["updated_at"] = datetime.now(UTC).isoformat()
@@ -219,7 +235,8 @@ class PresetAgentStore:
                     """
                     UPDATE preset_agents SET name = ?, description = ?, ghost = ?,
                         system_prompt = ?, model = ?, temperature = ?, tool_names_json = ?,
-                        bootstrap_tools_json = ?, tool_sources_json = ?, updated_at = ?
+                        search_mode = ?, bootstrap_tools_json = ?, tool_sources_json = ?,
+                        updated_at = ?
                         WHERE id = ?
                     """,
                     (
@@ -230,6 +247,7 @@ class PresetAgentStore:
                         updated.model,
                         updated.temperature,
                         json.dumps(updated.tool_names),
+                        updated.search_mode,
                         json.dumps(updated.bootstrap_tools),
                         json.dumps(updated.tool_sources),
                         updated.updated_at,
@@ -255,6 +273,7 @@ class PresetAgentStore:
 
     @staticmethod
     def _from_row(row: sqlite3.Row) -> PresetAgent:
+        tool_names = list(json.loads(row["tool_names_json"]))
         return PresetAgent(
             id=str(row["id"]),
             name=str(row["name"]),
@@ -263,9 +282,22 @@ class PresetAgentStore:
             system_prompt=str(row["system_prompt"]),
             model=str(row["model"]),
             temperature=float(row["temperature"]),
-            tool_names=list(json.loads(row["tool_names_json"])),
+            tool_names=tool_names,
+            search_mode=_normalize_preset_search_mode(row["search_mode"], tool_names),
             bootstrap_tools=list(json.loads(row["bootstrap_tools_json"])),
             tool_sources=dict(json.loads(row["tool_sources_json"])),
             created_at=str(row["created_at"]),
             updated_at=str(row["updated_at"]),
         )
+
+
+def _normalize_preset_search_mode(
+    mode: object,
+    tool_names: list[str],
+) -> SearchMode | None:
+    has_search_tool = "web_search" in tool_names
+    if not has_search_tool:
+        if mode is not None:
+            raise ValueError("search_mode requires the web_search tool to be selected.")
+        return None
+    return normalize_search_mode(str(mode) if mode is not None else None)

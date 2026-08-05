@@ -19,6 +19,12 @@ from app.agent.response_format import (
 from app.agent.session import RESUME_PROMPT_MARKER, SessionStore
 from app.config import Settings
 from app.llm.openai_client import LLMStreamInterrupted, LLMToolCall, OpenAIChatClient
+from app.search_modes import (
+    SEARCH_MODE_DIY,
+    SearchMode,
+    normalize_search_mode,
+    search_mode_instruction,
+)
 from app.tools.base import ToolContext, ToolResult
 from app.tools.mcp_provider import MCPManager
 from app.tools.registry import ToolRegistry
@@ -55,6 +61,8 @@ class _RunState:
     bootstrap_tools: list[dict[str, Any]] = field(default_factory=list)
     bootstrap_context: list[dict[str, Any]] = field(default_factory=list)
     llm: Any = None
+    model: str = ""
+    search_mode: SearchMode = "diy"
     final_response_format: dict[str, Any] | None = None
     final_output: Any = None
     iteration: int = 0
@@ -89,6 +97,21 @@ class AgentRuntime:
         self.llm = llm
         self._active_runs: dict[str, _RunState] = {}
 
+    def update_model(self, model: str) -> None:
+        """Switch the default LLM for future runs without interrupting active runs."""
+        normalized_model = model.strip()
+        if not normalized_model:
+            raise ValueError("Model cannot be blank.")
+        self.settings.openrouter_model = normalized_model
+        configured = getattr(self.llm, "configured", None)
+        if configured is None:
+            self.llm.model = normalized_model
+            return
+        self.llm = configured(
+            model=normalized_model,
+            temperature=self.settings.llm_temperature,
+        )
+
     def request_stop(self, session_id: str, *, reason: str = "user_stop") -> str | None:
         state = self._active_runs.get(session_id)
         if state is None:
@@ -116,6 +139,7 @@ class AgentRuntime:
         bootstrap_tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
         temperature: float | None = None,
+        search_mode: str | None = None,
     ) -> AsyncIterator[AgentEvent]:
         run_id = make_run_id()
         if session_id in self._active_runs:
@@ -139,6 +163,20 @@ class AgentRuntime:
                 run_id,
                 error=str(exc),
                 error_code="invalid_response_format",
+            )
+            return
+
+        try:
+            requested_search_mode = (
+                normalize_search_mode(search_mode) if search_mode is not None else None
+            )
+        except ValueError as exc:
+            yield event(
+                "run.error",
+                session_id,
+                run_id,
+                error=str(exc),
+                error_code="invalid_search_mode",
             )
             return
 
@@ -179,6 +217,10 @@ class AgentRuntime:
             )
             return
 
+        effective_search_mode = requested_search_mode or self.sessions.get_search_mode(session_id)
+        if requested_search_mode is not None:
+            self.sessions.set_search_mode(session_id, requested_search_mode)
+
         if checkpoint is not None:
             self.sessions.replace(session_id, checkpoint.messages)
 
@@ -202,6 +244,10 @@ class AgentRuntime:
             "role": "user",
             "content": RESUME_PROMPT if resume else str(user_content or ""),
         }
+        configured_llm = self._configured_llm(model=model, temperature=temperature)
+        active_model = str(
+            getattr(configured_llm, "model", None) or model or self.settings.openrouter_model
+        )
         state = _RunState(
             session_id=session_id,
             run_id=run_id,
@@ -219,7 +265,9 @@ class AgentRuntime:
                 if resume and checkpoint is not None
                 else []
             ),
-            llm=self._configured_llm(model=model, temperature=temperature),
+            llm=configured_llm,
+            model=active_model,
+            search_mode=effective_search_mode,
             final_response_format=final_response_format,
             iteration=checkpoint.iteration if resume and checkpoint is not None else 0,
         )
@@ -236,7 +284,14 @@ class AgentRuntime:
 
         timeout_scope = asyncio.timeout(self.settings.agent_run_timeout_seconds)
         try:
-            yield event("run.started", session_id, run_id, resumed=resume)
+            yield event(
+                "run.started",
+                session_id,
+                run_id,
+                resumed=resume,
+                search_mode=state.search_mode,
+                model=state.model,
+            )
             async with timeout_scope:
                 async for item in self._run(state, profile_name):
                     if item.type == "run.finished":
@@ -295,6 +350,21 @@ class AgentRuntime:
             if state.system_prompt is not None
             else load_prompt_messages(self.settings.prompts_config_path, profile_name)
         )
+        has_search_tool = (
+            (state.allowed_tool_names is None or "web_search" in state.allowed_tool_names)
+            and (state.search_mode != SEARCH_MODE_DIY or self.settings.web_tools_enabled)
+        )
+        if has_search_tool:
+            prompt_messages.append(
+                {
+                    "role": "system",
+                    "content": search_mode_instruction(
+                        state.search_mode,
+                        model=state.model,
+                        subagent_model=self.settings.web_research_subagent_model,
+                    ),
+                }
+            )
         memory_message = load_agent_memory_message(self.settings.agent_memory_path)
         memory_messages = [memory_message] if memory_message is not None else []
         skill_catalog_message = self.skills.skill_catalog_message()
@@ -363,7 +433,13 @@ class AgentRuntime:
                 state.current_user_message,
                 *state.loop_messages,
             ]
-            all_tools = await self.tools.openai_tools(self._tool_context(state.session_id))
+            all_tools = await self.tools.openai_tools(
+                self._tool_context(
+                    state.session_id,
+                    search_mode=state.search_mode,
+                    model=state.model,
+                )
+            )
             if state.allowed_tool_names is not None:
                 all_tools = [
                     tool
@@ -402,6 +478,8 @@ class AgentRuntime:
                     tool_count=len(all_tools),
                     active_skills=sorted(active_skill_names),
                     active_mcp_servers=sorted(active_mcp_server_names),
+                    search_mode=state.search_mode,
+                    model=state.model,
                 ),
                 request=state.llm.request_payload(messages, all_tools),
             )
@@ -445,7 +523,11 @@ class AgentRuntime:
             state.tool_message_added = True
             for index, call in enumerate(tool_calls):
                 state.active_tool_index = index
-                tool_context = self._tool_context(state.session_id)
+                tool_context = self._tool_context(
+                    state.session_id,
+                    search_mode=state.search_mode,
+                    model=state.model,
+                )
                 yield event(
                     "tool.started",
                     state.session_id,
@@ -553,7 +635,11 @@ class AgentRuntime:
                     return await self._call_tool_safely(
                         name,
                         arguments,
-                        self._tool_context(state.session_id),
+                        self._tool_context(
+                            state.session_id,
+                            search_mode=state.search_mode,
+                            model=state.model,
+                        ),
                     )
             except TimeoutError:
                 return ToolResult(
@@ -829,11 +915,23 @@ class AgentRuntime:
                 data={"error_type": exc.__class__.__name__},
             )
 
-    def _tool_context(self, session_id: str) -> ToolContext:
+    def _tool_context(
+        self,
+        session_id: str,
+        *,
+        search_mode: str | None = None,
+        model: str | None = None,
+    ) -> ToolContext:
         return ToolContext(
             session_id=session_id,
             active_skills=frozenset(self.sessions.get_active_skills(session_id)),
             active_mcp_servers=frozenset(self.sessions.get_active_mcp_servers(session_id)),
+            search_mode=(
+                normalize_search_mode(search_mode)
+                if search_mode is not None
+                else self.sessions.get_search_mode(session_id)
+            ),
+            model=model,
         )
 
     def _apply_skill_state(self, session_id: str, result: ToolResult) -> None:
@@ -969,6 +1067,8 @@ def _context_assembly(
     tool_count: int,
     active_skills: list[str],
     active_mcp_servers: list[str],
+    search_mode: SearchMode,
+    model: str,
 ) -> dict[str, Any]:
     bootstrap_start = prompt_message_count
     memory_start = bootstrap_start + bootstrap_message_count
@@ -1052,6 +1152,8 @@ def _context_assembly(
     ]
     return {
         "profile": profile,
+        "model": model,
+        "search_mode": search_mode,
         "prompt_message_count": prompt_message_count,
         "bootstrap_message_count": bootstrap_message_count,
         "memory_message_count": memory_message_count,

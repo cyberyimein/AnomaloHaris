@@ -6,6 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from app.search_modes import DEFAULT_SEARCH_MODE
 
 TOOL_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 
@@ -15,6 +16,8 @@ class ToolContext:
     session_id: str | None = None
     active_skills: frozenset[str] = field(default_factory=frozenset)
     active_mcp_servers: frozenset[str] = field(default_factory=frozenset)
+    search_mode: str = DEFAULT_SEARCH_MODE
+    model: str | None = None
 
 
 class ToolSpec(BaseModel):
@@ -76,4 +79,3 @@ async def call_maybe_async(func: Any, **kwargs: Any) -> Any:
     if inspect.isawaitable(value):
         return await value
     return value
-

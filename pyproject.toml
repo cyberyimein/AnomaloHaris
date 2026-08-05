@@ -39,10 +39,6 @@ vision = [
   "pillow>=10.4.0",
 ]
 
-stocks = [
-  "futu-api>=10.8.6808",
-]
-
 dev = [
   "ruff>=0.8.0",
   "pytest>=8.3.0",
@@ -58,12 +54,10 @@ target-version = "py312"
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.ruff.lint.per-file-ignores]
-"stock-backend/**/*.py" = ["E501"]
-
 [tool.pytest.ini_options]
-pythonpath = ["agent-backend", "buddy-backend", "stock-backend"]
-testpaths = ["agent-backend/tests", "buddy-backend/tests", "stock-backend/tests"]
+pythonpath = ["agent-backend", "buddy-backend"]
+testpaths = ["agent-backend/tests", "buddy-backend/tests"]
 
 [tool.setuptools.packages.find]
-where = ["agent-backend", "buddy-backend", "stock-backend"]
-include = ["app*", "buddy_backend*", "stock_backend*"]
+where = ["agent-backend", "buddy-backend"]
+include = ["app*", "buddy_backend*"]

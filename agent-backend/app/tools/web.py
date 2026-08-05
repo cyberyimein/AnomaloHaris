@@ -14,6 +14,7 @@ from html.parser import HTMLParser
 from typing import Any
 
 from app.config import Settings
+from app.search_modes import SEARCH_MODE_DIY
 from app.tools.base import ToolContext, ToolProvider, ToolResult, ToolSpec
 
 SEARCH_TOOL_NAME = "web_search"
@@ -276,8 +277,9 @@ class WebToolProvider(ToolProvider):
         self._search_cache: dict[str, tuple[float, list[dict[str, str]]]] = {}
 
     async def list_tools(self, context: ToolContext | None = None) -> list[ToolSpec]:
-        del context
         if not self.settings.web_tools_enabled:
+            return []
+        if context is not None and context.search_mode != SEARCH_MODE_DIY:
             return []
         return [
             ToolSpec(
@@ -346,7 +348,12 @@ class WebToolProvider(ToolProvider):
         arguments: dict[str, Any],
         context: ToolContext | None = None,
     ) -> ToolResult:
-        del context
+        if context is not None and context.search_mode != SEARCH_MODE_DIY:
+            return ToolResult(
+                name=name,
+                ok=False,
+                content="DIY web tools are disabled while another retrieval mode is active.",
+            )
         if name == SEARCH_TOOL_NAME:
             return await self._search(arguments)
         if name == FETCH_TOOL_NAME:

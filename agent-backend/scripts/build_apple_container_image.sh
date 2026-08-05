@@ -17,7 +17,7 @@ Environment:
   OUTPUT_DIR               Archive output directory. Default: agent-backend/artifacts/container-images
   ARCHIVE_PATH             Exact output archive path. Overrides OUTPUT_DIR naming
   DOCKERFILE               Dockerfile path. Default: agent-backend/docker/anomalo/Dockerfile
-  INSTALL_EXTRAS           Python extras installed in image. Default: buddy,stocks,vision
+  INSTALL_EXTRAS           Python extras installed in image. Default: buddy,vision
   START_CONTAINER_SYSTEM   Start Apple container system before build. Default: 1
 EOF
 }
@@ -57,7 +57,7 @@ IMAGE_NAME="${IMAGE_NAME:-anomalo}"
 PLATFORM="${PLATFORM:-linux/arm64}"
 OUTPUT_DIR="${OUTPUT_DIR:-$agent_backend_root/artifacts/container-images}"
 DOCKERFILE="${DOCKERFILE:-$agent_backend_root/docker/anomalo/Dockerfile}"
-INSTALL_EXTRAS="${INSTALL_EXTRAS:-buddy,stocks,vision}"
+INSTALL_EXTRAS="${INSTALL_EXTRAS:-buddy,vision}"
 START_CONTAINER_SYSTEM="${START_CONTAINER_SYSTEM:-1}"
 
 if [[ -z "${IMAGE_TAG:-}" ]]; then

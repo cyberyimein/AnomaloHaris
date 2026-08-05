@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from app.agent.events import AgentEvent
 from app.agent.response_format import ResponseFormat
 from app.container import get_agent_runtime, get_preset_agent_store
+from app.search_modes import SearchMode
 
 router = APIRouter(prefix="/api", tags=["chat"])
 
@@ -19,6 +20,7 @@ class ChatRequest(BaseModel):
     input_type: str = "text"
     output_modes: list[str] = Field(default_factory=lambda: ["text"])
     response_format: ResponseFormat | None = None
+    search_mode: SearchMode | None = None
 
 
 class ChatResponse(BaseModel):
@@ -41,6 +43,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
         session_id,
         request.message,
         response_format=request.response_format,
+        search_mode=request.search_mode,
     ):
         events.append(item)
         if item.type == "run.finished":
@@ -66,6 +69,7 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
             session_id,
             request.message,
             response_format=request.response_format,
+            search_mode=request.search_mode,
         ):
             yield item.model_dump_json() + "\n"
 

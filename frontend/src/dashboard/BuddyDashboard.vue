@@ -102,6 +102,34 @@
         <p class="control-hint">{{ visionHint }}</p>
       </section>
 
+      <section class="dashboard-panel dashboard-panel-wide" aria-label="LLM model settings">
+        <header>
+          <span>LLM Model</span>
+          <strong>{{ modelSettings.state.statusLabel.value }}</strong>
+        </header>
+        <form class="model-settings-form" @submit.prevent="modelSettings.save">
+          <label class="model-settings-field">
+            <span>OpenRouter model ID</span>
+            <input
+              v-model="modelInput"
+              type="text"
+              maxlength="200"
+              autocomplete="off"
+              placeholder="deepseek/deepseek-v4-flash-0731"
+              :disabled="modelSettings.state.saveInFlight.value"
+            />
+          </label>
+          <button
+            class="control-button model-settings-save"
+            type="submit"
+            :disabled="modelSettings.state.saveInFlight.value"
+          >
+            {{ modelSettings.state.saveInFlight.value ? "Applying..." : "Apply model" }}
+          </button>
+        </form>
+        <p class="dashboard-note">{{ modelSettings.state.statusMessage.value }} Active runs keep their current model.</p>
+      </section>
+
       <section class="dashboard-panel dashboard-panel-wide">
         <header>
           <span>Recent Events</span>
@@ -158,6 +186,7 @@ import {
 const props = defineProps({
   controller: { type: Object, required: true },
   management: { type: Object, required: true },
+  modelSettings: { type: Object, required: true },
 });
 
 defineEmits(["save-management-token", "clear-management-token"]);
@@ -197,9 +226,17 @@ const managementTokenHint = computed(() => {
   return "Set ANOMALO_ADMIN_TOKEN, then save it here.";
 });
 
+const modelInput = computed({
+  get: () => props.modelSettings.state.draft.value,
+  set: (value) => {
+    props.modelSettings.state.draft.value = value;
+  },
+});
+
 onMounted(() => {
   props.controller.startPolling();
   void props.controller.refresh();
+  void props.modelSettings.load();
 });
 
 onBeforeUnmount(() => {

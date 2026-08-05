@@ -4,10 +4,12 @@ from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.runtime_config import RuntimeModelStore
+from app.search_modes import DEFAULT_SEARCH_MODE, DEFAULT_SUBAGENT_MODEL
+
 AGENT_BACKEND_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = AGENT_BACKEND_ROOT.parent
 BUDDY_BACKEND_ROOT = REPO_ROOT / "buddy-backend"
-STOCK_BACKEND_ROOT = REPO_ROOT / "stock-backend"
 
 
 class Settings(BaseSettings):
@@ -40,6 +42,16 @@ class Settings(BaseSettings):
     )
     openai_base_url: str = Field(default="https://openrouter.ai/api/v1", alias="OPENAI_BASE_URL")
     openrouter_model: str = Field(default="openai/gpt-4o-mini", alias="OPENROUTER_MODEL")
+    default_search_mode: str = Field(default=DEFAULT_SEARCH_MODE, alias="ANOMALO_SEARCH_MODE")
+    web_research_subagent_model: str = Field(
+        default=DEFAULT_SUBAGENT_MODEL,
+        alias="WEB_RESEARCH_SUBAGENT_MODEL",
+    )
+    search_mode_timeout_seconds: float = Field(
+        default=90.0,
+        gt=0,
+        alias="SEARCH_MODE_TIMEOUT_SECONDS",
+    )
     llm_temperature: float = Field(default=0.4, alias="LLM_TEMPERATURE")
     max_tool_iterations: int = Field(default=50, alias="MAX_TOOL_ITERATIONS")
     agent_run_timeout_seconds: float = Field(
@@ -251,26 +263,6 @@ class Settings(BaseSettings):
         default=None,
         alias="FRUITSPY_CRAWL_API_TOKEN",
     )
-    stock_data_mode: str | None = Field(default=None, alias="ANOMALO_STOCK_DATA_MODE")
-    stock_opend_host: str | None = Field(default=None, alias="ANOMALO_STOCK_OPEND_HOST")
-    stock_opend_port: int | None = Field(default=None, alias="ANOMALO_STOCK_OPEND_PORT")
-    stock_schedule_enabled: bool = Field(default=True, alias="ANOMALO_STOCK_SCHEDULE_ENABLED")
-    stock_schedule_timezone: str = Field(
-        default="Asia/Tokyo",
-        alias="ANOMALO_STOCK_SCHEDULE_TIMEZONE",
-    )
-    stock_schedule_hour: int = Field(
-        default=22,
-        ge=0,
-        le=23,
-        alias="ANOMALO_STOCK_SCHEDULE_HOUR",
-    )
-    stock_schedule_minute: int = Field(
-        default=0,
-        ge=0,
-        le=59,
-        alias="ANOMALO_STOCK_SCHEDULE_MINUTE",
-    )
     data_dir: Path = Field(default=REPO_ROOT / "data", alias="ANOMALO_DATA_DIR")
 
     config_dir: Path = AGENT_BACKEND_ROOT / "config"
@@ -279,7 +271,6 @@ class Settings(BaseSettings):
     frontend_dir: Path = AGENT_BACKEND_ROOT / "app" / "frontend"
     static_dir: Path = AGENT_BACKEND_ROOT / "app" / "static"
     artifacts_dir: Path = AGENT_BACKEND_ROOT / "artifacts"
-    stock_backend_dir: Path = STOCK_BACKEND_ROOT
     project_root: Path = REPO_ROOT
 
     @property
@@ -297,6 +288,10 @@ class Settings(BaseSettings):
     @property
     def preset_agent_db_path(self) -> Path:
         return self.data_dir / "preset-agents.sqlite3"
+
+    @property
+    def runtime_model_path(self) -> Path:
+        return self.data_dir / "runtime-settings.json"
 
     @property
     def normalized_environment(self) -> str:
@@ -341,4 +336,8 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    settings = Settings()
+    override = RuntimeModelStore(settings.runtime_model_path).load()
+    if override is not None:
+        settings.openrouter_model = override.model
+    return settings

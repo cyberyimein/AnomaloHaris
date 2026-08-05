@@ -28,7 +28,7 @@ Environment:
   BUDDY_TRANSPORT         Buddy transport for deployed app. Default: tcp
   BUDDY_TCP_PORT          Buddy TCP port. Default: 8787
   SITE_URL                Public site URL. Default: http://<ssh-host>:HOST_PORT
-  MOUNT_ARTIFACTS         Mount persistent agent artifacts and stock runtime data. Default: 1
+  MOUNT_ARTIFACTS         Mount persistent agent artifacts. Default: 1
   ALLOW_EPHEMERAL_DATA    Allow starting without the persistent data volume after a mount failure. Default: 0
   START_CONTAINER_SYSTEM  Start Apple container system before deploy. Default: 1
   REMOTE_CONTAINER_CLI    Remote Apple container CLI path. Default: container
@@ -218,11 +218,7 @@ build_run_args() {
     fi
     if [[ "$include_mount" == "1" ]]; then
         mkdir -p "$remote_data_dir/artifacts"
-        mkdir -p "$remote_data_dir/stocks/outputs"
-        mkdir -p "$remote_data_dir/stocks/data"
         run_args+=(--volume "$remote_data_dir/artifacts:/app/agent-backend/artifacts")
-        run_args+=(--volume "$remote_data_dir/stocks/outputs:/app/stock-backend/outputs")
-        run_args+=(--volume "$remote_data_dir/stocks/data:/app/stock-backend/data")
     fi
     run_args+=("$image_ref")
 }

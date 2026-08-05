@@ -58,6 +58,7 @@
           </span>
           <span class="preset-agent-card-meta">
             {{ agent.model }} · {{ agent.tool_names.length }} tools
+            <span v-if="agent.search_mode"> · {{ searchModeLabel(agent.search_mode) }}</span>
             <span v-if="agent.bootstrap_tools?.length"> · {{ agent.bootstrap_tools.length }} startup</span>
           </span>
           <ChevronRight :size="18" />
@@ -115,11 +116,34 @@
           <legend>Available tools</legend>
           <p>Only checked tools are exposed to this agent. An empty selection means no tools.</p>
           <div class="preset-tool-grid">
-            <label v-for="tool in tools" :key="`${tool.source}:${tool.name}`" class="preset-tool-option">
+            <label
+              v-for="tool in tools"
+              :key="`${tool.source}:${tool.name}`"
+              class="preset-tool-option"
+            >
               <input v-model="form.tool_names" type="checkbox" :value="tool.name" />
               <span>
                 <strong>{{ tool.name }}</strong>
                 <small>{{ tool.source }}</small>
+              </span>
+            </label>
+          </div>
+        </fieldset>
+
+        <fieldset v-if="retrievalToolSelected" class="preset-tools-fieldset preset-retrieval-fieldset">
+          <legend>Retrieval mode</legend>
+          <p>Choose how this preset model should use the selected web_search tool.</p>
+          <div class="preset-retrieval-grid">
+            <label
+              v-for="option in searchModeOptions"
+              :key="option.id"
+              class="preset-retrieval-option"
+              :class="{ selected: form.search_mode === option.id }"
+            >
+              <input v-model="form.search_mode" type="radio" name="preset-search-mode" :value="option.id" />
+              <span>
+                <strong>{{ option.label }}</strong>
+                <small>{{ option.description }}</small>
               </span>
             </label>
           </div>
@@ -181,7 +205,7 @@ import {
   Trash2,
   X,
 } from "@lucide/vue";
-import { onMounted, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref } from "vue";
 
 const props = defineProps({
   management: { type: Object, required: true },
@@ -196,6 +220,7 @@ const editing = ref(false);
 const notice = ref("");
 const noticeIsError = ref(false);
 const defaults = reactive({ model: "openai/gpt-4o-mini", temperature: 0.4 });
+const searchModeOptions = ref(fallbackSearchModeOptions());
 const form = reactive(emptyForm());
 const startupClocks = [
   { label: "Local time", timezone: "Asia/Tokyo" },
@@ -212,16 +237,21 @@ function emptyForm() {
     model: defaults?.model || "openai/gpt-4o-mini",
     temperature: defaults?.temperature ?? 0.4,
     tool_names: [],
+    search_mode: "diy",
     bootstrap_tools: [],
   };
 }
 
 function replaceForm(value) {
+  const toolNames = [...(value?.tool_names || [])];
   Object.assign(form, emptyForm(), value, {
-    tool_names: [...(value?.tool_names || [])],
+    tool_names: toolNames,
+    search_mode: toolNames.includes("web_search") ? value?.search_mode || "diy" : null,
     bootstrap_tools: [...(value?.bootstrap_tools || [])],
   });
 }
+
+const retrievalToolSelected = computed(() => form.tool_names.includes("web_search"));
 
 function beginCreate() {
   replaceForm({});
@@ -273,6 +303,9 @@ async function load() {
     ]);
     agents.value = agentData.agents || [];
     Object.assign(defaults, agentData.defaults || {});
+    if (Array.isArray(agentData.search_modes) && agentData.search_modes.length) {
+      searchModeOptions.value = agentData.search_modes;
+    }
     tools.value = toolResponse.tools || [];
   } catch (error) {
     props.management.markError(error);
@@ -293,6 +326,7 @@ async function saveAgent() {
     model: form.model,
     temperature: form.temperature,
     tool_names: form.tool_names,
+    search_mode: retrievalToolSelected.value ? form.search_mode : null,
     bootstrap_tools: form.bootstrap_tools,
   };
   try {
@@ -343,6 +377,30 @@ async function deleteAgent() {
 function showNotice(message, isError = false) {
   notice.value = message;
   noticeIsError.value = isError;
+}
+
+function searchModeLabel(mode) {
+  return searchModeOptions.value.find((option) => option.id === mode)?.label || mode;
+}
+
+function fallbackSearchModeOptions() {
+  return [
+    {
+      id: "native",
+      label: "Model-native search",
+      description: "Use the preset model through the standard Responses API web_search_preview tool.",
+    },
+    {
+      id: "subagent",
+      label: "Web research subagent",
+      description: "Delegate research to the fixed DeepSeek V4 Flash 0731 subagent.",
+    },
+    {
+      id: "diy",
+      label: "DIY web tools",
+      description: "Use Anomalo's existing DuckDuckGo search and page-fetch tools.",
+    },
+  ];
 }
 
 onMounted(load);
@@ -397,6 +455,13 @@ defineExpose({ refresh: load });
 .preset-tool-option span { display: grid; gap: 2px; min-width: 0; }
 .preset-tool-option strong { overflow-wrap: anywhere; font-size: 12px; }
 .preset-tool-option small { color: var(--muted); font-size: 10px; }
+.preset-retrieval-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.preset-retrieval-option { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 9px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); padding: 11px; cursor: pointer; }
+.preset-retrieval-option.selected { border-color: var(--text); }
+.preset-retrieval-option input { margin-top: 2px; }
+.preset-retrieval-option span { display: grid; gap: 4px; }
+.preset-retrieval-option strong { font-size: 13px; }
+.preset-retrieval-option small { color: var(--muted); font-size: 11px; line-height: 1.4; }
 .preset-bootstrap-fieldset { margin-top: 16px; }
 .preset-bootstrap-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
 .preset-bootstrap-option { display: flex; align-items: start; gap: 9px; border: 1px solid var(--line); border-radius: 9px; padding: 10px; cursor: pointer; }
@@ -413,6 +478,7 @@ defineExpose({ refresh: load });
   .preset-form-grid { grid-template-columns: 84px 1fr; }
   .preset-field-wide, .preset-field-model { grid-column: 1 / -1; }
   .preset-field-temperature { grid-column: 1 / -1; }
+  .preset-retrieval-grid { grid-template-columns: 1fr; }
   .preset-editor footer { flex-wrap: wrap; }
 }
 </style>

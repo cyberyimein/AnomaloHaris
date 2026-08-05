@@ -28,12 +28,10 @@ describe("ManagementAccess", () => {
     });
 
     await management.requestJson("/api/buddy/status");
-    await management.requestJson("/api/stocks/reports/latest");
-    await management.requestJson("/api/stocks/scan", { method: "POST" });
+    await management.requestJson("/api/manage/model");
 
     expect(fetchImpl.mock.calls[0][1].headers.get("X-Anomalo-Admin-Token")).toBe("secret");
-    expect(fetchImpl.mock.calls[1][1]).toEqual({});
-    expect(fetchImpl.mock.calls[2][1].headers.get("X-Anomalo-Admin-Token")).toBe("secret");
+    expect(fetchImpl.mock.calls[1][1].headers.get("X-Anomalo-Admin-Token")).toBe("secret");
   });
 
   it("persists and clears browser-local credentials", () => {

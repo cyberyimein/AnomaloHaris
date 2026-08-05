@@ -9,7 +9,7 @@ if [ ! -x "$repo_root/.venv/bin/python" ]; then
     exit 1
 fi
 
-export PYTHONPATH="$repo_root/agent-backend:$repo_root/buddy-backend:$repo_root/stock-backend"
+export PYTHONPATH="$repo_root/agent-backend:$repo_root/buddy-backend"
 exec "$repo_root/.venv/bin/python" -m uvicorn app.main:app \
     --reload \
     --host 0.0.0.0 \
