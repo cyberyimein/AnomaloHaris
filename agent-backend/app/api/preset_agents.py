@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from app.agent.events import AgentEvent
 from app.agent.response_format import ResponseFormat
 from app.agent.runtime import BOOTSTRAP_TOOL_NAMES
+from app.agents.browser_operator import BROWSER_OPERATOR_ID, BROWSER_OPERATOR_NAME
 from app.agents.store import PresetAgent
 from app.api.security import require_management_access
 from app.config import get_settings
@@ -139,6 +140,14 @@ async def list_invocable_preset_agents() -> dict[str, object]:
                 "model": agent.model,
                 "search_mode": agent.search_mode,
                 "tool_count": len(agent.tool_names),
+                **(
+                    {
+                        "transport": "websocket",
+                        "requires_browser_bridge": True,
+                    }
+                    if agent.id == BROWSER_OPERATOR_ID
+                    else {}
+                ),
             }
             for agent in get_preset_agent_store().list()
         ]
@@ -160,6 +169,7 @@ async def list_preset_agents() -> dict[str, object]:
 
 @management_router.post("", status_code=status.HTTP_201_CREATED)
 async def create_preset_agent(request: PresetAgentDefinition) -> dict[str, object]:
+    _reject_reserved_browser_operator_name(request.name)
     try:
         bootstrap_tools = [tool.model_dump() for tool in request.bootstrap_tools]
         agent = get_preset_agent_store().create(
@@ -179,6 +189,8 @@ async def update_preset_agent(
     agent_id: str,
     request: PresetAgentDefinition,
 ) -> dict[str, object]:
+    _reject_reserved_browser_operator_id(agent_id)
+    _reject_reserved_browser_operator_name(request.name)
     try:
         bootstrap_tools = [tool.model_dump() for tool in request.bootstrap_tools]
         agent = get_preset_agent_store().update(
@@ -198,6 +210,7 @@ async def update_preset_agent(
 
 @management_router.delete("/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_preset_agent(agent_id: str) -> Response:
+    _reject_reserved_browser_operator_id(agent_id)
     if not get_preset_agent_store().delete(agent_id):
         raise HTTPException(status_code=404, detail="Preset agent not found.")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -209,6 +222,7 @@ async def invoke_preset_agent(
     request: PresetAgentInvocation,
 ) -> PresetAgentResponse:
     agent = _get_agent_or_404(agent_ref)
+    _reject_browser_operator_http_invocation(agent)
     session_id = request.session_id or f"{agent.id}:session_{uuid4().hex}"
     _bind_session_or_409(session_id, agent)
     events: list[AgentEvent] = []
@@ -238,6 +252,7 @@ async def stream_preset_agent(
     request: PresetAgentInvocation,
 ) -> StreamingResponse:
     agent = _get_agent_or_404(agent_ref)
+    _reject_browser_operator_http_invocation(agent)
     session_id = request.session_id or f"{agent.id}:session_{uuid4().hex}"
     _bind_session_or_409(session_id, agent)
 
@@ -264,6 +279,30 @@ def _bind_session_or_409(session_id: str, agent: PresetAgent) -> None:
         raise HTTPException(
             status_code=409,
             detail="This session_id is already bound to a different preset agent.",
+        )
+
+
+def _reject_reserved_browser_operator_name(name: str) -> None:
+    if name.strip().casefold() == BROWSER_OPERATOR_NAME.casefold():
+        raise HTTPException(
+            status_code=409,
+            detail="The browser_operator preset is fixed and cannot be created or replaced.",
+        )
+
+
+def _reject_reserved_browser_operator_id(agent_id: str) -> None:
+    if agent_id == BROWSER_OPERATOR_ID:
+        raise HTTPException(
+            status_code=409,
+            detail="The browser_operator preset is fixed and cannot be modified.",
+        )
+
+
+def _reject_browser_operator_http_invocation(agent: PresetAgent) -> None:
+    if agent.id == BROWSER_OPERATOR_ID:
+        raise HTTPException(
+            status_code=409,
+            detail="browser_operator requires the TUI browser bridge WebSocket.",
         )
 
 

@@ -59,6 +59,11 @@ class Settings(BaseSettings):
         gt=0,
         alias="AGENT_RUN_TIMEOUT_SECONDS",
     )
+    browser_tool_timeout_seconds: float = Field(
+        default=60.0,
+        gt=0,
+        alias="BROWSER_TOOL_TIMEOUT_SECONDS",
+    )
     admin_token: str | None = Field(default=None, alias="ANOMALO_ADMIN_TOKEN")
     mcp_timeout_seconds: float = Field(default=8.0, alias="MCP_TIMEOUT_SECONDS")
     agent_prompt_profile: str = Field(default="agent", alias="ANOMALO_AGENT_PROMPT_PROFILE")

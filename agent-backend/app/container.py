@@ -8,6 +8,12 @@ from buddy_backend.vision import BuddyVisionService
 
 from app.agent.runtime import AgentRuntime
 from app.agent.session import SessionStore
+from app.agents.browser_operator import (
+    BROWSER_OPERATOR_ID,
+    BrowserToolBroker,
+    BrowserToolProvider,
+    ensure_browser_operator,
+)
 from app.agents.store import PresetAgentStore
 from app.audio.base import TextToSpeechProvider
 from app.audio.providers import (
@@ -37,7 +43,19 @@ def get_session_store() -> SessionStore:
 
 @lru_cache
 def get_preset_agent_store() -> PresetAgentStore:
-    return PresetAgentStore(get_settings().preset_agent_db_path)
+    settings = get_settings()
+    store = PresetAgentStore(settings.preset_agent_db_path)
+    ensure_browser_operator(
+        store,
+        model=settings.openrouter_model,
+        temperature=settings.llm_temperature,
+    )
+    return store
+
+
+@lru_cache
+def get_browser_tool_broker() -> BrowserToolBroker:
+    return BrowserToolBroker(timeout_seconds=get_settings().browser_tool_timeout_seconds)
 
 
 @lru_cache
@@ -48,6 +66,12 @@ def get_tool_registry() -> ToolRegistry:
             CoreToolProvider(),
             RetrievalToolProvider(settings),
             WebToolProvider(settings),
+            BrowserToolProvider(
+                get_browser_tool_broker(),
+                is_enabled=lambda session_id: (
+                    get_preset_agent_store().get_bound_agent_id(session_id) == BROWSER_OPERATOR_ID
+                ),
+            ),
             BuddyToolProvider(get_buddy_gateway()),
             PythonSandboxProvider(settings),
             SkillProvider(settings.skill_dirs),

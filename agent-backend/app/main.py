@@ -24,7 +24,7 @@ from app.api import (
     websocket,
 )
 from app.config import get_settings
-from app.container import get_buddy_audio_bridge, get_buddy_gateway
+from app.container import get_buddy_audio_bridge, get_buddy_gateway, get_preset_agent_store
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +40,7 @@ def _configure_logging() -> None:
 async def _lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     del app
     settings = get_settings()
+    get_preset_agent_store()
     gateway = get_buddy_gateway()
     audio_bridge = None
     if settings.buddy_transport.strip().lower() == "tcp":

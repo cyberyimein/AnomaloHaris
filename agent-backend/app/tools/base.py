@@ -18,6 +18,8 @@ class ToolContext:
     active_mcp_servers: frozenset[str] = field(default_factory=frozenset)
     search_mode: str = DEFAULT_SEARCH_MODE
     model: str | None = None
+    run_id: str | None = None
+    tool_call_id: str | None = None
 
 
 class ToolSpec(BaseModel):

@@ -525,6 +525,8 @@ class AgentRuntime:
                 state.active_tool_index = index
                 tool_context = self._tool_context(
                     state.session_id,
+                    run_id=state.run_id,
+                    tool_call_id=call.id,
                     search_mode=state.search_mode,
                     model=state.model,
                 )
@@ -919,11 +921,15 @@ class AgentRuntime:
         self,
         session_id: str,
         *,
+        run_id: str | None = None,
+        tool_call_id: str | None = None,
         search_mode: str | None = None,
         model: str | None = None,
     ) -> ToolContext:
         return ToolContext(
             session_id=session_id,
+            run_id=run_id,
+            tool_call_id=tool_call_id,
             active_skills=frozenset(self.sessions.get_active_skills(session_id)),
             active_mcp_servers=frozenset(self.sessions.get_active_mcp_servers(session_id)),
             search_mode=(

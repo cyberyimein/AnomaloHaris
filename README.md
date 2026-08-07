@@ -152,6 +152,15 @@ to FruitSpy Crawl4AI when a page appears to require JavaScript rendering.
 - `POST /api/chat` — collected JSON response.
 - `POST /api/chat/stream` — newline-delimited streaming JSON.
 
+The `browser_operator` preset is a reserved fixed agent. It is created automatically in
+`ANOMALO_DATA_DIR/preset-agents.sqlite3`, cannot be edited through the management API, and is
+available only through the TUI browser-bridge WebSocket handshake. The TUI must send
+`client.hello` with `agent_profile: "browser_operator"` and the browser capability list before the
+server returns `client.ready`. Browser tool calls are then emitted as `browser.tool.call` events;
+the TUI returns `browser.tool.result` with the matching `session_id`, `run_id`, and
+`tool_call_id`. The browser tool wait deadline defaults to 60 seconds and is configurable with
+`BROWSER_TOOL_TIMEOUT_SECONDS`.
+
 HTTP callers can request a structured final answer with the OpenAI-compatible
 `response_format` field. The tool-calling loop remains streamed internally; Anomalo runs a
 non-streaming finalizer, validates its response, and returns the parsed value in `output`.

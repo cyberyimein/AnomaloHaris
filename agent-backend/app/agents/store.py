@@ -149,6 +149,7 @@ class PresetAgentStore:
     def create(
         self,
         *,
+        agent_id: str | None = None,
         name: str,
         description: str,
         ghost: str,
@@ -163,7 +164,7 @@ class PresetAgentStore:
         now = datetime.now(UTC).isoformat()
         normalized_tool_names = list(dict.fromkeys(tool_names))
         agent = PresetAgent(
-            id=f"agent_{uuid4().hex}",
+            id=agent_id or f"agent_{uuid4().hex}",
             name=name.strip(),
             description=description.strip(),
             ghost=ghost.strip() or "👻",
@@ -207,6 +208,72 @@ class PresetAgentStore:
             except sqlite3.IntegrityError as exc:
                 raise ValueError(f"An agent named '{agent.name}' already exists.") from exc
         return agent
+
+    def ensure_builtin(
+        self,
+        *,
+        agent_id: str,
+        name: str,
+        description: str,
+        ghost: str,
+        system_prompt: str,
+        model: str,
+        temperature: float,
+        tool_names: list[str],
+        search_mode: str | None = None,
+        bootstrap_tools: list[dict[str, object]] | None = None,
+        tool_sources: dict[str, str] | None = None,
+    ) -> PresetAgent:
+        """Create or repair a reserved preset without exposing it as user configuration."""
+        with self._lock:
+            by_id = self._connection.execute(
+                "SELECT id FROM preset_agents WHERE id = ? LIMIT 1",
+                (agent_id,),
+            ).fetchone()
+            by_name = self._connection.execute(
+                "SELECT id FROM preset_agents WHERE name = ? COLLATE NOCASE LIMIT 1",
+                (name,),
+            ).fetchone()
+            if by_id is None and by_name is not None and str(by_name["id"]) != agent_id:
+                old_id = str(by_name["id"])
+                self._connection.execute(
+                    "UPDATE preset_agents SET id = ? WHERE id = ?",
+                    (agent_id, old_id),
+                )
+                self._connection.execute(
+                    "UPDATE preset_agent_sessions SET agent_id = ? WHERE agent_id = ?",
+                    (agent_id, old_id),
+                )
+                self._connection.commit()
+
+        current = self.get(agent_id)
+        if current is None:
+            return self.create(
+                agent_id=agent_id,
+                name=name,
+                description=description,
+                ghost=ghost,
+                system_prompt=system_prompt,
+                model=model,
+                temperature=temperature,
+                tool_names=tool_names,
+                search_mode=search_mode,
+                bootstrap_tools=bootstrap_tools,
+                tool_sources=tool_sources,
+            )
+        return self.update(
+            agent_id,
+            name=name,
+            description=description,
+            ghost=ghost,
+            system_prompt=system_prompt,
+            model=model,
+            temperature=temperature,
+            tool_names=tool_names,
+            search_mode=search_mode,
+            bootstrap_tools=list(bootstrap_tools or []),
+            tool_sources=dict(tool_sources or {}),
+        )
 
     def update(self, agent_id: str, **changes: object) -> PresetAgent:
         current = self.get(agent_id)
