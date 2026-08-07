@@ -165,7 +165,7 @@ async def websocket_chat(websocket: WebSocket, session_id: str) -> None:
                 sessions.set_active_mcp_servers(session_id, mcp_server_names)
                 run_options.update(
                     {
-                        "system_prompt": preset_agent.system_prompt,
+                        "system_prompt_appendix": preset_agent.system_prompt,
                         "allowed_tool_names": set(preset_agent.tool_names),
                         "bootstrap_tools": preset_agent.bootstrap_tools,
                         "model": preset_agent.model,

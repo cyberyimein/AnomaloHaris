@@ -4,8 +4,11 @@ from pathlib import Path
 
 import pytest
 from app.agent.events import event
+from app.agent.runtime import AgentRuntime
+from app.agent.session import SessionStore
 from app.agents.browser_operator import (
     BROWSER_OPERATOR_ID,
+    BROWSER_OPERATOR_SYSTEM_PROMPT,
     BROWSER_TOOL_NAMES,
     BrowserToolBroker,
     BrowserToolProvider,
@@ -13,7 +16,10 @@ from app.agents.browser_operator import (
 )
 from app.agents.store import PresetAgentStore
 from app.api import websocket as websocket_api
+from app.config import Settings
+from app.llm.openai_client import LLMStreamEvent
 from app.tools.base import ToolContext
+from app.tools.registry import ToolRegistry
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -93,6 +99,42 @@ async def test_old_browser_registration_cannot_unregister_new_connection() -> No
         result={"title": "Example"},
     )
     assert (await call).ok is True
+
+
+@pytest.mark.asyncio
+async def test_browser_prompt_extends_the_standard_anomalo_prompt() -> None:
+    llm = _PromptRuntimeLlm()
+    runtime = AgentRuntime(
+        settings=Settings(
+            OPENROUTER_API_KEY=None,
+            WEB_TOOLS_ENABLED=False,
+            ANOMALO_AGENT_PROMPT_PROFILE="agent",
+        ),
+        sessions=SessionStore(),
+        skills=_PromptSkills(),
+        mcp=_PromptMcp(),
+        tools=ToolRegistry([]),
+        llm=llm,
+    )
+
+    events = [
+        item
+        async for item in runtime.run(
+            "browser-session",
+            "Help me inspect this page.",
+            system_prompt_appendix=BROWSER_OPERATOR_SYSTEM_PROMPT,
+            allowed_tool_names=set(BROWSER_TOOL_NAMES),
+        )
+    ]
+
+    assert events[-1].type == "run.finished"
+    assert llm.messages[0]["role"] == "system"
+    assert "You are Anomalo" in llm.messages[0]["content"]
+    assert llm.messages[1] == {
+        "role": "system",
+        "content": BROWSER_OPERATOR_SYSTEM_PROMPT.strip(),
+    }
+    assert "not your sole role" in llm.messages[1]["content"]
 
 
 def test_builtin_browser_operator_is_stable_and_restricted(tmp_path: Path) -> None:
@@ -210,6 +252,45 @@ class _BrowserRuntime:
             data=result.data,
         )
         yield event("run.finished", session_id, run_id, final_text=result.content)
+
+
+class _PromptRuntimeLlm:
+    def __init__(self) -> None:
+        self.messages: list[dict[str, object]] = []
+
+    def request_payload(
+        self,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]],
+    ) -> dict[str, object]:
+        return {"messages": messages, "tools": tools}
+
+    async def stream_chat(
+        self,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]],
+    ):
+        del tools
+        self.messages = messages
+        yield LLMStreamEvent(type="message.done")
+
+
+class _PromptSkills:
+    def skill_catalog_message(self):
+        return None
+
+    def build_active_skill_messages(self, names):
+        del names
+        return []
+
+
+class _PromptMcp:
+    def catalog_message(self):
+        return None
+
+    def build_active_server_messages(self, names):
+        del names
+        return []
 
 
 class _SessionState:

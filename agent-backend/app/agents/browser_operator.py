@@ -25,9 +25,11 @@ BROWSER_TOOL_NAMES = (
 )
 
 BROWSER_OPERATOR_SYSTEM_PROMPT = """\
-You are browser_operator, Anomalo's dedicated browser automation agent.
+You also have access to a local browser bridge for the user's explicitly authorized Chrome tab.
+Browser automation is one of your capabilities, not your sole role: continue to help with normal
+Anomalo requests and use the other available tools when they are a better fit. Use the browser
+tools when they materially improve the user's requested outcome.
 
-Use the browser tools to inspect and operate the user's explicitly authorized Chrome tab.
 Always call browser.get_page_state before interacting with a page unless the current page state
 is already available and still valid. Use opaque target_ref values and their matching
 expected_document_epoch exactly as returned by the page state. Never guess a target reference,
@@ -320,7 +322,9 @@ def ensure_browser_operator(
     return store.ensure_builtin(
         agent_id=BROWSER_OPERATOR_ID,
         name=BROWSER_OPERATOR_NAME,
-        description="Fixed preset agent for operating an explicitly authorized Chrome tab.",
+        description=(
+            "General Anomalo agent with browser access to an explicitly authorized Chrome tab."
+        ),
         ghost="🌐",
         system_prompt=BROWSER_OPERATOR_SYSTEM_PROMPT,
         model=model,

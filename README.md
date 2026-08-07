@@ -152,7 +152,7 @@ to FruitSpy Crawl4AI when a page appears to require JavaScript rendering.
 - `POST /api/chat` — collected JSON response.
 - `POST /api/chat/stream` — newline-delimited streaming JSON.
 
-The `browser_operator` preset is a reserved fixed agent. It is created automatically in
+The `browser_operator` preset is a reserved fixed general agent with browser access. It is created automatically in
 `ANOMALO_DATA_DIR/preset-agents.sqlite3`, cannot be edited through the management API, and is
 available only through the TUI browser-bridge WebSocket handshake. The TUI must send
 `client.hello` with `agent_profile: "browser_operator"` and the browser capability list before the
