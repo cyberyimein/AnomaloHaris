@@ -57,7 +57,6 @@ class _RunState:
     history_messages: list[dict[str, Any]]
     current_user_message: dict[str, Any]
     system_prompt: str | None = None
-    system_prompt_appendix: str | None = None
     allowed_tool_names: frozenset[str] | None = None
     bootstrap_tools: list[dict[str, Any]] = field(default_factory=list)
     bootstrap_context: list[dict[str, Any]] = field(default_factory=list)
@@ -136,7 +135,6 @@ class AgentRuntime:
         resume: bool = False,
         response_format: ResponseFormatInput = None,
         system_prompt: str | None = None,
-        system_prompt_appendix: str | None = None,
         allowed_tool_names: set[str] | frozenset[str] | None = None,
         bootstrap_tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
@@ -258,9 +256,6 @@ class AgentRuntime:
             history_messages=history_messages,
             current_user_message=current_user_message,
             system_prompt=system_prompt.strip() if system_prompt else None,
-            system_prompt_appendix=(
-                system_prompt_appendix.strip() if system_prompt_appendix else None
-            ),
             allowed_tool_names=(
                 frozenset(allowed_tool_names) if allowed_tool_names is not None else None
             ),
@@ -355,10 +350,6 @@ class AgentRuntime:
             if state.system_prompt is not None
             else load_prompt_messages(self.settings.prompts_config_path, profile_name)
         )
-        if state.system_prompt_appendix is not None:
-            prompt_messages.append(
-                {"role": "system", "content": state.system_prompt_appendix}
-            )
         has_search_tool = (
             (state.allowed_tool_names is None or "web_search" in state.allowed_tool_names)
             and (state.search_mode != SEARCH_MODE_DIY or self.settings.web_tools_enabled)
