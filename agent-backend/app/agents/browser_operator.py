@@ -18,6 +18,7 @@ BROWSER_TOOL_NAMES = (
     "browser.navigate",
     "browser.click",
     "browser.fill",
+    "browser.type_text",
     "browser.press_key",
     "browser.select_option",
     "browser.wait_for",
@@ -66,7 +67,7 @@ Style requirements:
 Keep answers concise and operational when the user asks about devices, automations, or future
 ESP32-connected hardware.
 
-You also have access to a local browser bridge for the user's explicitly authorized Chrome tab.
+You also have access to a local browser bridge for the dedicated Chrome control tab.
 Browser automation is one of your capabilities, not your sole role: continue to help with normal
 Anomalo requests and use the other available tools when they are a better fit. Use the browser
 tools when they materially improve the user's requested outcome.
@@ -75,6 +76,36 @@ Always call browser.get_page_state before interacting with a page unless the cur
 is already available and still valid. Use opaque target_ref values and their matching
 expected_document_epoch exactly as returned by the page state. Never guess a target reference,
 selector, or document epoch.
+
+browser.get_page_state returns an object with url, title, document_epoch, visible text,
+truncated, and targets. Targets may belong to child frames; use each target's target_ref and
+document_epoch exactly when calling click, fill, type_text, press_key, or select_option. A
+successful tool event may be summarized in the TUI, but the full structured result is supplied to
+the agent.
+If a browser action returns STALE_TARGET, call browser.get_page_state again and retry only with
+the newly returned target_ref and document_epoch; never reuse a target from an older page state.
+The browser bridge reports DOM observations and typed actions; it does not disable page JavaScript
+and does not expose the browser's JavaScript setting. Never conclude that JavaScript is disabled
+from page text alone. A page may show a stale, fallback, or application-specific JavaScript
+warning while scripts and controls are still active. Report the warning as page content and keep
+the cause unknown unless a tool result provides direct evidence. Do not claim that a rich editor
+accepted text unless a tool result or a subsequent page state verifies an observable change.
+browser.fill supports native input and textarea controls only. browser.type_text is the only
+arbitrary-text tool. It uses Chrome's restricted real-input path for a current non-sensitive
+native, contenteditable, canvas, or iframe-backed target and verifies the observable result
+without returning field contents. For eligible canvas-backed editors, including Google Docs, it
+uses a target-bound real pointer focus plus text input and accessibility or visual evidence.
+It may return EFFECT_UNOBSERVABLE only if no safe evidence is available; report that limitation
+rather than claiming success or attributing it to disabled JavaScript. browser.press_key supports
+only the listed keys and cannot type arbitrary text.
+For text entry, use browser.fill for native input and textarea controls. Use browser.type_text for
+contenteditable, canvas, and iframe-backed editors. Always use the latest target_ref and matching
+expected_document_epoch from browser.get_page_state. Never use browser.press_key or Space as a
+substitute for typing text.
+
+Do not call browser.screenshot as a startup or bridge health check. Use it only when the user
+explicitly asks for a screenshot or when visual layout inspection is necessary; page state is the
+default browser observation tool.
 
 Browser actions are executed through a local bridge and may require the user's confirmation.
 Explain what you are about to do before a risky action when the user needs context. Do not claim
@@ -139,8 +170,8 @@ class BrowserToolBroker:
             return _browser_error(
                 tool,
                 (
-                    "The browser bridge is not connected. Pair the Chrome extension "
-                    "and authorize a tab."
+                    "The browser bridge is not connected. Start the Chrome extension "
+                    "and wait for its dedicated control tab."
                 ),
                 code="BROWSER_UNAVAILABLE",
                 retryable=True,
@@ -364,7 +395,7 @@ def ensure_browser_operator(
         agent_id=BROWSER_OPERATOR_ID,
         name=BROWSER_OPERATOR_NAME,
         description=(
-            "General Anomalo agent with browser access to an explicitly authorized Chrome tab."
+            "General Anomalo agent with browser access to a dedicated Chrome control tab."
         ),
         ghost="🌐",
         system_prompt=BROWSER_OPERATOR_SYSTEM_PROMPT,
@@ -383,8 +414,8 @@ def _browser_tool_specs() -> list[ToolSpec]:
     definitions = {
         "browser.get_page_state": (
             (
-                "Inspect the authorized tab and return visible text plus opaque "
-                "interactable target references."
+                "Inspect the dedicated control tab. Returns url, title, visible text, a "
+                "truncated flag, document_epoch, and opaque interactable target references."
             ),
             {
                 "type": "object",
@@ -397,7 +428,7 @@ def _browser_tool_specs() -> list[ToolSpec]:
             },
         ),
         "browser.navigate": (
-            "Navigate the authorized tab to an absolute credential-free HTTP(S) URL.",
+            "Navigate the dedicated control tab to an absolute credential-free HTTP(S) URL.",
             {
                 "type": "object",
                 "required": ["url"],
@@ -413,7 +444,26 @@ def _browser_tool_specs() -> list[ToolSpec]:
             _target_schema(),
         ),
         "browser.fill": (
-            "Fill a non-sensitive input or textarea using a current target reference.",
+            (
+                "Fill a non-sensitive input or textarea using a current target reference. "
+                "The field is focused after filling, so a following press_key Enter can submit it."
+            ),
+            {
+                **_target_schema(),
+                "required": ["target_ref", "expected_document_epoch", "text"],
+                "properties": {
+                    **_target_schema()["properties"],
+                    "text": {"type": "string", "maxLength": 20000},
+                },
+            },
+        ),
+        "browser.type_text": (
+            (
+                "Type bounded text into a current non-sensitive native, contenteditable, canvas, "
+                "or iframe-backed target through Chrome's real input path. The result is "
+                "successful "
+                "only after effect verification."
+            ),
             {
                 **_target_schema(),
                 "required": ["target_ref", "expected_document_epoch", "text"],
@@ -424,14 +474,22 @@ def _browser_tool_specs() -> list[ToolSpec]:
             },
         ),
         "browser.press_key": (
-            "Press a supported key in the authorized tab.",
+            (
+                "Press a supported key in the dedicated control tab. If target_ref is "
+                "provided, also provide its matching expected_document_epoch; Enter activates "
+                "semantic buttons/links or submits the associated text input form. The result "
+                "is successful only when an observable page outcome is detected."
+            ),
             {
                 "type": "object",
                 "required": ["key"],
                 "properties": {
                     "tab_id": {"type": "integer"},
                     "target_ref": {"type": "string"},
-                    "expected_document_epoch": {"type": "string"},
+                    "expected_document_epoch": {
+                        "type": "string",
+                        "description": "Required when target_ref is provided.",
+                    },
                     "key": {
                         "type": "string",
                         "enum": ["Enter", "Tab", "Escape", "ArrowUp", "ArrowDown", "Space"],
@@ -441,6 +499,16 @@ def _browser_tool_specs() -> list[ToolSpec]:
                         "items": {"type": "string", "enum": ["Alt", "Control", "Meta", "Shift"]},
                     },
                 },
+                "allOf": [
+                    {
+                        "if": {"required": ["target_ref"]},
+                        "then": {"required": ["expected_document_epoch"]},
+                    },
+                    {
+                        "if": {"required": ["expected_document_epoch"]},
+                        "then": {"required": ["target_ref"]},
+                    },
+                ],
                 "additionalProperties": False,
             },
         ),
@@ -475,7 +543,13 @@ def _browser_tool_specs() -> list[ToolSpec]:
                                     "dom_quiet",
                                 ],
                             },
-                            "pattern": {"type": "string"},
+                            "pattern": {
+                                "type": "string",
+                                "minLength": 1,
+                                "description": (
+                                    "A URL substring, or a full-URL glob using * and ?."
+                                ),
+                            },
                             "text": {"type": "string"},
                             "target_ref": {"type": "string"},
                             "expected_document_epoch": {"type": "string"},
@@ -489,7 +563,10 @@ def _browser_tool_specs() -> list[ToolSpec]:
             },
         ),
         "browser.screenshot": (
-            "Capture the visible authorized tab as a bounded PNG or JPEG data URL.",
+            (
+                "Capture the visible dedicated control tab as a bounded PNG or JPEG data URL "
+                "when visual inspection is explicitly needed."
+            ),
             {
                 "type": "object",
                 "properties": {

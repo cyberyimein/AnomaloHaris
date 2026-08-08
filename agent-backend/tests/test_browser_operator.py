@@ -59,6 +59,67 @@ async def test_browser_tool_broker_round_trip() -> None:
 
 
 @pytest.mark.asyncio
+async def test_browser_type_text_is_registered_and_callable() -> None:
+    sent: list[dict[str, object]] = []
+    broker = BrowserToolBroker(timeout_seconds=1)
+
+    async def send(payload: dict[str, object]) -> None:
+        sent.append(payload)
+
+    broker.register("session-1", send)
+    provider = BrowserToolProvider(broker)
+    context = ToolContext(
+        session_id="session-1",
+        run_id="run-1",
+        tool_call_id="type-text-1",
+    )
+    specs = await provider.list_tools(context)
+    spec = next(spec for spec in specs if spec.name == "browser.type_text")
+
+    assert spec.parameters["required"] == [
+        "target_ref",
+        "expected_document_epoch",
+        "text",
+    ]
+    assert spec.parameters["properties"]["text"] == {
+        "type": "string",
+        "maxLength": 20000,
+    }
+
+    call = asyncio.create_task(
+        provider.call_tool(
+            "browser.type_text",
+            {
+                "target_ref": "target-opaque-1",
+                "expected_document_epoch": "epoch-1",
+                "text": "hello editor",
+            },
+            context,
+        )
+    )
+    await asyncio.sleep(0)
+    assert sent[0]["type"] == "browser.tool.call"
+    assert sent[0]["data"]["tool"] == "browser.type_text"  # type: ignore[index]
+    assert sent[0]["data"]["arguments"] == {  # type: ignore[index]
+        "target_ref": "target-opaque-1",
+        "expected_document_epoch": "epoch-1",
+        "text": "hello editor",
+    }
+    assert broker.complete(
+        session_id="session-1",
+        run_id="run-1",
+        tool_call_id="type-text-1",
+        status="ok",
+        result={"verified": True},
+    )
+
+    result = await call
+    assert result.ok is True
+    assert result.name == "browser.type_text"
+    assert result.data == {"verified": True}
+
+
+@pytest.mark.asyncio
 async def test_old_browser_registration_cannot_unregister_new_connection() -> None:
     first_sent: list[dict[str, object]] = []
     second_sent: list[dict[str, object]] = []
@@ -101,6 +162,14 @@ def test_browser_prompt_combines_anomalo_and_browser_instructions() -> None:
     assert "primarily text" in BROWSER_OPERATOR_SYSTEM_PROMPT
     assert "not your sole role" in BROWSER_OPERATOR_SYSTEM_PROMPT
     assert "browser.get_page_state" in BROWSER_OPERATOR_SYSTEM_PROMPT
+    assert "Do not call browser.screenshot as a startup" in BROWSER_OPERATOR_SYSTEM_PROMPT
+    assert "If a browser action returns STALE_TARGET" in BROWSER_OPERATOR_SYSTEM_PROMPT
+    assert "Never conclude that JavaScript is disabled" in BROWSER_OPERATOR_SYSTEM_PROMPT
+    assert "cannot type arbitrary text" in BROWSER_OPERATOR_SYSTEM_PROMPT
+    assert "browser.type_text" in BROWSER_OPERATOR_SYSTEM_PROMPT
+    assert "native input and textarea controls" in BROWSER_OPERATOR_SYSTEM_PROMPT
+    assert "contenteditable, canvas, and iframe-backed editors" in BROWSER_OPERATOR_SYSTEM_PROMPT
+    assert "Never use browser.press_key or Space" in BROWSER_OPERATOR_SYSTEM_PROMPT
 
 
 def test_builtin_browser_operator_is_stable_and_restricted(tmp_path: Path) -> None:
@@ -113,6 +182,9 @@ def test_builtin_browser_operator_is_stable_and_restricted(tmp_path: Path) -> No
 
     assert agent.id == BROWSER_OPERATOR_ID
     assert agent.tool_names == list(BROWSER_TOOL_NAMES)
+    assert len(agent.tool_names) == 9
+    assert "browser.type_text" in agent.tool_names
+    assert agent.bootstrap_tools == []
     assert agent.tool_sources == {name: "browser_bridge" for name in BROWSER_TOOL_NAMES}
 
     repaired = ensure_browser_operator(
