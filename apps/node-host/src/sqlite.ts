@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 );
 CREATE TABLE IF NOT EXISTS agent_sessions (
   session_id TEXT PRIMARY KEY,
+  schema_version INTEGER NOT NULL DEFAULT 2,
   title TEXT NOT NULL DEFAULT 'Untitled conversation',
   search_mode TEXT NOT NULL DEFAULT 'diy',
   metadata_json TEXT NOT NULL DEFAULT '{}',
@@ -48,11 +49,13 @@ CREATE TABLE IF NOT EXISTS session_entries (
   created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS session_resources (
-  session_id TEXT PRIMARY KEY REFERENCES agent_sessions(session_id) ON DELETE CASCADE,
-  active_skills_json TEXT NOT NULL DEFAULT '[]',
-  active_mcp_servers_json TEXT NOT NULL DEFAULT '[]'
+  session_id TEXT NOT NULL REFERENCES agent_sessions(session_id) ON DELETE CASCADE,
+  resource_type TEXT NOT NULL,
+  resource_name TEXT NOT NULL,
+  active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+  PRIMARY KEY(session_id, resource_type, resource_name)
 );
-CREATE TABLE IF NOT EXISTS session_web_traces (
+CREATE TABLE IF NOT EXISTS web_traces (
   trace_id TEXT PRIMARY KEY,
   session_id TEXT NOT NULL REFERENCES agent_sessions(session_id) ON DELETE CASCADE,
   run_id TEXT,
@@ -60,7 +63,7 @@ CREATE TABLE IF NOT EXISTS session_web_traces (
   payload_json TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS session_runs (
+CREATE TABLE IF NOT EXISTS runs (
   run_id TEXT PRIMARY KEY,
   session_id TEXT NOT NULL REFERENCES agent_sessions(session_id) ON DELETE CASCADE,
   status TEXT NOT NULL CHECK (status IN ('active', 'paused', 'finished', 'error', 'stopped')),
@@ -85,11 +88,13 @@ CREATE INDEX IF NOT EXISTS idx_session_entries_session_created
 CREATE INDEX IF NOT EXISTS idx_session_entries_parent
   ON session_entries(parent_entry_id);
 CREATE INDEX IF NOT EXISTS idx_session_runs_session_started
-  ON session_runs(session_id, started_at DESC);
+  ON runs(session_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_runs_status
+  ON runs(status);
 CREATE INDEX IF NOT EXISTS idx_run_checkpoints_session
   ON run_checkpoints(session_id, updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_session_web_traces_session_created
-  ON session_web_traces(session_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_web_traces_session_created
+  ON web_traces(session_id, created_at DESC);
 `;
 
 type Row = Record<string, unknown>;
@@ -186,7 +191,7 @@ export class SqliteSessionAdapter implements SessionRepository {
   async beginRun(record: NewRunRecord): Promise<void> {
     this.ensureSession(record.sessionId);
     this.db.prepare(`
-      INSERT INTO session_runs(
+      INSERT INTO runs(
         run_id, session_id, status, start_entry_id, last_entry_id,
         config_json, started_at, ended_at, error_code
       ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL)
@@ -233,7 +238,7 @@ export class SqliteSessionAdapter implements SessionRepository {
         record.updatedAt,
       );
       this.db.prepare(
-        "UPDATE session_runs SET status = 'paused', last_entry_id = COALESCE(last_entry_id, ?) WHERE run_id = ?",
+        "UPDATE runs SET status = 'paused', last_entry_id = COALESCE(last_entry_id, ?) WHERE run_id = ?",
       ).run(this.sessionLeaf(record.sessionId), record.runId);
       this.db.prepare(
         "UPDATE agent_sessions SET updated_at = ? WHERE session_id = ?",
@@ -249,7 +254,7 @@ export class SqliteSessionAdapter implements SessionRepository {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       this.db.prepare(`
-        UPDATE session_runs
+        UPDATE runs
         SET status = 'finished', last_entry_id = ?, ended_at = ?, error_code = NULL
         WHERE run_id = ? AND session_id = ?
       `).run(record.lastEntryId ?? null, record.endedAt, record.runId, record.sessionId);
@@ -269,7 +274,7 @@ export class SqliteSessionAdapter implements SessionRepository {
   async failRun(record: FailedRunRecord): Promise<void> {
     const status = record.errorCode === "run_stopped" ? "stopped" : "error";
     this.db.prepare(`
-      UPDATE session_runs
+      UPDATE runs
       SET status = ?, last_entry_id = ?, ended_at = ?, error_code = ?
       WHERE run_id = ? AND session_id = ?
     `).run(status, record.lastEntryId ?? null, record.endedAt, record.errorCode, record.runId, record.sessionId);
@@ -318,20 +323,19 @@ export class SqliteSessionAdapter implements SessionRepository {
 
   async setResources(sessionId: SessionId, activeSkills: string[], activeMcpServers: string[]): Promise<void> {
     this.ensureSession(sessionId);
-    this.db.prepare(`
-      INSERT INTO session_resources(session_id, active_skills_json, active_mcp_servers_json)
-      VALUES (?, ?, ?)
-      ON CONFLICT(session_id) DO UPDATE SET
-        active_skills_json = excluded.active_skills_json,
-        active_mcp_servers_json = excluded.active_mcp_servers_json
-    `).run(sessionId, JSON.stringify([...new Set(activeSkills)].sort()), JSON.stringify([...new Set(activeMcpServers)].sort()));
+    this.db.prepare("DELETE FROM session_resources WHERE session_id = ?").run(sessionId);
+    const insert = this.db.prepare(
+      "INSERT INTO session_resources(session_id, resource_type, resource_name, active) VALUES (?, ?, ?, 1)",
+    );
+    for (const name of [...new Set(activeSkills)].sort()) insert.run(sessionId, "skill", name);
+    for (const name of [...new Set(activeMcpServers)].sort()) insert.run(sessionId, "mcp", name);
   }
 
   async appendWebTrace(sessionId: SessionId, trace: Record<string, unknown>): Promise<void> {
     this.ensureSession(sessionId);
     const traceId = typeof trace.id === "string" && trace.id ? trace.id : this.ids.entryId();
     this.db.prepare(`
-      INSERT OR REPLACE INTO session_web_traces(
+      INSERT OR REPLACE INTO web_traces(
         trace_id, session_id, run_id, tool_call_id, payload_json, created_at
       ) VALUES (?, ?, ?, ?, ?, ?)
     `).run(
@@ -372,16 +376,13 @@ export class SqliteSessionAdapter implements SessionRepository {
     if (!migrated) {
       const now = this.clock.now();
       this.db.prepare(`
-        INSERT INTO agent_sessions(session_id, created_at, updated_at) VALUES (?, ?, ?)
-      `).run(sessionId, now, now);
+        INSERT INTO agent_sessions(session_id, schema_version, created_at, updated_at) VALUES (?, ?, ?, ?)
+      `).run(sessionId, SESSION_V2_SCHEMA_VERSION, now, now);
     }
-    this.ensureResources(sessionId);
   }
 
   private ensureResources(sessionId: SessionId): void {
-    this.db.prepare(
-      "INSERT OR IGNORE INTO session_resources(session_id) VALUES (?)",
-    ).run(sessionId);
+    void sessionId;
   }
 
   private sessionLeaf(sessionId: SessionId): string | null {
@@ -393,13 +394,14 @@ export class SqliteSessionAdapter implements SessionRepository {
 
   private readSnapshot(sessionId: SessionId): SessionSnapshot {
     const session = this.db.prepare(`
-      SELECT session_id, title, search_mode, metadata_json, active_leaf_entry_id
+      SELECT session_id, schema_version, title, search_mode, metadata_json, active_leaf_entry_id
       FROM agent_sessions WHERE session_id = ?
     `).get(sessionId) as Row;
     const resources = this.db.prepare(`
-      SELECT active_skills_json, active_mcp_servers_json
-      FROM session_resources WHERE session_id = ?
-    `).get(sessionId) as Row | undefined;
+      SELECT resource_type, resource_name
+      FROM session_resources WHERE session_id = ? AND active = 1
+      ORDER BY resource_type, resource_name
+    `).all(sessionId) as Row[];
     const updated = this.db.prepare(
       "SELECT updated_at FROM agent_sessions WHERE session_id = ?",
     ).get(sessionId) as Row;
@@ -415,8 +417,8 @@ export class SqliteSessionAdapter implements SessionRepository {
       searchMode: String(session.search_mode || "diy"),
       metadata: parseObject(session.metadata_json),
       messages: this.readMessageChain(sessionId, session.active_leaf_entry_id as string | null | undefined),
-      activeSkills: parseStringArray(resources?.active_skills_json),
-      activeMcpServers: parseStringArray(resources?.active_mcp_servers_json),
+      activeSkills: resources.filter((row) => row.resource_type === "skill").map((row) => String(row.resource_name)),
+      activeMcpServers: resources.filter((row) => row.resource_type === "mcp").map((row) => String(row.resource_name)),
       webTraces: this.readWebTraces(sessionId),
       ...(checkpointRow ? { checkpoint: checkpointFromRow(checkpointRow) } : {}),
       updatedAt: String(updated.updated_at),
@@ -450,7 +452,7 @@ export class SqliteSessionAdapter implements SessionRepository {
 
   private readWebTraces(sessionId: SessionId): Record<string, unknown>[] {
     return (this.db.prepare(`
-      SELECT payload_json FROM session_web_traces
+      SELECT payload_json FROM web_traces
       WHERE session_id = ? ORDER BY created_at ASC, trace_id ASC
     `).all(sessionId) as Row[]).map((row) => parseObject(row.payload_json));
   }
@@ -520,19 +522,31 @@ function migrateLegacySession(db: DatabaseSync, sessionId: SessionId, clock: Clo
 function migrateLegacyRow(db: DatabaseSync, row: Row, clock: Clock): void {
   const sessionId = String(row.session_id);
   const now = String(row.updated_at || clock.now());
-  const messages = parseArray(row.messages_json);
   const checkpoint = parseNullableObject(row.checkpoint_json);
+  const messages = checkpoint ? parseArray(checkpoint.messages) : parseArray(row.messages_json);
   db.exec("BEGIN IMMEDIATE");
   try {
     db.prepare(`
-      INSERT INTO agent_sessions(session_id, title, search_mode, metadata_json, created_at, updated_at)
-      VALUES (?, ?, ?, '{}', ?, ?)
-    `).run(sessionId, String(row.title || firstTitle(messages)), String(row.search_mode || "diy"), now, now);
-    db.prepare("INSERT INTO session_resources(session_id, active_skills_json, active_mcp_servers_json) VALUES (?, ?, ?)").run(
+      INSERT INTO agent_sessions(session_id, schema_version, title, search_mode, metadata_json, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
       sessionId,
-      JSON.stringify(parseArray(row.active_skills_json)),
-      JSON.stringify(parseArray(row.active_mcp_servers_json)),
+      SESSION_V2_SCHEMA_VERSION,
+      String(row.title || firstTitle(messages)),
+      String(row.search_mode || "diy"),
+      JSON.stringify({
+        legacy_source_hash: hashJson(row),
+        legacy_messages_json: String(row.messages_json || "[]"),
+        legacy_checkpoint_json: row.checkpoint_json ?? null,
+      }),
+      now,
+      now,
     );
+    const insertResource = db.prepare(
+      "INSERT INTO session_resources(session_id, resource_type, resource_name, active) VALUES (?, ?, ?, 1)",
+    );
+    for (const name of parseStringArray(row.active_skills_json)) insertResource.run(sessionId, "skill", name);
+    for (const name of parseStringArray(row.active_mcp_servers_json)) insertResource.run(sessionId, "mcp", name);
     let parent: string | null = null;
     for (const [index, message] of messages.entries()) {
       if (!message || typeof message !== "object") continue;
@@ -549,7 +563,7 @@ function migrateLegacyRow(db: DatabaseSync, row: Row, clock: Clock): void {
       const runId = String(checkpoint.run_id || `legacy-run-${sessionId}`);
       const checkpointMessages = parseArray(checkpoint.messages);
       db.prepare(`
-        INSERT INTO session_runs(run_id, session_id, status, last_entry_id, config_json, started_at)
+        INSERT INTO runs(run_id, session_id, status, last_entry_id, config_json, started_at)
         VALUES (?, ?, 'paused', ?, '{}', ?)
       `).run(runId, sessionId, parent, now);
       db.prepare(`
@@ -567,7 +581,8 @@ function migrateLegacyRow(db: DatabaseSync, row: Row, clock: Clock): void {
           assistantText: "",
           pendingToolCalls: [],
           completedToolCallIds: [],
-          loopMessages: checkpointMessages,
+          loopMessages: [],
+          legacyMessages: checkpointMessages,
           bootstrapContext: parseArray(checkpoint.bootstrap_context),
           ...(checkpoint.response_format ? { responseFormat: checkpoint.response_format } : {}),
           model: "legacy",
@@ -582,7 +597,7 @@ function migrateLegacyRow(db: DatabaseSync, row: Row, clock: Clock): void {
       const payload = trace as Record<string, unknown>;
       const traceId = typeof payload.id === "string" ? payload.id : `legacy-trace-${hashJson(payload).slice(0, 24)}`;
       db.prepare(`
-        INSERT OR IGNORE INTO session_web_traces(trace_id, session_id, run_id, tool_call_id, payload_json, created_at)
+        INSERT OR IGNORE INTO web_traces(trace_id, session_id, run_id, tool_call_id, payload_json, created_at)
         VALUES (?, ?, ?, ?, ?, ?)
       `).run(traceId, sessionId, stringOrNull(payload.run_id), stringOrNull(payload.tool_call_id), JSON.stringify(payload), String(payload.timestamp || now));
     }

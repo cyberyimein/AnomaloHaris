@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 
 CREATE TABLE IF NOT EXISTS agent_sessions (
     session_id TEXT PRIMARY KEY,
+    schema_version INTEGER NOT NULL DEFAULT 2,
     title TEXT NOT NULL DEFAULT 'Untitled conversation',
     search_mode TEXT NOT NULL DEFAULT 'diy',
     metadata_json TEXT NOT NULL DEFAULT '{}',
@@ -27,12 +28,14 @@ CREATE TABLE IF NOT EXISTS session_entries (
 );
 
 CREATE TABLE IF NOT EXISTS session_resources (
-    session_id TEXT PRIMARY KEY REFERENCES agent_sessions(session_id) ON DELETE CASCADE,
-    active_skills_json TEXT NOT NULL DEFAULT '[]',
-    active_mcp_servers_json TEXT NOT NULL DEFAULT '[]'
+    session_id TEXT NOT NULL REFERENCES agent_sessions(session_id) ON DELETE CASCADE,
+    resource_type TEXT NOT NULL,
+    resource_name TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+    PRIMARY KEY(session_id, resource_type, resource_name)
 );
 
-CREATE TABLE IF NOT EXISTS session_web_traces (
+CREATE TABLE IF NOT EXISTS web_traces (
     trace_id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL REFERENCES agent_sessions(session_id) ON DELETE CASCADE,
     run_id TEXT,
@@ -41,7 +44,7 @@ CREATE TABLE IF NOT EXISTS session_web_traces (
     created_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS session_runs (
+CREATE TABLE IF NOT EXISTS runs (
     run_id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL REFERENCES agent_sessions(session_id) ON DELETE CASCADE,
     status TEXT NOT NULL CHECK (status IN ('active', 'paused', 'finished', 'error', 'stopped')),
@@ -68,8 +71,10 @@ CREATE INDEX IF NOT EXISTS idx_session_entries_session_created
 CREATE INDEX IF NOT EXISTS idx_session_entries_parent
     ON session_entries(parent_entry_id);
 CREATE INDEX IF NOT EXISTS idx_session_runs_session_started
-    ON session_runs(session_id, started_at DESC);
+    ON runs(session_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_runs_status
+    ON runs(status);
 CREATE INDEX IF NOT EXISTS idx_run_checkpoints_session
     ON run_checkpoints(session_id, updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_session_web_traces_session_created
-    ON session_web_traces(session_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_web_traces_session_created
+    ON web_traces(session_id, created_at DESC);

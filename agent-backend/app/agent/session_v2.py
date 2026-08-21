@@ -9,6 +9,7 @@ API handlers.
 from __future__ import annotations
 
 import json
+import hashlib
 import sqlite3
 import threading
 from copy import deepcopy
@@ -30,6 +31,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 );
 CREATE TABLE IF NOT EXISTS agent_sessions (
   session_id TEXT PRIMARY KEY,
+  schema_version INTEGER NOT NULL DEFAULT 2,
   title TEXT NOT NULL DEFAULT 'Untitled conversation',
   search_mode TEXT NOT NULL DEFAULT 'diy',
   metadata_json TEXT NOT NULL DEFAULT '{}',
@@ -48,11 +50,13 @@ CREATE TABLE IF NOT EXISTS session_entries (
   created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS session_resources (
-  session_id TEXT PRIMARY KEY REFERENCES agent_sessions(session_id) ON DELETE CASCADE,
-  active_skills_json TEXT NOT NULL DEFAULT '[]',
-  active_mcp_servers_json TEXT NOT NULL DEFAULT '[]'
+  session_id TEXT NOT NULL REFERENCES agent_sessions(session_id) ON DELETE CASCADE,
+  resource_type TEXT NOT NULL,
+  resource_name TEXT NOT NULL,
+  active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+  PRIMARY KEY(session_id, resource_type, resource_name)
 );
-CREATE TABLE IF NOT EXISTS session_web_traces (
+CREATE TABLE IF NOT EXISTS web_traces (
   trace_id TEXT PRIMARY KEY,
   session_id TEXT NOT NULL REFERENCES agent_sessions(session_id) ON DELETE CASCADE,
   run_id TEXT,
@@ -60,7 +64,7 @@ CREATE TABLE IF NOT EXISTS session_web_traces (
   payload_json TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS session_runs (
+CREATE TABLE IF NOT EXISTS runs (
   run_id TEXT PRIMARY KEY,
   session_id TEXT NOT NULL REFERENCES agent_sessions(session_id) ON DELETE CASCADE,
   status TEXT NOT NULL CHECK (status IN ('active', 'paused', 'finished', 'error', 'stopped')),
@@ -85,11 +89,13 @@ CREATE INDEX IF NOT EXISTS idx_session_entries_session_created
 CREATE INDEX IF NOT EXISTS idx_session_entries_parent
   ON session_entries(parent_entry_id);
 CREATE INDEX IF NOT EXISTS idx_session_runs_session_started
-  ON session_runs(session_id, started_at DESC);
+  ON runs(session_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_runs_status
+  ON runs(status);
 CREATE INDEX IF NOT EXISTS idx_run_checkpoints_session
   ON run_checkpoints(session_id, updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_session_web_traces_session_created
-  ON session_web_traces(session_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_web_traces_session_created
+  ON web_traces(session_id, created_at DESC);
 """
 
 
@@ -138,13 +144,9 @@ class SessionV2Store:
         if row is None:
             now = _now()
             self._connection.execute(
-                "INSERT INTO agent_sessions(session_id, created_at, updated_at) VALUES (?, ?, ?)",
-                (session_id, now, now),
+                "INSERT INTO agent_sessions(session_id, schema_version, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                (session_id, SESSION_V2_SCHEMA_VERSION, now, now),
             )
-        self._connection.execute(
-            "INSERT OR IGNORE INTO session_resources(session_id) VALUES (?)",
-            (session_id,),
-        )
         self._connection.commit()
 
     def list_sessions(self) -> list[dict[str, Any]]:
@@ -285,18 +287,25 @@ class SessionV2Store:
     def get_active_skills(self, session_id: str) -> set[str]:
         with self._lock:
             self._ensure_session(session_id)
-            row = self._connection.execute(
-                "SELECT active_skills_json FROM session_resources WHERE session_id = ?",
+            rows = self._connection.execute(
+                """
+                SELECT resource_name FROM session_resources
+                WHERE session_id = ? AND resource_type = 'skill' AND active = 1
+                """,
                 (session_id,),
-            ).fetchone()
-            return set(_string_list(row["active_skills_json"] if row else "[]"))
+            ).fetchall()
+            return {str(item["resource_name"]) for item in rows}
 
     def set_active_skills(self, session_id: str, skill_names: list[str] | set[str]) -> None:
         with self._lock:
             self._ensure_session(session_id)
             self._connection.execute(
-                "UPDATE session_resources SET active_skills_json = ? WHERE session_id = ?",
-                (_json(sorted({str(value) for value in skill_names})), session_id),
+                "DELETE FROM session_resources WHERE session_id = ? AND resource_type = 'skill'",
+                (session_id,),
+            )
+            self._connection.executemany(
+                "INSERT INTO session_resources(session_id, resource_type, resource_name, active) VALUES (?, 'skill', ?, 1)",
+                [(session_id, str(value)) for value in sorted({str(value) for value in skill_names})],
             )
             self._connection.commit()
 
@@ -309,18 +318,25 @@ class SessionV2Store:
     def get_active_mcp_servers(self, session_id: str) -> set[str]:
         with self._lock:
             self._ensure_session(session_id)
-            row = self._connection.execute(
-                "SELECT active_mcp_servers_json FROM session_resources WHERE session_id = ?",
+            rows = self._connection.execute(
+                """
+                SELECT resource_name FROM session_resources
+                WHERE session_id = ? AND resource_type = 'mcp' AND active = 1
+                """,
                 (session_id,),
-            ).fetchone()
-            return set(_string_list(row["active_mcp_servers_json"] if row else "[]"))
+            ).fetchall()
+            return {str(item["resource_name"]) for item in rows}
 
     def set_active_mcp_servers(self, session_id: str, server_names: list[str] | set[str]) -> None:
         with self._lock:
             self._ensure_session(session_id)
             self._connection.execute(
-                "UPDATE session_resources SET active_mcp_servers_json = ? WHERE session_id = ?",
-                (_json(sorted({str(value) for value in server_names})), session_id),
+                "DELETE FROM session_resources WHERE session_id = ? AND resource_type = 'mcp'",
+                (session_id,),
+            )
+            self._connection.executemany(
+                "INSERT INTO session_resources(session_id, resource_type, resource_name, active) VALUES (?, 'mcp', ?, 1)",
+                [(session_id, str(value)) for value in sorted({str(value) for value in server_names})],
             )
             self._connection.commit()
 
@@ -369,7 +385,7 @@ class SessionV2Store:
             with self._connection:
                 self._connection.execute(
                     """
-                    INSERT INTO session_runs(run_id, session_id, status, last_entry_id, config_json, started_at)
+                    INSERT INTO runs(run_id, session_id, status, last_entry_id, config_json, started_at)
                     VALUES (?, ?, 'paused', (SELECT active_leaf_entry_id FROM agent_sessions WHERE session_id = ?), '{}', ?)
                     ON CONFLICT(run_id) DO UPDATE SET status = 'paused'
                     """,
@@ -431,7 +447,7 @@ class SessionV2Store:
             self._ensure_session(session_id)
             rows = self._connection.execute(
                 """
-                SELECT payload_json FROM session_web_traces
+                SELECT payload_json FROM web_traces
                 WHERE session_id = ? ORDER BY created_at ASC, trace_id ASC
                 """,
                 (session_id,),
@@ -447,7 +463,7 @@ class SessionV2Store:
             with self._connection:
                 self._connection.execute(
                     """
-                    INSERT OR REPLACE INTO session_web_traces(
+                    INSERT OR REPLACE INTO web_traces(
                         trace_id, session_id, run_id, tool_call_id, payload_json, created_at
                     ) VALUES (?, ?, ?, ?, ?, ?)
                     """,
@@ -544,32 +560,34 @@ class SessionV2Store:
         ).fetchone():
             return
         now = str(row["updated_at"] or _now())
-        messages = _array(row["messages_json"])
         checkpoint = _nullable_object(row["checkpoint_json"])
+        messages = _array(checkpoint.get("messages")) if checkpoint is not None else _array(row["messages_json"])
         with self._connection:
             self._connection.execute(
                 """
-                INSERT INTO agent_sessions(session_id, title, search_mode, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO agent_sessions(session_id, schema_version, title, search_mode, metadata_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session_id,
+                    SESSION_V2_SCHEMA_VERSION,
                     str(row["title"] or _first_title(messages)),
                     str(row["search_mode"] or self.default_search_mode),
+                    _json({
+                        "legacy_source_hash": _hash_json(dict(row)),
+                        "legacy_messages_json": str(row["messages_json"] or "[]"),
+                        "legacy_checkpoint_json": row["checkpoint_json"],
+                    }),
                     now,
                     now,
                 ),
             )
-            self._connection.execute(
-                """
-                INSERT INTO session_resources(session_id, active_skills_json, active_mcp_servers_json)
-                VALUES (?, ?, ?)
-                """,
-                (
-                    session_id,
-                    _json(_string_list(row["active_skills_json"])),
-                    _json(_string_list(row["active_mcp_servers_json"])),
-                ),
+            self._connection.executemany(
+                "INSERT INTO session_resources(session_id, resource_type, resource_name, active) VALUES (?, ?, ?, 1)",
+                [
+                    *[(session_id, "skill", name) for name in _string_list(row["active_skills_json"])],
+                    *[(session_id, "mcp", name) for name in _string_list(row["active_mcp_servers_json"])],
+                ],
             )
             parent: str | None = None
             for index, message in enumerate(messages):
@@ -611,7 +629,7 @@ class SessionV2Store:
                 }
                 self._connection.execute(
                     """
-                    INSERT INTO session_runs(run_id, session_id, status, last_entry_id, config_json, started_at)
+                    INSERT INTO runs(run_id, session_id, status, last_entry_id, config_json, started_at)
                     VALUES (?, ?, 'paused', ?, '{}', ?)
                     """,
                     (run_id, session_id, parent, now),
@@ -638,7 +656,7 @@ class SessionV2Store:
                 trace_id = str(trace.get("id") or f"legacy-trace-{uuid4().hex}")
                 self._connection.execute(
                     """
-                    INSERT OR IGNORE INTO session_web_traces(
+                    INSERT OR IGNORE INTO web_traces(
                         trace_id, session_id, run_id, tool_call_id, payload_json, created_at
                     ) VALUES (?, ?, ?, ?, ?, ?)
                     """,
@@ -699,6 +717,10 @@ def _now() -> str:
 
 def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def _hash_json(value: Any) -> str:
+    return hashlib.sha256(_json(value).encode("utf-8")).hexdigest()
 
 
 def _object(value: Any) -> dict[str, Any]:
