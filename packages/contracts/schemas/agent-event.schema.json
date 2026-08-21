@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://anomalo.dev/schemas/agent-event.schema.json",
+  "title": "Anomalo Agent Event",
+  "type": "object",
+  "required": ["type", "session_id", "run_id", "data", "timestamp"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "type": { "type": "string", "minLength": 1 },
+    "session_id": { "type": "string", "minLength": 1 },
+    "run_id": { "type": "string", "minLength": 1 },
+    "data": { "type": "object" },
+    "timestamp": { "type": "string", "minLength": 1 }
+  },
+  "additionalProperties": true
+}

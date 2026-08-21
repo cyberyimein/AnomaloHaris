@@ -1,0 +1,212 @@
+{
+  "normal_text": [
+    {
+      "schema_version": 1,
+      "type": "run.started",
+      "session_id": "fixture-session",
+      "run_id": "fixture-run",
+      "data": { "resumed": false, "search_mode": "diy", "model": "replay-model" },
+      "timestamp": "2026-08-22T00:00:00Z"
+    },
+    {
+      "schema_version": 1,
+      "type": "llm.request",
+      "session_id": "fixture-session",
+      "run_id": "fixture-run",
+      "data": {
+        "profile": "agent",
+        "iteration": 1,
+        "context": { "total_message_count": 2, "tool_count": 0 }
+      },
+      "timestamp": "2026-08-22T00:00:01Z"
+    },
+    {
+      "schema_version": 1,
+      "type": "message.delta",
+      "session_id": "fixture-session",
+      "run_id": "fixture-run",
+      "data": { "content": "Replay complete." },
+      "timestamp": "2026-08-22T00:00:02Z"
+    },
+    {
+      "schema_version": 1,
+      "type": "message.done",
+      "session_id": "fixture-session",
+      "run_id": "fixture-run",
+      "data": {},
+      "timestamp": "2026-08-22T00:00:03Z"
+    },
+    {
+      "schema_version": 1,
+      "type": "run.finished",
+      "session_id": "fixture-session",
+      "run_id": "fixture-run",
+      "data": { "final_text": "Replay complete." },
+      "timestamp": "2026-08-22T00:00:04Z"
+    }
+  ],
+  "tool_loop": [
+    {
+      "schema_version": 1,
+      "type": "run.started",
+      "session_id": "fixture-session",
+      "run_id": "fixture-run",
+      "data": { "resumed": false, "search_mode": "diy", "model": "replay-model" },
+      "timestamp": "2026-08-22T00:01:00Z"
+    },
+    {
+      "schema_version": 1,
+      "type": "llm.request",
+      "session_id": "fixture-session",
+      "run_id": "fixture-run",
+      "data": { "profile": "agent", "iteration": 1, "context": { "tool_count": 1 } },
+      "timestamp": "2026-08-22T00:01:01Z"
+    },
+    {
+      "schema_version": 1,
+      "type": "tool.started",
+      "session_id": "fixture-session",
+      "run_id": "fixture-run",
+      "data": {
+        "tool_call_id": "fixture-call",
+        "tool": "deterministic_echo",
+        "arguments": { "value": "ok" }
+      },
+      "timestamp": "2026-08-22T00:01:02Z"
+    },
+    {
+      "schema_version": 1,
+      "type": "tool.finished",
+      "session_id": "fixture-session",
+      "run_id": "fixture-run",
+      "data": {
+        "tool_call_id": "fixture-call",
+        "tool": "deterministic_echo",
+        "ok": true,
+        "content": "ok",
+        "data": {}
+      },
+      "timestamp": "2026-08-22T00:01:03Z"
+    },
+    {
+      "schema_version": 1,
+      "type": "llm.request",
+      "session_id": "fixture-session",
+      "run_id": "fixture-run",
+      "data": { "profile": "agent", "iteration": 2, "context": { "tool_count": 1 } },
+      "timestamp": "2026-08-22T00:01:04Z"
+    },
+    {
+      "schema_version": 1,
+      "type": "message.delta",
+      "session_id": "fixture-session",
+      "run_id": "fixture-run",
+      "data": { "content": "Tool result received." },
+      "timestamp": "2026-08-22T00:01:05Z"
+    },
+    {
+      "schema_version": 1,
+      "type": "message.done",
+      "session_id": "fixture-session",
+      "run_id": "fixture-run",
+      "data": {},
+      "timestamp": "2026-08-22T00:01:06Z"
+    },
+    {
+      "schema_version": 1,
+      "type": "run.finished",
+      "session_id": "fixture-session",
+      "run_id": "fixture-run",
+      "data": { "final_text": "Tool result received." },
+      "timestamp": "2026-08-22T00:01:07Z"
+    }
+  ],
+  "stopped": [
+    {
+      "schema_version": 1,
+      "type": "run.started",
+      "session_id": "fixture-session",
+      "run_id": "fixture-run",
+      "data": { "resumed": false, "search_mode": "diy", "model": "replay-model" },
+      "timestamp": "2026-08-22T00:02:00Z"
+    },
+    {
+      "schema_version": 1,
+      "type": "message.delta",
+      "session_id": "fixture-session",
+      "run_id": "fixture-run",
+      "data": { "content": "Partial result." },
+      "timestamp": "2026-08-22T00:02:01Z"
+    },
+    {
+      "schema_version": 1,
+      "type": "run.stopped",
+      "session_id": "fixture-session",
+      "run_id": "fixture-run",
+      "data": { "reason": "user_stop", "checkpointed": true, "can_resume": true },
+      "timestamp": "2026-08-22T00:02:02Z"
+    }
+  ],
+  "structured": [
+    {
+      "schema_version": 1,
+      "type": "run.started",
+      "session_id": "fixture-session",
+      "run_id": "fixture-run",
+      "data": { "resumed": false, "search_mode": "diy", "model": "replay-model" },
+      "timestamp": "2026-08-22T00:03:00Z"
+    },
+    {
+      "schema_version": 1,
+      "type": "llm.request",
+      "session_id": "fixture-session",
+      "run_id": "fixture-run",
+      "data": { "profile": "agent", "iteration": 1, "phase": "finalizer" },
+      "timestamp": "2026-08-22T00:03:01Z"
+    },
+    {
+      "schema_version": 1,
+      "type": "message.delta",
+      "session_id": "fixture-session",
+      "run_id": "fixture-run",
+      "data": { "content": "{\"summary\":\"ok\"}" },
+      "timestamp": "2026-08-22T00:03:02Z"
+    },
+    {
+      "schema_version": 1,
+      "type": "message.done",
+      "session_id": "fixture-session",
+      "run_id": "fixture-run",
+      "data": {},
+      "timestamp": "2026-08-22T00:03:03Z"
+    },
+    {
+      "schema_version": 1,
+      "type": "run.finished",
+      "session_id": "fixture-session",
+      "run_id": "fixture-run",
+      "data": {
+        "final_text": "{\"summary\":\"ok\"}",
+        "output": { "summary": "ok" },
+        "output_format": "json_schema"
+      },
+      "timestamp": "2026-08-22T00:03:04Z"
+    }
+  ],
+  "legacy_python": [
+    {
+      "type": "run.started",
+      "session_id": "fixture-session",
+      "run_id": "fixture-run",
+      "data": { "resumed": false },
+      "timestamp": "2026-08-22T00:04:00Z"
+    },
+    {
+      "type": "run.finished",
+      "session_id": "fixture-session",
+      "run_id": "fixture-run",
+      "data": { "final_text": "Legacy event." },
+      "timestamp": "2026-08-22T00:04:01Z"
+    }
+  ]
+}
