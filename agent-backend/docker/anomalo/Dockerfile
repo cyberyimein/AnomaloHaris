@@ -62,4 +62,4 @@ EXPOSE 8000 8787
 
 ENV PYTHONPATH=/app/agent-backend:/app/buddy-backend
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "agent-backend/scripts/start_host.py"]
