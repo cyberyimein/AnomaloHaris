@@ -45,6 +45,50 @@ class FakeTools:
         ]
 
 
+class MutableSessions:
+    def __init__(self) -> None:
+        self.active_skills = {"calculator"}
+        self.active_mcp_servers = {"local"}
+
+    def get_active_skills(self, session_id):
+        return self.active_skills
+
+    def get_active_mcp_servers(self, session_id):
+        return self.active_mcp_servers
+
+
+class MutableSkills:
+    def __init__(self) -> None:
+        self.catalog = "skill catalog v1"
+        self.active = "active skill v1"
+
+    def skill_catalog_message(self):
+        return {"role": "system", "content": self.catalog}
+
+    def build_active_skill_messages(self, names):
+        return [{"role": "system", "content": self.active}]
+
+
+class MutableMcp:
+    def __init__(self) -> None:
+        self.catalog = "mcp catalog v1"
+        self.active = "active mcp v1"
+
+    def catalog_message(self):
+        return {"role": "system", "content": self.catalog}
+
+    def build_active_server_messages(self, names):
+        return [{"role": "system", "content": self.active}]
+
+
+class MutableTools:
+    def __init__(self) -> None:
+        self.tool_name = "tool-v1"
+
+    async def openai_tools(self, context):
+        return [{"type": "function", "function": {"name": self.tool_name}}]
+
+
 @pytest.mark.asyncio
 async def test_context_builder_preserves_order_and_filters_tools(tmp_path) -> None:
     settings = Settings(_env_file=None, WEB_TOOLS_ENABLED=False)
@@ -96,6 +140,76 @@ async def test_context_builder_preserves_order_and_filters_tools(tmp_path) -> No
     assert [tool["function"]["name"] for tool in built.tools] == ["allowed"]
     assert built.diagnostics["segments"][0]["name"] == "prompt_profile"
     assert built.diagnostics["segments"][-1]["name"] == "tool_loop_transcript"
+
+
+@pytest.mark.asyncio
+async def test_context_snapshot_freezes_resources_and_tools_for_one_run(tmp_path) -> None:
+    settings = Settings(_env_file=None, WEB_TOOLS_ENABLED=False)
+    settings.config_dir = tmp_path
+    prompt_path = tmp_path / "prompts.yaml"
+    prompt_path.write_text(
+        "version: 1\n"
+        "profiles:\n"
+        "  agent:\n"
+        "    messages:\n"
+        "      - role: system\n"
+        "        content: profile v1\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "AGENTS.md").write_text("memory v1", encoding="utf-8")
+    sessions = MutableSessions()
+    skills = MutableSkills()
+    mcp = MutableMcp()
+    tools = MutableTools()
+    builder = ContextBuilder(settings, sessions, skills, mcp, tools)
+    request = ContextRequest(
+        session_id="session-1",
+        prompt_profile="agent",
+        system_prompt=None,
+        search_mode="diy",
+        model="replay-model",
+        allowed_tool_names=None,
+        bootstrap_context=[],
+        history_messages=[],
+        current_user_message={"role": "user", "content": "current"},
+        loop_messages=[],
+    )
+
+    snapshot = await builder.prepare(request)
+    prompt_path.write_text(
+        "version: 1\n"
+        "profiles:\n"
+        "  agent:\n"
+        "    messages:\n"
+        "      - role: system\n"
+        "        content: profile v2\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "AGENTS.md").write_text("memory v2", encoding="utf-8")
+    sessions.active_skills = {"changed"}
+    sessions.active_mcp_servers = {"changed"}
+    skills.catalog = "skill catalog v2"
+    skills.active = "active skill v2"
+    mcp.catalog = "mcp catalog v2"
+    mcp.active = "active mcp v2"
+    tools.tool_name = "tool-v2"
+
+    first = snapshot.render([])
+    second = snapshot.render([{"role": "tool", "content": "loop"}])
+
+    assert [message["content"] for message in first.messages] == [
+        "profile v1",
+        "Agent memory from AGENTS.md:\n\nmemory v1",
+        "skill catalog v1",
+        "active skill v1",
+        "mcp catalog v1",
+        "active mcp v1",
+        "current",
+    ]
+    assert [tool["function"]["name"] for tool in first.tools] == ["tool-v1"]
+    assert [message["content"] for message in second.messages][-1] == "loop"
+    assert second.diagnostics["total_message_count"] == len(second.messages)
+    assert second.diagnostics["tool_count"] == 1
 
 
 def test_run_controller_enforces_one_active_run_and_idempotent_release() -> None:

@@ -5,8 +5,15 @@ import {
   RunRequestSchema,
   ToolDefinitionSchema,
   ToolResultSchema,
+  WebSocketControlMessageSchema,
 } from "./schemas.js";
-import type { AgentEvent, RunRequest, ToolDefinition, ToolResult } from "./types.js";
+import type {
+  AgentEvent,
+  RunRequest,
+  ToolDefinition,
+  ToolResult,
+  WebSocketControlMessage,
+} from "./types.js";
 
 const ajv = new Ajv({ allErrors: true, strict: true });
 
@@ -15,6 +22,7 @@ const validators = {
   runRequest: ajv.compile<RunRequest>(RunRequestSchema),
   toolDefinition: ajv.compile<ToolDefinition>(ToolDefinitionSchema),
   toolResult: ajv.compile<ToolResult>(ToolResultSchema),
+  webSocketControlMessage: ajv.compile<WebSocketControlMessage>(WebSocketControlMessageSchema),
 };
 
 export type ContractName = keyof typeof validators;
@@ -55,4 +63,3 @@ export function assertValidContract(name: ContractName, value: unknown): void {
     throw new Error(`Invalid ${name} contract: ${details}`);
   }
 }
-

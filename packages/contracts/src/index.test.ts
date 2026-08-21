@@ -20,6 +20,22 @@ describe("@anomalo/contracts", () => {
     expect(() => normalizeAgentEvent({ type: "run.started", schema_version: 2 })).toThrow(
       "Unsupported agent event schema version",
     );
+    expect(
+      validateContract("agentEvent", {
+        type: "session.state",
+        session_id: "session-1",
+        run_id: "run-1",
+        data: {},
+        timestamp: "2026-08-22T00:00:00Z",
+      }).valid,
+    ).toBe(false);
+    expect(
+      validateContract("webSocketControlMessage", {
+        type: "session.state",
+        session_id: "session-1",
+        data: { can_resume: false },
+      }).valid,
+    ).toBe(true);
   });
 
   it("validates tool definitions and run requests through the same registry", () => {
@@ -36,4 +52,3 @@ describe("@anomalo/contracts", () => {
     ).toBe(true);
   });
 });
-

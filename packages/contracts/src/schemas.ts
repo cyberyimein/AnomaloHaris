@@ -11,12 +11,29 @@ export const AgentEventTypeSchema = Type.Union([
   Type.Literal("run.finished"),
   Type.Literal("run.stopped"),
   Type.Literal("run.error"),
+]);
+
+export const WebSocketClientMessageTypeSchema = Type.Union([
+  Type.Literal("client.hello"),
+  Type.Literal("user.message"),
+  Type.Literal("run.stop"),
+  Type.Literal("run.resume"),
+  Type.Literal("browser.tool.result"),
+  Type.Literal("ping"),
+]);
+
+export const WebSocketServerControlMessageTypeSchema = Type.Union([
   Type.Literal("session.state"),
   Type.Literal("client.ready"),
   Type.Literal("client.error"),
   Type.Literal("browser.tool.call"),
-  Type.Literal("browser.tool.result"),
+  Type.Literal("browser.tool.cancel"),
   Type.Literal("pong"),
+]);
+
+export const WebSocketControlMessageTypeSchema = Type.Union([
+  WebSocketClientMessageTypeSchema,
+  WebSocketServerControlMessageTypeSchema,
 ]);
 
 export const AgentEventSchema = Type.Object(
@@ -29,6 +46,23 @@ export const AgentEventSchema = Type.Object(
     timestamp: Type.String({ minLength: 1 }),
   },
   { additionalProperties: true, $id: "https://anomalo.dev/schemas/agent-event.schema.json" },
+);
+
+export const WebSocketControlMessageSchema = Type.Object(
+  {
+    schema_version: Type.Optional(Type.Literal(1)),
+    type: WebSocketControlMessageTypeSchema,
+    session_id: Type.Optional(Type.String({ minLength: 1 })),
+    run_id: Type.Optional(Type.String({ minLength: 1 })),
+    content: Type.Optional(Type.String()),
+    search_mode: Type.Optional(Type.String({ minLength: 1 })),
+    data: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+    error: Type.Optional(Type.String()),
+  },
+  {
+    additionalProperties: true,
+    $id: "https://anomalo.dev/schemas/websocket-control-message.schema.json",
+  },
 );
 
 export const ResponseFormatSchema = Type.Union([
@@ -78,4 +112,3 @@ export const ToolResultSchema = Type.Object({
   content: Type.String(),
   data: Type.Record(Type.String(), Type.Unknown()),
 });
-

@@ -5,6 +5,7 @@ import {
   AgentEventSchema,
   RunRequestSchema,
   ToolDefinitionSchema,
+  WebSocketControlMessageSchema,
 } from "../dist/schemas.js";
 
 const root = resolve(new URL("..", import.meta.url).pathname);
@@ -12,6 +13,7 @@ const schemas = [
   ["agent-event", AgentEventSchema],
   ["run-request", RunRequestSchema],
   ["tool", ToolDefinitionSchema],
+  ["websocket-control-message", WebSocketControlMessageSchema],
 ];
 
 for (const [name, schema] of schemas) {

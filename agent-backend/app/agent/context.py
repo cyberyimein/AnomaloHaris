@@ -5,6 +5,7 @@ MCP notes, session history, and tool filtering remain inside this module so the
 runtime loop does not need to know how resources are loaded.
 """
 
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
@@ -41,6 +42,37 @@ class BuiltContext:
     diagnostics: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class ContextSnapshot:
+    """Immutable run-level context captured before the model/tool loop."""
+
+    base_messages: tuple[dict[str, Any], ...]
+    tools: tuple[dict[str, Any], ...]
+    diagnostics: dict[str, Any]
+
+    def render(self, loop_messages: list[dict[str, Any]]) -> BuiltContext:
+        """Append only the evolving tool transcript to the frozen run context."""
+        messages = [
+            *deepcopy(self.base_messages),
+            *deepcopy(loop_messages),
+        ]
+        diagnostics = deepcopy(self.diagnostics)
+        diagnostics["total_message_count"] = len(messages)
+        segments = diagnostics.get("segments")
+        if isinstance(segments, list) and segments:
+            tool_loop_segment = segments[-1]
+            tool_loop_segment["end"] = len(messages)
+            tool_loop_segment["count"] = max(
+                0,
+                len(messages) - int(tool_loop_segment.get("start", len(messages))),
+            )
+        return BuiltContext(
+            messages=messages,
+            tools=deepcopy(self.tools),
+            diagnostics=diagnostics,
+        )
+
+
 class ContextBuilder:
     """Build the stable prompt and tool projection for one model request."""
 
@@ -58,7 +90,8 @@ class ContextBuilder:
         self.mcp = mcp
         self.tools = tools
 
-    async def build(self, request: ContextRequest) -> BuiltContext:
+    async def prepare(self, request: ContextRequest) -> ContextSnapshot:
+        """Capture all filesystem, session, plugin, and tool state for one run."""
         prompt_messages = (
             [{"role": "system", "content": request.system_prompt}]
             if request.system_prompt is not None
@@ -104,7 +137,7 @@ class ContextBuilder:
         active_skill_messages = self.skills.build_active_skill_messages(active_skill_names)
         active_mcp_server_names = self.sessions.get_active_mcp_servers(request.session_id)
         active_mcp_messages = self.mcp.build_active_server_messages(active_mcp_server_names)
-        messages = [
+        base_messages = [
             *prompt_messages,
             *bootstrap_messages,
             *memory_messages,
@@ -114,7 +147,6 @@ class ContextBuilder:
             *active_mcp_messages,
             *request.history_messages,
             request.current_user_message,
-            *request.loop_messages,
         ]
 
         all_tools = await self.tools.openai_tools(
@@ -154,14 +186,23 @@ class ContextBuilder:
             active_mcp_message_count=len(active_mcp_messages),
             history_message_count=len(request.history_messages),
             current_user_message_index=current_user_message_index,
-            total_message_count=len(messages),
+            total_message_count=len(base_messages),
             tool_count=len(all_tools),
             active_skills=sorted(active_skill_names),
             active_mcp_servers=sorted(active_mcp_server_names),
             search_mode=request.search_mode,
             model=request.model,
         )
-        return BuiltContext(messages=messages, tools=all_tools, diagnostics=diagnostics)
+        return ContextSnapshot(
+            base_messages=tuple(deepcopy(base_messages)),
+            tools=tuple(deepcopy(all_tools)),
+            diagnostics=deepcopy(diagnostics),
+        )
+
+    async def build(self, request: ContextRequest) -> BuiltContext:
+        """Build a context for compatibility callers using a single request."""
+        snapshot = await self.prepare(request)
+        return snapshot.render(request.loop_messages)
 
 
 def _compact_json(value: Any) -> str:

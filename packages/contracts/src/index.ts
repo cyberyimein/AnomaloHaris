@@ -6,6 +6,10 @@ export {
   ToolCallSchema,
   ToolDefinitionSchema,
   ToolResultSchema,
+  WebSocketClientMessageTypeSchema,
+  WebSocketControlMessageSchema,
+  WebSocketControlMessageTypeSchema,
+  WebSocketServerControlMessageTypeSchema,
 } from "./schemas.js";
 export type {
   AgentEvent,
@@ -20,6 +24,10 @@ export type {
   ToolCallId,
   ToolDefinition,
   ToolResult,
+  WebSocketClientMessageType,
+  WebSocketControlMessage,
+  WebSocketControlMessageType,
+  WebSocketServerControlMessageType,
 } from "./types.js";
 export {
   assertValidContract,

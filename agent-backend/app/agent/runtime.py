@@ -356,6 +356,21 @@ class AgentRuntime:
                 yield item
             return
 
+        context_snapshot = await self.context_builder.prepare(
+            ContextRequest(
+                session_id=state.session_id,
+                prompt_profile=profile_name,
+                system_prompt=state.system_prompt,
+                search_mode=state.search_mode,
+                model=state.model,
+                allowed_tool_names=state.allowed_tool_names,
+                bootstrap_context=state.bootstrap_context,
+                history_messages=state.history_messages,
+                current_user_message=state.current_user_message,
+                loop_messages=[],
+            )
+        )
+
         while state.iteration < self.settings.max_tool_iterations:
             state.iteration += 1
             state.assistant_text = ""
@@ -363,20 +378,7 @@ class AgentRuntime:
             state.completed_tool_call_ids = set()
             state.active_tool_index = None
             state.tool_message_added = False
-            built_context = await self.context_builder.build(
-                ContextRequest(
-                    session_id=state.session_id,
-                    prompt_profile=profile_name,
-                    system_prompt=state.system_prompt,
-                    search_mode=state.search_mode,
-                    model=state.model,
-                    allowed_tool_names=state.allowed_tool_names,
-                    bootstrap_context=state.bootstrap_context,
-                    history_messages=state.history_messages,
-                    current_user_message=state.current_user_message,
-                    loop_messages=state.loop_messages,
-                )
-            )
+            built_context = context_snapshot.render(state.loop_messages)
             messages = built_context.messages
             all_tools = built_context.tools
 

@@ -8,6 +8,10 @@ import type {
   ToolCallSchema,
   ToolDefinitionSchema,
   ToolResultSchema,
+  WebSocketClientMessageTypeSchema,
+  WebSocketControlMessageSchema,
+  WebSocketControlMessageTypeSchema,
+  WebSocketServerControlMessageTypeSchema,
 } from "./schemas.js";
 
 export type SessionId = string & { readonly __sessionId: unique symbol };
@@ -17,6 +21,12 @@ export type EntryId = string & { readonly __entryId: unique symbol };
 
 export type AgentEventType = Static<typeof AgentEventTypeSchema>;
 export type AgentEvent = Static<typeof AgentEventSchema>;
+export type WebSocketClientMessageType = Static<typeof WebSocketClientMessageTypeSchema>;
+export type WebSocketControlMessage = Static<typeof WebSocketControlMessageSchema>;
+export type WebSocketControlMessageType = Static<typeof WebSocketControlMessageTypeSchema>;
+export type WebSocketServerControlMessageType = Static<
+  typeof WebSocketServerControlMessageTypeSchema
+>;
 export type ResponseFormat = Static<typeof ResponseFormatSchema>;
 export type RunRequest = Static<typeof RunRequestSchema>;
 export type ToolCall = Static<typeof ToolCallSchema>;
@@ -40,4 +50,3 @@ export type ErrorCode =
   | "structured_output_invalid"
   | "plugin_failed"
   | "worker_unavailable";
-

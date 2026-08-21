@@ -3,7 +3,6 @@
 - Status: Accepted for phased implementation
 - Date: 2026-08-22
 - Decision owners: Anomalo runtime maintainers
-- Related design: [Pi-inspired Node runtime](../design/pi-inspired-node-runtime.md)
 
 ## Context
 
@@ -37,4 +36,3 @@ schema migration, hardware change, or live dual execution is included here.
   unchanged until their dedicated phases.
 - A failure in a later phase can be reverted without reverting the frozen
   contract fixtures or changing persisted Session data.
-

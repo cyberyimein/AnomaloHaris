@@ -4,9 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "predev": "npm --prefix ../packages/contracts run build",
     "dev": "vite --host 127.0.0.1",
+    "prebuild": "npm --prefix ../packages/contracts run build",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
+    "pretest": "npm --prefix ../packages/contracts run build",
     "test": "vitest run"
   },
   "dependencies": {

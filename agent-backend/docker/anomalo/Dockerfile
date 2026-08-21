@@ -2,14 +2,18 @@
 
 FROM node:22-bookworm-slim AS frontend
 
-WORKDIR /src/frontend
+WORKDIR /src
 
-COPY frontend/package.json frontend/package-lock.json ./
+COPY package.json package-lock.json tsconfig.base.json ./
+COPY frontend/package.json ./frontend/package.json
+COPY packages/contracts/package.json packages/contracts/tsconfig.json ./packages/contracts/
 
-RUN npm ci
+RUN npm ci --ignore-scripts
 
-COPY frontend ./
-RUN npm run build
+COPY packages/contracts ./packages/contracts
+COPY frontend ./frontend
+RUN npm run build --workspace @anomalo/contracts \
+    && npm run build --workspace frontend
 
 FROM python:3.12-slim AS runtime
 
