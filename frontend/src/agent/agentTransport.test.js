@@ -38,6 +38,17 @@ function createStorage(sessionId = "session_existing") {
   };
 }
 
+function runEvent(type, data = {}) {
+  return {
+    schema_version: 1,
+    type,
+    session_id: "session_existing",
+    run_id: "run-1",
+    data,
+    timestamp: "2026-08-22T00:00:00Z",
+  };
+}
+
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -62,12 +73,23 @@ describe("AgentTransport", () => {
     transport.connect();
     sockets[0].readyState = FakeSocket.OPEN;
     sockets[0].emit("open");
-    sockets[0].emit("message", { data: JSON.stringify({ type: "run.started" }) });
+    const started = runEvent("run.started");
+    sockets[0].emit("message", { data: JSON.stringify({ type: "pong" }) });
+    sockets[0].emit("message", {
+      data: JSON.stringify({
+        type: "session.state",
+        session_id: "session_existing",
+        data: { can_resume: true },
+      }),
+    });
+    sockets[0].emit("message", { data: JSON.stringify(started) });
 
     expect(sockets[0].url).toBe("ws://anomalo.test/ws/chat/session_existing");
     expect(transport.state.connectionStatus.value).toBe("Connected");
     expect(onState).toHaveBeenCalledWith("Idle", "Connected. Waiting for input.");
-    expect(onEvent).toHaveBeenCalledWith({ type: "run.started" });
+    expect(onEvent).toHaveBeenCalledWith({ type: "pong" });
+    expect(onEvent).toHaveBeenCalledWith(started);
+    expect(transport.state.resumeAvailable.value).toBe(false);
     expect(transport.send("hello")).toBe(true);
     expect(transport.state.runActive.value).toBe(true);
     expect(JSON.parse(sockets[0].sent[0])).toEqual({
@@ -77,7 +99,7 @@ describe("AgentTransport", () => {
     expect(transport.stopRun()).toBe(true);
     expect(JSON.parse(sockets[0].sent[1])).toEqual({ type: "run.stop" });
     sockets[0].emit("message", {
-      data: JSON.stringify({ type: "run.stopped", data: { can_resume: true } }),
+      data: JSON.stringify(runEvent("run.stopped", { can_resume: true })),
     });
     expect(transport.state.runActive.value).toBe(false);
     expect(transport.state.resumeAvailable.value).toBe(true);
@@ -85,7 +107,7 @@ describe("AgentTransport", () => {
     expect(JSON.parse(sockets[0].sent[2])).toEqual({ type: "run.resume" });
     expect(transport.state.runActive.value).toBe(true);
     sockets[0].emit("message", {
-      data: JSON.stringify({ type: "run.error", data: { can_resume: true } }),
+      data: JSON.stringify(runEvent("run.error", { can_resume: true })),
     });
     expect(transport.state.runActive.value).toBe(false);
     expect(transport.state.resumeAvailable.value).toBe(true);
@@ -111,12 +133,13 @@ describe("AgentTransport", () => {
     sockets[0].emit("close");
     vi.advanceTimersByTime(25);
     sockets[0].emit("message", { data: JSON.stringify({ type: "stale" }) });
-    sockets[1].emit("message", { data: JSON.stringify({ type: "current" }) });
+    const current = runEvent("run.finished");
+    sockets[1].emit("message", { data: JSON.stringify(current) });
 
     expect(sockets).toHaveLength(2);
     expect(sockets[1].url).toMatch(/^wss:\/\/anomalo\.test/);
     expect(onEvent).toHaveBeenCalledTimes(1);
-    expect(onEvent).toHaveBeenCalledWith({ type: "current" });
+    expect(onEvent).toHaveBeenCalledWith(current);
   });
 
   it("starts a fresh persisted session and closes the previous socket", () => {

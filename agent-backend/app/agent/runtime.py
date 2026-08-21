@@ -378,7 +378,7 @@ class AgentRuntime:
             state.completed_tool_call_ids = set()
             state.active_tool_index = None
             state.tool_message_added = False
-            built_context = context_snapshot.render(state.loop_messages)
+            built_context = await self.context_builder.render(context_snapshot, state.loop_messages)
             messages = built_context.messages
             all_tools = built_context.tools
 

@@ -44,37 +44,24 @@ class BuiltContext:
 
 @dataclass(frozen=True)
 class ContextSnapshot:
-    """Immutable run-level context captured before the model/tool loop."""
+    """Static run context; active plugins and tools are resolved per iteration."""
 
-    base_messages: tuple[dict[str, Any], ...]
-    tools: tuple[dict[str, Any], ...]
-    diagnostics: dict[str, Any]
-
-    def render(self, loop_messages: list[dict[str, Any]]) -> BuiltContext:
-        """Append only the evolving tool transcript to the frozen run context."""
-        messages = [
-            *deepcopy(self.base_messages),
-            *deepcopy(loop_messages),
-        ]
-        diagnostics = deepcopy(self.diagnostics)
-        diagnostics["total_message_count"] = len(messages)
-        segments = diagnostics.get("segments")
-        if isinstance(segments, list) and segments:
-            tool_loop_segment = segments[-1]
-            tool_loop_segment["end"] = len(messages)
-            tool_loop_segment["count"] = max(
-                0,
-                len(messages) - int(tool_loop_segment.get("start", len(messages))),
-            )
-        return BuiltContext(
-            messages=messages,
-            tools=deepcopy(self.tools),
-            diagnostics=diagnostics,
-        )
+    session_id: str
+    prompt_profile: str
+    search_mode: SearchMode
+    model: str
+    allowed_tool_names: frozenset[str] | None
+    prompt_messages: tuple[dict[str, Any], ...]
+    bootstrap_messages: tuple[dict[str, Any], ...]
+    memory_messages: tuple[dict[str, Any], ...]
+    skill_catalog_messages: tuple[dict[str, Any], ...]
+    mcp_catalog_messages: tuple[dict[str, Any], ...]
+    history_messages: tuple[dict[str, Any], ...]
+    current_user_message: dict[str, Any]
 
 
 class ContextBuilder:
-    """Build the stable prompt and tool projection for one model request."""
+    """Capture static run context and project dynamic tools for each model request."""
 
     def __init__(
         self,
@@ -133,76 +120,99 @@ class ContextBuilder:
             else []
         )
 
-        active_skill_names = self.sessions.get_active_skills(request.session_id)
-        active_skill_messages = self.skills.build_active_skill_messages(active_skill_names)
-        active_mcp_server_names = self.sessions.get_active_mcp_servers(request.session_id)
-        active_mcp_messages = self.mcp.build_active_server_messages(active_mcp_server_names)
-        base_messages = [
-            *prompt_messages,
-            *bootstrap_messages,
-            *memory_messages,
-            *skill_catalog_messages,
-            *active_skill_messages,
-            *mcp_catalog_messages,
-            *active_mcp_messages,
-            *request.history_messages,
-            request.current_user_message,
-        ]
+        return ContextSnapshot(
+            session_id=request.session_id,
+            prompt_profile=request.prompt_profile,
+            search_mode=request.search_mode,
+            model=request.model,
+            allowed_tool_names=request.allowed_tool_names,
+            prompt_messages=tuple(deepcopy(prompt_messages)),
+            bootstrap_messages=tuple(deepcopy(bootstrap_messages)),
+            memory_messages=tuple(deepcopy(memory_messages)),
+            skill_catalog_messages=tuple(deepcopy(skill_catalog_messages)),
+            mcp_catalog_messages=tuple(deepcopy(mcp_catalog_messages)),
+            history_messages=tuple(deepcopy(request.history_messages)),
+            current_user_message=deepcopy(request.current_user_message),
+        )
 
+    async def render(
+        self,
+        snapshot: ContextSnapshot,
+        loop_messages: list[dict[str, Any]],
+    ) -> BuiltContext:
+        """Refresh active plugin projections while reusing the static run snapshot."""
+        active_skill_names = frozenset(self.sessions.get_active_skills(snapshot.session_id))
+        active_skill_messages = self.skills.build_active_skill_messages(active_skill_names)
+        active_mcp_server_names = frozenset(
+            self.sessions.get_active_mcp_servers(snapshot.session_id)
+        )
+        active_mcp_messages = self.mcp.build_active_server_messages(active_mcp_server_names)
         all_tools = await self.tools.openai_tools(
             ToolContext(
-                session_id=request.session_id,
-                active_skills=frozenset(active_skill_names),
-                active_mcp_servers=frozenset(active_mcp_server_names),
-                search_mode=request.search_mode,
-                model=request.model,
+                session_id=snapshot.session_id,
+                active_skills=active_skill_names,
+                active_mcp_servers=active_mcp_server_names,
+                search_mode=snapshot.search_mode,
+                model=snapshot.model,
             )
         )
-        if request.allowed_tool_names is not None:
+        if snapshot.allowed_tool_names is not None:
             all_tools = [
                 tool
                 for tool in all_tools
-                if str(tool.get("function", {}).get("name")) in request.allowed_tool_names
+                if str(tool.get("function", {}).get("name")) in snapshot.allowed_tool_names
             ]
 
+        messages = [
+            *deepcopy(snapshot.prompt_messages),
+            *deepcopy(snapshot.bootstrap_messages),
+            *deepcopy(snapshot.memory_messages),
+            *deepcopy(snapshot.skill_catalog_messages),
+            *deepcopy(active_skill_messages),
+            *deepcopy(snapshot.mcp_catalog_messages),
+            *deepcopy(active_mcp_messages),
+            *deepcopy(snapshot.history_messages),
+            deepcopy(snapshot.current_user_message),
+            *deepcopy(loop_messages),
+        ]
         current_user_message_index = (
-            len(prompt_messages)
-            + len(bootstrap_messages)
-            + len(memory_messages)
-            + len(skill_catalog_messages)
+            len(snapshot.prompt_messages)
+            + len(snapshot.bootstrap_messages)
+            + len(snapshot.memory_messages)
+            + len(snapshot.skill_catalog_messages)
             + len(active_skill_messages)
-            + len(mcp_catalog_messages)
+            + len(snapshot.mcp_catalog_messages)
             + len(active_mcp_messages)
-            + len(request.history_messages)
+            + len(snapshot.history_messages)
         )
         diagnostics = context_diagnostics(
-            profile=request.prompt_profile,
-            prompt_message_count=len(prompt_messages),
-            bootstrap_message_count=len(bootstrap_messages),
-            memory_message_count=len(memory_messages),
-            skill_catalog_message_count=len(skill_catalog_messages),
+            profile=snapshot.prompt_profile,
+            prompt_message_count=len(snapshot.prompt_messages),
+            bootstrap_message_count=len(snapshot.bootstrap_messages),
+            memory_message_count=len(snapshot.memory_messages),
+            skill_catalog_message_count=len(snapshot.skill_catalog_messages),
             active_skill_message_count=len(active_skill_messages),
-            mcp_catalog_message_count=len(mcp_catalog_messages),
+            mcp_catalog_message_count=len(snapshot.mcp_catalog_messages),
             active_mcp_message_count=len(active_mcp_messages),
-            history_message_count=len(request.history_messages),
+            history_message_count=len(snapshot.history_messages),
             current_user_message_index=current_user_message_index,
-            total_message_count=len(base_messages),
+            total_message_count=len(messages),
             tool_count=len(all_tools),
             active_skills=sorted(active_skill_names),
             active_mcp_servers=sorted(active_mcp_server_names),
-            search_mode=request.search_mode,
-            model=request.model,
+            search_mode=snapshot.search_mode,
+            model=snapshot.model,
         )
-        return ContextSnapshot(
-            base_messages=tuple(deepcopy(base_messages)),
-            tools=tuple(deepcopy(all_tools)),
-            diagnostics=deepcopy(diagnostics),
+        return BuiltContext(
+            messages=messages,
+            tools=deepcopy(all_tools),
+            diagnostics=diagnostics,
         )
 
     async def build(self, request: ContextRequest) -> BuiltContext:
         """Build a context for compatibility callers using a single request."""
         snapshot = await self.prepare(request)
-        return snapshot.render(request.loop_messages)
+        return await self.render(snapshot, request.loop_messages)
 
 
 def _compact_json(value: Any) -> str:

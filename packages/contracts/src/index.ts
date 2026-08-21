@@ -1,7 +1,9 @@
 export {
   AgentEventSchema,
   AgentEventTypeSchema,
+  ConnectionMessageSchema,
   ResponseFormatSchema,
+  RunEventEnvelopeSchema,
   RunRequestSchema,
   ToolCallSchema,
   ToolDefinitionSchema,
@@ -10,14 +12,17 @@ export {
   WebSocketControlMessageSchema,
   WebSocketControlMessageTypeSchema,
   WebSocketServerControlMessageTypeSchema,
+  WebSocketMessageSchema,
 } from "./schemas.js";
 export type {
   AgentEvent,
   AgentEventType,
+  ConnectionMessage,
   EntryId,
   ErrorCode,
   ResponseFormat,
   RunId,
+  RunEventEnvelope,
   RunRequest,
   SessionId,
   ToolCall,
@@ -28,11 +33,14 @@ export type {
   WebSocketControlMessage,
   WebSocketControlMessageType,
   WebSocketServerControlMessageType,
+  WebSocketMessage,
 } from "./types.js";
 export {
   assertValidContract,
   normalizeAgentEvent,
+  normalizeWebSocketMessage,
   validateAgentEvent,
   validateContract,
+  validateWebSocketMessage,
 } from "./validation.js";
 export type { ContractName, ContractValidation } from "./validation.js";

@@ -143,7 +143,9 @@ async def test_context_builder_preserves_order_and_filters_tools(tmp_path) -> No
 
 
 @pytest.mark.asyncio
-async def test_context_snapshot_freezes_resources_and_tools_for_one_run(tmp_path) -> None:
+async def test_context_snapshot_freezes_static_resources_and_refreshes_dynamic_state(
+    tmp_path,
+) -> None:
     settings = Settings(_env_file=None, WEB_TOOLS_ENABLED=False)
     settings.config_dir = tmp_path
     prompt_path = tmp_path / "prompts.yaml"
@@ -176,6 +178,8 @@ async def test_context_snapshot_freezes_resources_and_tools_for_one_run(tmp_path
     )
 
     snapshot = await builder.prepare(request)
+    first = await builder.render(snapshot, [])
+
     prompt_path.write_text(
         "version: 1\n"
         "profiles:\n"
@@ -194,8 +198,7 @@ async def test_context_snapshot_freezes_resources_and_tools_for_one_run(tmp_path
     mcp.active = "active mcp v2"
     tools.tool_name = "tool-v2"
 
-    first = snapshot.render([])
-    second = snapshot.render([{"role": "tool", "content": "loop"}])
+    second = await builder.render(snapshot, [{"role": "tool", "content": "loop"}])
 
     assert [message["content"] for message in first.messages] == [
         "profile v1",
@@ -207,9 +210,22 @@ async def test_context_snapshot_freezes_resources_and_tools_for_one_run(tmp_path
         "current",
     ]
     assert [tool["function"]["name"] for tool in first.tools] == ["tool-v1"]
+    assert [message["content"] for message in second.messages] == [
+        "profile v1",
+        "Agent memory from AGENTS.md:\n\nmemory v1",
+        "skill catalog v1",
+        "active skill v2",
+        "mcp catalog v1",
+        "active mcp v2",
+        "current",
+        "loop",
+    ]
+    assert [tool["function"]["name"] for tool in second.tools] == ["tool-v2"]
     assert [message["content"] for message in second.messages][-1] == "loop"
     assert second.diagnostics["total_message_count"] == len(second.messages)
     assert second.diagnostics["tool_count"] == 1
+    assert second.diagnostics["active_skills"] == ["changed"]
+    assert second.diagnostics["active_mcp_servers"] == ["changed"]
 
 
 def test_run_controller_enforces_one_active_run_and_idempotent_release() -> None:

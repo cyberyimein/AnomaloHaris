@@ -1,28 +1,34 @@
 import Ajv, { type ErrorObject, type ValidateFunction } from "ajv";
 
 import {
-  AgentEventSchema,
+  ConnectionMessageSchema,
+  RunEventEnvelopeSchema,
   RunRequestSchema,
   ToolDefinitionSchema,
   ToolResultSchema,
-  WebSocketControlMessageSchema,
+  WebSocketMessageSchema,
 } from "./schemas.js";
 import type {
   AgentEvent,
+  ConnectionMessage,
   RunRequest,
+  RunEventEnvelope,
   ToolDefinition,
   ToolResult,
-  WebSocketControlMessage,
+  WebSocketMessage,
 } from "./types.js";
 
 const ajv = new Ajv({ allErrors: true, strict: true });
+const connectionMessageValidator = ajv.compile<ConnectionMessage>(ConnectionMessageSchema);
 
 const validators = {
-  agentEvent: ajv.compile<AgentEvent>(AgentEventSchema),
+  agentEvent: ajv.compile<RunEventEnvelope>(RunEventEnvelopeSchema),
+  connectionMessage: connectionMessageValidator,
   runRequest: ajv.compile<RunRequest>(RunRequestSchema),
   toolDefinition: ajv.compile<ToolDefinition>(ToolDefinitionSchema),
   toolResult: ajv.compile<ToolResult>(ToolResultSchema),
-  webSocketControlMessage: ajv.compile<WebSocketControlMessage>(WebSocketControlMessageSchema),
+  webSocketControlMessage: connectionMessageValidator,
+  webSocketMessage: ajv.compile<WebSocketMessage>(WebSocketMessageSchema),
 };
 
 export type ContractName = keyof typeof validators;
@@ -42,6 +48,10 @@ export function validateAgentEvent(value: unknown): value is AgentEvent {
   return validators.agentEvent(value);
 }
 
+export function validateWebSocketMessage(value: unknown): value is WebSocketMessage {
+  return validators.webSocketMessage(value);
+}
+
 export function normalizeAgentEvent(value: unknown): AgentEvent {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("Agent event must be an object.");
@@ -53,7 +63,17 @@ export function normalizeAgentEvent(value: unknown): AgentEvent {
   if (candidate.schema_version !== undefined && candidate.schema_version !== 1) {
     throw new Error("Unsupported agent event schema version.");
   }
+  if (!validateAgentEvent(value)) {
+    throw new Error("Invalid agent event contract.");
+  }
   return value as AgentEvent;
+}
+
+export function normalizeWebSocketMessage(value: unknown): WebSocketMessage {
+  if (!validateWebSocketMessage(value)) {
+    throw new Error("Invalid WebSocket message contract.");
+  }
+  return value;
 }
 
 export function assertValidContract(name: ContractName, value: unknown): void {

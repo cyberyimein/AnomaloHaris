@@ -48,6 +48,8 @@ export const AgentEventSchema = Type.Object(
   { additionalProperties: true, $id: "https://anomalo.dev/schemas/agent-event.schema.json" },
 );
 
+export const RunEventEnvelopeSchema = AgentEventSchema;
+
 export const WebSocketControlMessageSchema = Type.Object(
   {
     schema_version: Type.Optional(Type.Literal(1)),
@@ -63,6 +65,13 @@ export const WebSocketControlMessageSchema = Type.Object(
     additionalProperties: true,
     $id: "https://anomalo.dev/schemas/websocket-control-message.schema.json",
   },
+);
+
+export const ConnectionMessageSchema = WebSocketControlMessageSchema;
+
+export const WebSocketMessageSchema = Type.Union(
+  [RunEventEnvelopeSchema, ConnectionMessageSchema],
+  { $id: "https://anomalo.dev/schemas/websocket-message.schema.json" },
 );
 
 export const ResponseFormatSchema = Type.Union([

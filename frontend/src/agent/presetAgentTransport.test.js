@@ -2,6 +2,17 @@ import { describe, expect, it, vi } from "vitest";
 
 import { createPresetAgentTransport } from "./presetAgentTransport";
 
+function runEvent(type, data = {}, runId = "run-1") {
+  return {
+    schema_version: 1,
+    type,
+    session_id: "preset_session",
+    run_id: runId,
+    data,
+    timestamp: "2026-08-22T00:00:00Z",
+  };
+}
+
 function ndjsonResponse(events) {
   const body = new ReadableStream({
     start(controller) {
@@ -21,9 +32,9 @@ describe("PresetAgentTransport", () => {
     const events = [];
     const fetchImpl = vi.fn(async () =>
       ndjsonResponse([
-        { type: "run.started", run_id: "run-1", data: {} },
-        { type: "message.delta", run_id: "run-1", data: { content: "Done" } },
-        { type: "run.finished", run_id: "run-1", data: {} },
+        runEvent("run.started"),
+        runEvent("message.delta", { content: "Done" }),
+        runEvent("run.finished"),
       ]),
     );
     const transport = createPresetAgentTransport({

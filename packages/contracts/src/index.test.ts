@@ -36,6 +36,17 @@ describe("@anomalo/contracts", () => {
         data: { can_resume: false },
       }).valid,
     ).toBe(true);
+    expect(validateContract("webSocketMessage", { type: "pong" }).valid).toBe(true);
+    expect(
+      validateContract("webSocketMessage", {
+        type: "message.delta",
+        session_id: "session-1",
+        run_id: "run-1",
+        data: { content: "hello" },
+        timestamp: "2026-08-22T00:00:00Z",
+      }).valid,
+    ).toBe(true);
+    expect(validateContract("webSocketMessage", { type: "message.delta" }).valid).toBe(false);
   });
 
   it("validates tool definitions and run requests through the same registry", () => {
