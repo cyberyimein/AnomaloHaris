@@ -6,5 +6,6 @@ export * from "./finalizer.js";
 export * from "./ids.js";
 export * from "./model.js";
 export * from "./session.js";
+export * from "./sqlite.js";
 export * from "./tools.js";
 export * from "./types.js";

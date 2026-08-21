@@ -8,6 +8,7 @@ from buddy_backend.vision import BuddyVisionService
 
 from app.agent.runtime import AgentRuntime
 from app.agent.session import SessionStore
+from app.agent.session_v2 import SessionV2Store
 from app.agents.browser_operator import (
     BROWSER_OPERATOR_ID,
     BrowserToolBroker,
@@ -36,8 +37,13 @@ from app.tools.web import WebToolProvider
 
 
 @lru_cache
-def get_session_store() -> SessionStore:
+def get_session_store() -> SessionStore | SessionV2Store:
     settings = get_settings()
+    if settings.session_schema.strip().lower() == "v2":
+        return SessionV2Store(
+            settings.session_db_path,
+            default_search_mode=settings.default_search_mode,
+        )
     return SessionStore(settings.session_db_path, default_search_mode=settings.default_search_mode)
 
 

@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     app_title: str = Field(default="Anomalo", alias="ANOMALO_APP_TITLE")
     environment: str = Field(default="development", alias="ANOMALO_ENV")
     site_url: str = Field(default="http://localhost:8000", alias="ANOMALO_SITE_URL")
+    runtime_impl: str = Field(default="python", alias="ANOMALO_RUNTIME_IMPL")
+    session_schema: str = Field(default="v1", alias="ANOMALO_SESSION_SCHEMA")
+    node_host_url: str = Field(default="http://127.0.0.1:8788", alias="ANOMALO_NODE_HOST_URL")
 
     openrouter_api_key: str | None = Field(default=None, alias="OPENROUTER_API_KEY")
     openrouter_management_api_key: str | None = Field(
