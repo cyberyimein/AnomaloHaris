@@ -17,6 +17,21 @@ const apiKey = process.env.OPENROUTER_API_KEY;
 const baseUrl = process.env.OPENAI_BASE_URL ?? "https://openrouter.ai/api/v1";
 const staticDir = process.env.ANOMALO_FRONTEND_DIR ?? join(repoRoot, "agent-backend", "app", "frontend");
 
+class StaticFallbackModel implements ModelAdapter {
+  constructor(readonly model: string) {}
+
+  async *stream(_request: Parameters<ModelAdapter["stream"]>[0], signal: AbortSignal): AsyncIterable<ModelStreamEvent> {
+    if (signal.aborted) return;
+    yield { type: "text.delta", text: "Node Host is running, but no model API key is configured." };
+    yield { type: "done" };
+  }
+
+  async complete(_request: Parameters<ModelAdapter["complete"]>[0], signal: AbortSignal): Promise<string> {
+    if (signal.aborted) return "";
+    return "Node Host is running, but no model API key is configured.";
+  }
+}
+
 const model = createModel(modelName, baseUrl, apiKey);
 const tools = new DeterministicToolRuntime([]);
 const sessions = new SqliteSessionAdapter(databasePath);
@@ -51,19 +66,4 @@ function createModel(modelName: string, baseUrl: string, apiKey: string | undefi
     return new OpenAICompatibleAdapter({ model: modelName, baseUrl, apiKey });
   }
   return new StaticFallbackModel(modelName);
-}
-
-class StaticFallbackModel implements ModelAdapter {
-  constructor(readonly model: string) {}
-
-  async *stream(_request: Parameters<ModelAdapter["stream"]>[0], signal: AbortSignal): AsyncIterable<ModelStreamEvent> {
-    if (signal.aborted) return;
-    yield { type: "text.delta", text: "Node Host is running, but no model API key is configured." };
-    yield { type: "done" };
-  }
-
-  async complete(_request: Parameters<ModelAdapter["complete"]>[0], signal: AbortSignal): Promise<string> {
-    if (signal.aborted) return "";
-    return "Node Host is running, but no model API key is configured.";
-  }
 }
