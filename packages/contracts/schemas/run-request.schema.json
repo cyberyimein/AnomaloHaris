@@ -1,16 +1,123 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
   "$id": "https://anomalo.dev/schemas/run-request.schema.json",
-  "title": "Anomalo Run Request",
   "type": "object",
-  "required": ["message"],
+  "required": [
+    "message"
+  ],
   "properties": {
-    "message": { "type": ["string", "null"] },
-    "session_id": { "type": ["string", "null"] },
-    "resume": { "type": "boolean" },
-    "prompt_profile": { "type": ["string", "null"] },
-    "search_mode": { "type": ["string", "null"] },
-    "response_format": { "type": ["object", "null"] }
-  },
-  "additionalProperties": true
+    "message": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "session_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "resume": {
+      "type": "boolean"
+    },
+    "prompt_profile": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "search_mode": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "response_format": {
+      "anyOf": [
+        {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": [
+                "type"
+              ],
+              "properties": {
+                "type": {
+                  "const": "text",
+                  "type": "string"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "type"
+              ],
+              "properties": {
+                "type": {
+                  "const": "json_object",
+                  "type": "string"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "type",
+                "json_schema"
+              ],
+              "properties": {
+                "type": {
+                  "const": "json_schema",
+                  "type": "string"
+                },
+                "json_schema": {
+                  "type": "object",
+                  "required": [
+                    "name",
+                    "schema"
+                  ],
+                  "properties": {
+                    "name": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "strict": {
+                      "type": "boolean"
+                    },
+                    "schema": {
+                      "type": "object",
+                      "patternProperties": {
+                        "^(.*)$": {}
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  }
 }

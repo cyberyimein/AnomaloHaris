@@ -1,16 +1,104 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
   "$id": "https://anomalo.dev/schemas/agent-event.schema.json",
-  "title": "Anomalo Agent Event",
   "type": "object",
-  "required": ["type", "session_id", "run_id", "data", "timestamp"],
+  "required": [
+    "type",
+    "session_id",
+    "run_id",
+    "data",
+    "timestamp"
+  ],
   "properties": {
-    "schema_version": { "const": 1 },
-    "type": { "type": "string", "minLength": 1 },
-    "session_id": { "type": "string", "minLength": 1 },
-    "run_id": { "type": "string", "minLength": 1 },
-    "data": { "type": "object" },
-    "timestamp": { "type": "string", "minLength": 1 }
-  },
-  "additionalProperties": true
+    "schema_version": {
+      "const": 1,
+      "type": "number"
+    },
+    "type": {
+      "anyOf": [
+        {
+          "const": "run.started",
+          "type": "string"
+        },
+        {
+          "const": "llm.request",
+          "type": "string"
+        },
+        {
+          "const": "message.delta",
+          "type": "string"
+        },
+        {
+          "const": "message.done",
+          "type": "string"
+        },
+        {
+          "const": "tool.started",
+          "type": "string"
+        },
+        {
+          "const": "tool.finished",
+          "type": "string"
+        },
+        {
+          "const": "tool.error",
+          "type": "string"
+        },
+        {
+          "const": "run.finished",
+          "type": "string"
+        },
+        {
+          "const": "run.stopped",
+          "type": "string"
+        },
+        {
+          "const": "run.error",
+          "type": "string"
+        },
+        {
+          "const": "session.state",
+          "type": "string"
+        },
+        {
+          "const": "client.ready",
+          "type": "string"
+        },
+        {
+          "const": "client.error",
+          "type": "string"
+        },
+        {
+          "const": "browser.tool.call",
+          "type": "string"
+        },
+        {
+          "const": "browser.tool.result",
+          "type": "string"
+        },
+        {
+          "const": "pong",
+          "type": "string"
+        }
+      ]
+    },
+    "session_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "run_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "data": {
+      "type": "object",
+      "patternProperties": {
+        "^(.*)$": {}
+      }
+    },
+    "timestamp": {
+      "minLength": 1,
+      "type": "string"
+    }
+  }
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import fixtureEvents from "./fixtures/node-runtime-events.json";
+import sharedFixtures from "@anomalo/contracts/fixtures/agent-events.json";
 import { createAgentSessionProjection } from "./agentSessionProjection";
 
 describe("shared Node event fixture projection", () => {
@@ -12,7 +12,7 @@ describe("shared Node event fixture projection", () => {
     });
 
     projection.beginUserTurn("fixture request");
-    fixtureEvents.forEach((event) => projection.handle(event));
+    sharedFixtures.normal_text.forEach((event) => projection.handle(event));
 
     expect(projection.state.runTitle.value).toBe("Complete");
     expect(projection.state.agentState.value).toBe("Done");

@@ -1,5 +1,7 @@
 import { ref } from "vue";
 
+import { parseAgentEvent } from "./sharedContracts";
+
 const DEFAULT_RECONNECT_DELAY_MS = 1000;
 
 export function createAgentTransport({
@@ -56,7 +58,7 @@ export function createAgentTransport({
         return;
       }
       try {
-        const event = JSON.parse(message.data);
+        const event = parseAgentEvent(JSON.parse(message.data));
         if (event.type === "session.state") {
           runActive.value = false;
           resumeAvailable.value = Boolean(event.data?.can_resume);

@@ -1,5 +1,7 @@
 import { ref } from "vue";
 
+import { parseAgentEvent } from "./sharedContracts";
+
 const TERMINAL_EVENTS = new Set(["run.finished", "run.error", "run.stopped"]);
 
 export function createPresetAgentTransport({
@@ -195,7 +197,7 @@ function parseNdjsonLine(line, onEvent) {
     return;
   }
   try {
-    onEvent(JSON.parse(trimmed));
+    onEvent(parseAgentEvent(JSON.parse(trimmed)));
   } catch (error) {
     throw new Error(`Invalid preset agent event: ${error.message}`);
   }

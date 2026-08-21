@@ -1,17 +1,30 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
   "$id": "https://anomalo.dev/schemas/tool.schema.json",
-  "title": "Anomalo Tool Contract",
   "type": "object",
-  "required": ["name", "description", "parameters", "source"],
+  "required": [
+    "name",
+    "description",
+    "parameters",
+    "source"
+  ],
   "properties": {
     "name": {
-      "type": "string",
-      "pattern": "^[a-zA-Z0-9_-]{1,64}$"
+      "pattern": "^[a-zA-Z0-9_-]{1,64}$",
+      "type": "string"
     },
-    "description": { "type": "string" },
-    "parameters": { "type": "object" },
-    "source": { "type": "string", "minLength": 1 }
-  },
-  "additionalProperties": true
+    "description": {
+      "type": "string"
+    },
+    "parameters": {
+      "type": "object",
+      "patternProperties": {
+        "^(.*)$": {}
+      }
+    },
+    "source": {
+      "minLength": 1,
+      "type": "string"
+    }
+  }
 }

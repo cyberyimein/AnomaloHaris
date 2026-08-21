@@ -3,7 +3,6 @@ from pathlib import Path
 
 from app.agent.contracts import validate_payload
 
-
 FIXTURE_PATH = (
     Path(__file__).resolve().parents[2]
     / "packages"

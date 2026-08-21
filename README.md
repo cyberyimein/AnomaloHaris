@@ -84,10 +84,16 @@ Never commit `.env` or another file containing real credentials.
 
 ## Frontend development
 
+Install the workspace dependencies from the repository root so the frontend can
+resolve `@anomalo/contracts`:
+
+```bash
+npm install
+```
+
 Start the FastAPI server first, then run Vite in another terminal:
 
 ```bash
-npm --prefix frontend install
 npm --prefix frontend run dev
 ```
 
