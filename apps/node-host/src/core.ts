@@ -36,6 +36,7 @@ export class AgentCore {
     const clock = this.dependencies.clock ?? systemClock;
     const policy = this.dependencies.policy ?? defaultPolicy;
     const contextBuilder = this.dependencies.context ?? new ReplayContextBuilder(this.dependencies.tools);
+    const runSignal = AbortSignal.any([signal, AbortSignal.timeout(policy.runTimeoutMs)]);
     const session = await this.dependencies.sessions.open(input.sessionId);
     let checkpoint: SessionCheckpoint | undefined;
 
@@ -128,7 +129,7 @@ export class AgentCore {
             arguments: definition.arguments ?? {},
           });
         }
-        const bootstrap = await this.runBootstrapTools(runInput, input.bootstrapTools, signal, policy);
+        const bootstrap = await this.runBootstrapTools(runInput, input.bootstrapTools, runSignal, policy);
         for (const result of bootstrap.results) {
           yield makeEvent(result.result.ok ? "tool.finished" : "tool.error", runInput, clock, {
             phase: "bootstrap",
@@ -182,7 +183,7 @@ export class AgentCore {
         const toolCalls: ToolCall[] = [];
         let completed = false;
         try {
-          for await (const modelEvent of this.dependencies.model.stream(request, signal)) {
+          for await (const modelEvent of this.dependencies.model.stream(request, runSignal)) {
             if (modelEvent.type === "text.delta") {
               currentAssistantText += modelEvent.text;
               if (!isStructured(runInput)) {
@@ -197,13 +198,11 @@ export class AgentCore {
             }
           }
         } catch (error) {
-          if (error instanceof ModelInterruptedError || signal.aborted) {
+          if (error instanceof ModelInterruptedError || runSignal.aborted) {
             await this.saveCheckpoint(runInput, currentUserMessage, originalUserContent, currentAssistantText, error instanceof ModelInterruptedError ? error.toolCalls : [], loopMessages, bootstrapContext, iteration, clock);
-            yield makeEvent("run.stopped", runInput, clock, {
-              reason: signal.reason === "disconnect" ? "disconnect" : "user_stop",
-              checkpointed: true,
-              can_resume: true,
-            });
+            yield runSignalTimeout(runSignal)
+              ? makeEvent("run.error", runInput, clock, { error: "Agent run timed out.", error_code: "run_timeout", checkpointed: true, can_resume: true })
+              : makeEvent("run.stopped", runInput, clock, { reason: runSignal.reason === "disconnect" ? "disconnect" : "user_stop", checkpointed: true, can_resume: true });
             return;
           }
           throw error;
@@ -238,13 +237,13 @@ export class AgentCore {
                   ...(input.temperature === undefined ? {} : { temperature: input.temperature }),
                   responseFormat: runInput.responseFormat,
                 };
-                finalText = await this.dependencies.model.complete(finalizerRequest, signal);
+                finalText = await this.dependencies.model.complete(finalizerRequest, runSignal);
                 finalOutput = validateFinalOutput(finalText, runInput.responseFormat!);
                 outputFormat = runInput.responseFormat!.type;
                 finalizerSucceeded = true;
                 break;
               } catch (error) {
-                if (error instanceof ModelInterruptedError || signal.aborted) {
+                if (error instanceof ModelInterruptedError || runSignal.aborted) {
                   validationError = "Finalizer was interrupted.";
                   break;
                 }
@@ -257,8 +256,21 @@ export class AgentCore {
               }
             }
             if (!finalizerSucceeded) {
-              await this.saveCheckpoint(runInput, currentUserMessage, originalUserContent, currentAssistantText, [], loopMessages, bootstrapContext, iteration, clock, "finalizer_error");
-              const errorCode = validationError?.startsWith("Finalizer output") ? "structured_output_invalid" : "finalizer_failed";
+              await this.saveCheckpoint(
+                runInput,
+                currentUserMessage,
+                originalUserContent,
+                currentAssistantText,
+                [],
+                loopMessages,
+                bootstrapContext,
+                iteration,
+                clock,
+                runSignalTimeout(runSignal) ? "run_timeout" : "finalizer_error",
+              );
+              const errorCode = runSignalTimeout(runSignal)
+                ? "run_timeout"
+                : validationError?.startsWith("Finalizer output") ? "structured_output_invalid" : "finalizer_failed";
               await this.dependencies.sessions.failRun({ runId: input.runId, sessionId: input.sessionId, errorCode, ...(lastEntryId ? { lastEntryId } : {}), endedAt: clock.now() });
               yield makeEvent("run.error", runInput, clock, { error: validationError ?? "Finalizer failed.", error_code: errorCode, can_resume: true });
               return;
@@ -280,15 +292,17 @@ export class AgentCore {
           yield makeEvent("tool.started", runInput, clock, { tool_call_id: call.id, tool: call.name, arguments: call.arguments });
           let result: ToolResult;
           try {
-            result = await this.dependencies.tools.call(call, contextForTool, signal);
+            result = await this.dependencies.tools.call(call, contextForTool, runSignal);
           } catch (error) {
             result = { name: call.name, ok: false, content: error instanceof Error ? error.message : String(error), data: { error_type: "ToolError" } };
           }
           loopMessages.push({ role: "tool", tool_call_id: call.id, name: call.name, content: result.content });
           yield makeEvent(result.ok ? "tool.finished" : "tool.error", runInput, clock, { tool_call_id: call.id, tool: call.name, ok: result.ok, content: result.content, data: result.data });
-          if (signal.aborted) {
+          if (runSignal.aborted) {
             await this.saveCheckpoint(runInput, currentUserMessage, originalUserContent, currentAssistantText, [call], loopMessages, bootstrapContext, iteration, clock);
-            yield makeEvent("run.stopped", runInput, clock, { reason: signal.reason === "disconnect" ? "disconnect" : "user_stop", checkpointed: true, can_resume: true });
+            yield runSignalTimeout(runSignal)
+              ? makeEvent("run.error", runInput, clock, { error: "Agent run timed out.", error_code: "run_timeout", checkpointed: true, can_resume: true })
+              : makeEvent("run.stopped", runInput, clock, { reason: runSignal.reason === "disconnect" ? "disconnect" : "user_stop", checkpointed: true, can_resume: true });
             return;
           }
         }
@@ -299,9 +313,11 @@ export class AgentCore {
       await this.dependencies.sessions.failRun({ runId: input.runId, sessionId: input.sessionId, errorCode: "max_tool_iterations", ...(lastEntryId ? { lastEntryId } : {}), endedAt: clock.now() });
       yield makeEvent("run.error", runInput, clock, { error: "Maximum tool iterations reached.", error_code: "max_tool_iterations", can_resume: false });
     } catch (error) {
-      if (signal.aborted) {
+      if (runSignal.aborted) {
         await this.saveCheckpoint(runInput, currentUserMessage, originalUserContent, currentAssistantText, [], loopMessages, bootstrapContext, iteration, clock);
-        yield makeEvent("run.stopped", runInput, clock, { reason: signal.reason === "disconnect" ? "disconnect" : "user_stop", checkpointed: true, can_resume: true });
+        yield runSignalTimeout(runSignal)
+          ? makeEvent("run.error", runInput, clock, { error: "Agent run timed out.", error_code: "run_timeout", checkpointed: true, can_resume: true })
+          : makeEvent("run.stopped", runInput, clock, { reason: runSignal.reason === "disconnect" ? "disconnect" : "user_stop", checkpointed: true, can_resume: true });
         return;
       }
       await this.saveCheckpoint(runInput, currentUserMessage, originalUserContent, currentAssistantText, [], loopMessages, bootstrapContext, iteration, clock, "model_failed");
@@ -493,4 +509,13 @@ function bootstrapMessages(context: Record<string, unknown>[]): ModelMessage[] {
 
 function isStructured(input: AgentRunInput): boolean {
   return input.responseFormat?.type === "json_object" || input.responseFormat?.type === "json_schema";
+}
+
+function runSignalTimeout(signal: AbortSignal): boolean {
+  const reason = signal.reason;
+  return reason === "run_timeout" || (
+    typeof DOMException !== "undefined" &&
+    reason instanceof DOMException &&
+    reason.name === "TimeoutError"
+  );
 }
