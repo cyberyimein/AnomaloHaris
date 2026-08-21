@@ -68,8 +68,32 @@ export class AgentCore {
       return;
     }
 
+    if (input.resume && JSON.stringify(input.responseFormat) !== JSON.stringify(checkpoint?.state.responseFormat)) {
+      if (input.responseFormat !== undefined) {
+        yield makeEvent("run.error", input, clock, {
+          error: "The requested response_format does not match the paused run.",
+          error_code: "response_format_mismatch",
+          can_resume: true,
+        });
+        return;
+      }
+    }
     const effectiveResponseFormat = input.responseFormat ?? checkpoint?.state.responseFormat;
-    const runInput: AgentRunInput = { ...input, ...(effectiveResponseFormat ? { responseFormat: effectiveResponseFormat } : {}) };
+    const effectiveTemperature = input.temperature ?? checkpoint?.state.temperature;
+    const effectiveAllowedToolNames = input.allowedToolNames
+      ?? (checkpoint?.state.allowedToolNames ? new Set(checkpoint.state.allowedToolNames) : undefined);
+    const runInput: AgentRunInput = {
+      ...input,
+      model: checkpoint?.state.model ?? input.model,
+      promptProfile: checkpoint?.state.promptProfile ?? input.promptProfile,
+      ...(input.systemPrompt === undefined && checkpoint?.state.systemPrompt === undefined
+        ? {}
+        : { systemPrompt: input.systemPrompt ?? checkpoint?.state.systemPrompt }),
+      searchMode: checkpoint?.state.searchMode ?? input.searchMode,
+      ...(effectiveTemperature === undefined ? {} : { temperature: effectiveTemperature }),
+      ...(effectiveResponseFormat ? { responseFormat: effectiveResponseFormat } : {}),
+      ...(effectiveAllowedToolNames === undefined ? {} : { allowedToolNames: effectiveAllowedToolNames }),
+    };
     const originalUserContent = checkpoint?.state.originalUserContent ?? input.message ?? "";
     const currentUserMessage: ModelMessage = checkpoint?.state.currentUserMessage ?? {
       role: "user",
@@ -89,10 +113,10 @@ export class AgentCore {
       status: "active",
       ...(lastEntryId ? { lastEntryId } : {}),
       config: {
-        model: input.model,
-        ...(input.temperature === undefined ? {} : { temperature: input.temperature }),
-        searchMode: input.searchMode,
-        promptProfile: input.promptProfile,
+        model: runInput.model,
+        ...(runInput.temperature === undefined ? {} : { temperature: runInput.temperature }),
+        searchMode: runInput.searchMode,
+        promptProfile: runInput.promptProfile,
       },
       startedAt: clock.now(),
     });
@@ -114,8 +138,8 @@ export class AgentCore {
 
     yield makeEvent("run.started", runInput, clock, {
       resumed: Boolean(checkpoint),
-      search_mode: input.searchMode,
-      model: input.model,
+      search_mode: runInput.searchMode,
+      model: runInput.model,
     });
 
     try {
@@ -169,12 +193,13 @@ export class AgentCore {
           ],
           loopMessages,
           toolContext: toolContext(runInput),
-          ...(input.allowedToolNames ? { allowedToolNames: input.allowedToolNames } : {}),
-          promptProfile: input.promptProfile,
+          ...(runInput.systemPrompt ? { systemPrompt: runInput.systemPrompt } : {}),
+          ...(runInput.allowedToolNames ? { allowedToolNames: runInput.allowedToolNames } : {}),
+          promptProfile: runInput.promptProfile,
         });
         const request = toModelRequest(runInput, context);
         yield makeEvent("llm.request", runInput, clock, {
-          profile: input.promptProfile,
+          profile: runInput.promptProfile,
           iteration,
           phase: "agent",
           context: context.diagnostics,
@@ -223,7 +248,7 @@ export class AgentCore {
                 { role: "user", content: finalizerInstruction(runInput.responseFormat!, validationError) },
               ];
               yield makeEvent("llm.request", runInput, clock, {
-                profile: input.promptProfile,
+                profile: runInput.promptProfile,
                 iteration,
                 phase: "finalizer",
                 attempt: attempt + 1,
@@ -231,10 +256,10 @@ export class AgentCore {
               });
               try {
                 const finalizerRequest: ModelRequest = {
-                  model: input.model,
+                  model: runInput.model,
                   messages: finalizerMessages,
                   tools: [],
-                  ...(input.temperature === undefined ? {} : { temperature: input.temperature }),
+                  ...(runInput.temperature === undefined ? {} : { temperature: runInput.temperature }),
                   responseFormat: runInput.responseFormat,
                 };
                 finalText = await this.dependencies.model.complete(finalizerRequest, runSignal);
@@ -387,6 +412,7 @@ export class AgentCore {
       iteration,
       state: {
         promptProfile: input.promptProfile,
+        ...(input.systemPrompt === undefined ? {} : { systemPrompt: input.systemPrompt }),
         originalUserContent,
         currentUserMessage,
         assistantText,
@@ -395,6 +421,7 @@ export class AgentCore {
         loopMessages,
         bootstrapContext,
         ...(input.responseFormat === undefined ? {} : { responseFormat: input.responseFormat }),
+        ...(input.allowedToolNames === undefined ? {} : { allowedToolNames: [...input.allowedToolNames].sort() }),
         model: input.model,
         ...(input.temperature === undefined ? {} : { temperature: input.temperature }),
         searchMode: input.searchMode,

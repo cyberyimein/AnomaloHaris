@@ -116,7 +116,12 @@ describe("AgentCore", () => {
       new AgentCore({ model, tools, sessions }),
     );
     const events = [];
-    for await (const event of controller.start({ ...input, runId: "run-stop" as AgentRunInput["runId"] })) {
+    for await (const event of controller.start({
+      ...input,
+      runId: "run-stop" as AgentRunInput["runId"],
+      model: "frozen-model",
+      systemPrompt: "Keep this system instruction.",
+    })) {
       events.push(event);
       if (event.type === "run.started") await controller.stop(input.sessionId, "user_stop");
     }
@@ -128,9 +133,12 @@ describe("AgentCore", () => {
       runId: "run-resume" as AgentRunInput["runId"],
       message: null,
       resume: true,
+      model: "new-model",
     })) resumed.push(event);
     expect(resumed.at(-1)?.type).toBe("run.finished");
     expect(resumed.at(-1)?.data.final_text).toBe("resumed");
+    expect(model.streamCalls[1]?.model).toBe("frozen-model");
+    expect(model.streamCalls[1]?.messages[0]).toEqual({ role: "system", content: "Keep this system instruction." });
   });
 
   it("turns the core timeout policy into a resumable run error", async () => {

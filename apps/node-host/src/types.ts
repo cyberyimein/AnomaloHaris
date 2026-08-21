@@ -95,6 +95,7 @@ export type SessionCheckpoint = {
   iteration: number;
   state: {
     promptProfile: string;
+    systemPrompt?: string | undefined;
     originalUserContent: string;
     currentUserMessage: ModelMessage;
     assistantText: string;
@@ -103,6 +104,7 @@ export type SessionCheckpoint = {
     loopMessages: ModelMessage[];
     bootstrapContext: Record<string, unknown>[];
     responseFormat?: ResponseFormat | undefined;
+    allowedToolNames?: string[] | undefined;
     model: string;
     temperature?: number | undefined;
     searchMode: SearchMode;

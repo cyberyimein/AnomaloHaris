@@ -7,6 +7,7 @@ export type ContextRequest = {
   baseMessages: ModelMessage[];
   loopMessages: ModelMessage[];
   toolContext: ToolContext;
+  systemPrompt?: string | undefined;
   allowedToolNames?: ReadonlySet<string> | undefined;
   promptProfile: string;
 };
@@ -24,6 +25,7 @@ export class ReplayContextBuilder implements ContextBuilder {
       ? listed.filter((tool) => request.allowedToolNames?.has(tool.name))
       : listed;
     const messages = [
+      ...(request.systemPrompt ? [{ role: "system" as const, content: request.systemPrompt }] : []),
       ...structuredClone(request.baseMessages),
       ...structuredClone(request.loopMessages),
     ];
@@ -32,7 +34,7 @@ export class ReplayContextBuilder implements ContextBuilder {
       model: request.toolContext.model,
       searchMode: request.toolContext.searchMode,
       segmentCounts: {
-        base: request.baseMessages.length,
+        base: request.baseMessages.length + (request.systemPrompt ? 1 : 0),
         toolLoop: request.loopMessages.length,
       },
       totalMessageCount: messages.length,
