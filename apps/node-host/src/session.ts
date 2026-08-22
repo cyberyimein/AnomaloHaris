@@ -23,6 +23,7 @@ export interface SessionRepository {
   checkpoint(record: SessionCheckpoint): Promise<void>;
   finishRun(record: FinishedRunRecord): Promise<void>;
   failRun(record: FailedRunRecord): Promise<void>;
+  setSearchMode?(sessionId: SessionId, searchMode: string): Promise<void>;
   setResources?(sessionId: SessionId, activeSkills: string[], activeMcpServers: string[]): Promise<void>;
   setPresetModel?(sessionId: SessionId, modelRef: string): Promise<void>;
   resume(sessionId: SessionId): Promise<ResumableRun>;
@@ -138,6 +139,11 @@ export class InMemorySessionAdapter implements SessionRepository {
     const stored = await this.ensure(sessionId);
     stored.snapshot.activeSkills = [...new Set(activeSkills)].sort();
     stored.snapshot.activeMcpServers = [...new Set(activeMcpServers)].sort();
+  }
+
+  async setSearchMode(sessionId: SessionId, searchMode: string): Promise<void> {
+    const stored = await this.ensure(sessionId);
+    stored.snapshot.searchMode = searchMode;
   }
 
   async setPresetModel(sessionId: SessionId, modelRef: string): Promise<void> {

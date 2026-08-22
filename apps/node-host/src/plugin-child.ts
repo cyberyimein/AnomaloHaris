@@ -28,6 +28,10 @@ async function handleMessage(message: unknown): Promise<void> {
         if (!handle) throw new Error("Plugin is not loaded.");
         result = { tools: await backend.tools(handle, (payload.context ?? {}) as never, 30_000) };
         break;
+      case "capabilities":
+        if (!handle) throw new Error("Plugin is not loaded.");
+        result = { capabilities: await backend.capabilities(handle, 30_000) };
+        break;
       case "callTool":
         if (!handle) throw new Error("Plugin is not loaded.");
         result = {

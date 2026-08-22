@@ -24,6 +24,8 @@ export type PluginSpec = {
   trust?: "local-code";
   compatibility: PluginCompatibility;
   permissions?: readonly PluginPermission[];
+  /** Capability labels are metadata only; implementations stay in the plugin process. */
+  capabilities?: readonly string[];
   priority?: number;
 };
 
@@ -80,8 +82,15 @@ export type PluginToolHandler = (
   signal: AbortSignal,
 ) => ToolResult | Promise<ToolResult>;
 
+export type PluginCapabilityDeclaration = {
+  id: string;
+  kind: "tool" | "service";
+  description?: string;
+};
+
 export type PluginApi = {
   registerTool(definition: ToolDefinition, handler: PluginToolHandler): void;
+  registerCapability(definition: PluginCapabilityDeclaration): void;
   on(event: PluginEvent["type"], hook: PluginHook): void;
 };
 
@@ -89,6 +98,7 @@ export type PiExtension = {
   id?: string;
   compatibility?: PluginCompatibility;
   tools?: readonly ToolDefinition[];
+  capabilities?: readonly PluginCapabilityDeclaration[];
   callTool?: PluginToolHandler;
   hooks?: Partial<Record<PluginEvent["type"], PluginHook>>;
   setup?: (api: PluginApi) => void | Promise<void>;
@@ -104,6 +114,7 @@ export type PluginStatus = {
   loaded: boolean;
   required: boolean;
   tools: string[];
+  capabilities: string[];
   failures: number;
   circuitOpen: boolean;
   error?: string;
@@ -128,6 +139,7 @@ export interface PluginBackend {
   load(spec: PluginSpec, timeoutMs: number): Promise<PluginBackendHandle>;
   unload(handle: PluginBackendHandle): Promise<void>;
   tools(handle: PluginBackendHandle, context: PluginContext, timeoutMs: number): Promise<ToolDefinition[]>;
+  capabilities(handle: PluginBackendHandle, timeoutMs: number): Promise<PluginCapabilityDeclaration[]>;
   callTool(handle: PluginBackendHandle, call: ToolCall, context: ToolContext, signal: AbortSignal, timeoutMs: number): Promise<ToolResult>;
   dispatch(handle: PluginBackendHandle, event: PluginEvent, timeoutMs: number): Promise<PluginEventResult | undefined>;
 }
@@ -137,6 +149,7 @@ export type PluginBackendHandle = {
   spec: PluginSpec;
   extension?: PiExtension;
   _tools?: Map<string, { definition: ToolDefinition; handler?: PluginToolHandler }>;
+  _capabilities?: PluginCapabilityDeclaration[];
   child?: ChildProcess;
   request?: (method: string, payload: Record<string, unknown>, timeoutMs: number) => Promise<unknown>;
 };
@@ -177,6 +190,7 @@ export class PiPluginHost implements PluginHost {
         loaded: false,
         required: spec.required === true,
         tools: [],
+        capabilities: [...new Set(spec.capabilities ?? [])].sort(),
         failures: 0,
         circuitOpen: false,
       };
@@ -204,6 +218,15 @@ export class PiPluginHost implements PluginHost {
           this.timeoutMs,
           `plugin tools ${spec.id}`,
         );
+        const capabilities = await withTimeout(
+          this.backend.capabilities(handle, this.timeoutMs),
+          this.timeoutMs,
+          `plugin capabilities ${spec.id}`,
+        );
+        status.capabilities = [...new Set([
+          ...status.capabilities,
+          ...capabilities.map((capability) => capability.id),
+        ])].sort();
         this.loaded.set(spec.id, { status, spec, handle });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -313,7 +336,11 @@ export class PiPluginHost implements PluginHost {
   }
 
   status(): PluginStatus[] {
-    return [...this.loaded.values()].map(({ status }) => ({ ...status, tools: [...status.tools] }));
+    return [...this.loaded.values()].map(({ status }) => ({
+      ...status,
+      tools: [...status.tools],
+      capabilities: [...status.capabilities],
+    }));
   }
 
   private recordFailure(plugin: LoadedPlugin, error: unknown): void {
@@ -344,9 +371,11 @@ export class InProcessPluginBackend implements PluginBackend {
     const imported = await import(moduleSpecifier);
     const exported = (imported.default ?? imported.plugin ?? imported) as PiExtension | ((api: PluginApi) => PiExtension | void | Promise<PiExtension | void>);
     const registeredTools = new Map<string, { definition: ToolDefinition; handler: PluginToolHandler }>();
+    const registeredCapabilities = new Map<string, PluginCapabilityDeclaration>();
     const registeredHooks = new Map<PluginEvent["type"], PluginHook>();
     const api: PluginApi = {
       registerTool: (definition, handler) => registeredTools.set(definition.name, { definition, handler }),
+      registerCapability: (definition) => registeredCapabilities.set(definition.id, definition),
       on: (event, hook) => registeredHooks.set(event, hook),
     };
     const extension = (typeof exported === "function" ? await exported(api) : exported) ?? {};
@@ -357,11 +386,15 @@ export class InProcessPluginBackend implements PluginBackend {
     const tools = new Map<string, { definition: ToolDefinition; handler?: PluginToolHandler }>();
     for (const definition of extension.tools ?? []) tools.set(definition.name, { definition });
     for (const [name, value] of registeredTools) tools.set(name, value);
+    const capabilities = new Map<string, PluginCapabilityDeclaration>();
+    for (const capability of extension.capabilities ?? []) capabilities.set(capability.id, capability);
+    for (const [id, capability] of registeredCapabilities) capabilities.set(id, capability);
     return {
       id: spec.id,
       spec,
       extension: { ...extension, hooks: Object.fromEntries(registeredHooks) },
       _tools: tools,
+      _capabilities: [...capabilities.values()],
     };
   }
 
@@ -369,6 +402,10 @@ export class InProcessPluginBackend implements PluginBackend {
 
   async tools(handle: PluginBackendHandle, _context: PluginContext, _timeoutMs: number): Promise<ToolDefinition[]> {
     return [...(getTools(handle).values())].map(({ definition }) => structuredClone(definition));
+  }
+
+  async capabilities(handle: PluginBackendHandle, _timeoutMs: number): Promise<PluginCapabilityDeclaration[]> {
+    return structuredClone(handle._capabilities ?? []);
   }
 
   async callTool(handle: PluginBackendHandle, call: ToolCall, context: ToolContext, signal: AbortSignal, _timeoutMs: number): Promise<ToolResult> {
@@ -426,6 +463,13 @@ export class ChildProcessPluginBackend implements PluginBackend {
   async tools(handle: PluginBackendHandle, context: PluginContext, timeoutMs: number): Promise<ToolDefinition[]> {
     const result = await handle.request?.("tools", { context }, timeoutMs);
     return Array.isArray((result as { tools?: unknown })?.tools) ? (result as { tools: ToolDefinition[] }).tools : [];
+  }
+
+  async capabilities(handle: PluginBackendHandle, timeoutMs: number): Promise<PluginCapabilityDeclaration[]> {
+    const result = await handle.request?.("capabilities", {}, timeoutMs);
+    return Array.isArray((result as { capabilities?: unknown })?.capabilities)
+      ? (result as { capabilities: PluginCapabilityDeclaration[] }).capabilities
+      : [];
   }
 
   async callTool(handle: PluginBackendHandle, call: ToolCall, context: ToolContext, signal: AbortSignal, timeoutMs: number): Promise<ToolResult> {
@@ -486,7 +530,16 @@ function parsePluginField(target: Partial<PluginSpec>, field: string): void {
   else if (key === "enabled") target.enabled = raw === "true";
   else if (key === "required") target.required = raw === "true";
   else if (key === "priority") target.priority = Number(raw);
+  else if (key === "capabilities") target.capabilities = parseStringList(raw);
   else if (key === "id" || key === "package" || key === "entry" || key === "trust" || key === "compatibility") target[key] = raw as never;
+}
+
+function parseStringList(value: string): string[] {
+  const normalized = value.trim().replace(/^\[|\]$/g, "");
+  return normalized
+    .split(",")
+    .map((item) => item.trim().replace(/^['\"]|['\"]$/g, ""))
+    .filter(Boolean);
 }
 
 function normalizeToolResult(result: ToolResult, name: string): ToolResult {

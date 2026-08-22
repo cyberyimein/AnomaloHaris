@@ -113,6 +113,21 @@ describe("OpenAI-compatible compute API", () => {
     expect(events.json().events.at(-1).type).toBe("run.finished");
   });
 
+  it("streams native preset-model events as NDJSON", async () => {
+    const app = await makeApp([[{ type: "text.delta", text: "native stream" }, { type: "done" }]]);
+    apps.push(app);
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/preset-models/luna/versions/1/runs/stream",
+      headers: { authorization: "Bearer luna-token" },
+      payload: { session_id: "native-stream-session", message: "stream" },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toContain("application/x-ndjson");
+    expect(response.headers["x-anomalo-preset-model"]).toBe("luna@1");
+    expect(response.body.split("\n").filter(Boolean).map((line) => JSON.parse(line).type)).toContain("run.finished");
+  });
+
   it("persists usage and idempotency records in the compute store", async () => {
     const store = new SqliteComputeStore(":memory:");
     await store.begin({

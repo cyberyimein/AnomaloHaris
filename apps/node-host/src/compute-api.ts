@@ -415,6 +415,43 @@ export function registerComputeRoutes(app: FastifyInstance, options: ComputeApiO
     }
   });
 
+  app.post<{ Params: { name: string; version: string }; Body: unknown }>("/api/preset-models/:name/versions/:version/runs/stream", async (request, reply) => {
+    let input: StartRunRequest;
+    let model: CompiledPresetModel;
+    try {
+      auth.authenticate(request.headers as Record<string, unknown>, "compute:invoke");
+      const ref = `${request.params.name}@${request.params.version}`;
+      model = resolvePublishedModel(options.registry, ref);
+      input = nativeRunInput(request.body, model);
+      await bindSessionModel(options.sessions, input.sessionId, model.ref);
+      nativeRuns.start(input.runId!, input.sessionId, model.ref);
+    } catch (error) {
+      return sendComputeError(reply, error);
+    }
+
+    reply.hijack();
+    reply.raw.statusCode = 200;
+    reply.raw.setHeader("content-type", "application/x-ndjson; charset=utf-8");
+    reply.raw.setHeader("cache-control", "no-cache, no-transform");
+    reply.raw.setHeader("x-anomalo-session-id", input.sessionId);
+    reply.raw.setHeader("x-anomalo-preset-model", model.ref);
+    const events: AgentEvent[] = [];
+    try {
+      for await (const event of options.controller.start(input)) {
+        events.push(event);
+        nativeRuns.append(input.runId!, event);
+        reply.raw.write(`${JSON.stringify(event)}\n`);
+      }
+      nativeRuns.finish(input.runId!, events);
+    } catch (error) {
+      nativeRuns.finish(input.runId!, events);
+      reply.raw.write(`${JSON.stringify({ error: computeErrorPayload(error) })}\n`);
+    } finally {
+      if (!reply.raw.writableEnded) reply.raw.end();
+    }
+    return reply;
+  });
+
   app.get<{ Params: { runId: string } }>("/api/runs/:runId", async (request, reply) => {
     try {
       auth.authenticate(request.headers as Record<string, unknown>, "compute:read");

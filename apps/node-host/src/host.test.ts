@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -11,6 +11,8 @@ import { InMemorySessionAdapter } from "./session.js";
 import { buildNodeHost } from "./host.js";
 import { DeterministicToolRuntime } from "./tools.js";
 import { SqlitePresetModelRegistry } from "./preset-models.js";
+import { FileResourceLoader } from "./resources.js";
+import type { PluginHost } from "./plugins.js";
 
 const apps: Array<{ close(): Promise<void> }> = [];
 const tempDirectories: string[] = [];
@@ -141,12 +143,58 @@ describe("Node Host", () => {
     expect(mismatch.statusCode).toBe(409);
     expect(mismatch.json()).toMatchObject({ error_code: "session_model_mismatch" });
   });
+
+  it("serves resource debug APIs and keeps management/plugin metadata separate", async () => {
+    const root = mkdtempSync(join(tmpdir(), "anomalo-host-resources-"));
+    tempDirectories.push(root);
+    mkdirSync(join(root, "config"), { recursive: true });
+    writeFileSync(join(root, "config", "prompts.yaml"), "profiles:\n  agent:\n    messages:\n      - role: system\n        content: |\n          Luna prompt.\n");
+    const resources = new FileResourceLoader({
+      projectRoot: root,
+      promptConfigPath: join(root, "config", "prompts.yaml"),
+    });
+    const registry = new SqlitePresetModelRegistry(":memory:");
+    registries.push(registry);
+    registry.ensureBuiltinDefault({ model: "replay-model" });
+    const app = await makeApp([], undefined, registry, resources, undefined, "secret");
+    apps.push(app);
+
+    expect((await app.inject({ method: "GET", url: "/api/prompts" })).json()).toMatchObject({
+      profile: "agent",
+      messages: [{ role: "system", content: expect.stringContaining("Luna prompt.") }],
+    });
+    expect((await app.inject({ method: "POST", url: "/api/memory/upload", payload: { content: "memory from UI" } })).statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: "/api/memory" })).json()).toMatchObject({ content: "memory from UI" });
+
+    const mode = await app.inject({ method: "PATCH", url: "/api/sessions/resource-session/search-mode", payload: { mode: "native" } });
+    expect(mode.json()).toMatchObject({ session_id: "resource-session", mode: "native" });
+    expect((await app.inject({ method: "GET", url: "/api/sessions/resource-session/search-mode" })).json().mode).toBe("native");
+    expect((await app.inject({ method: "GET", url: "/api/plugins" })).json()).toEqual({ plugins: [] });
+
+    expect((await app.inject({ method: "GET", url: "/api/manage/preset-models" })).statusCode).toBe(403);
+    const draft = await app.inject({
+      method: "POST",
+      url: "/api/manage/preset-models",
+      headers: { "x-anomalo-admin-token": "secret" },
+      payload: {
+        name: "luna",
+        version: 1,
+        description: "Coding model",
+        provider: { adapter: "openai-compatible", model: "luna-provider" },
+      },
+    });
+    expect(draft.statusCode).toBe(201);
+    expect(draft.json().preset_model.ref).toBe("luna@1");
+  });
 });
 
 async function makeApp(
   steps: ReplayStep[],
   staticDir?: string,
   presetModels?: SqlitePresetModelRegistry,
+  resources?: FileResourceLoader,
+  plugins?: PluginHost,
+  managementToken?: string,
 ) {
   const tools = new DeterministicToolRuntime([]);
   const model = new ReplayModelAdapter(steps);
@@ -159,6 +207,9 @@ async function makeApp(
     ...(presetModels ? { presetModels, defaultPresetModel: "anomalo@1" } : {}),
     tools,
     ...(staticDir ? { staticDir } : {}),
+    ...(resources ? { resources } : {}),
+    ...(plugins ? { plugins } : {}),
+    ...(managementToken ? { managementToken } : {}),
   });
 }
 

@@ -17,6 +17,7 @@ export type PluginManifest = {
   compatibility: PluginCompatibility;
   permissions: readonly PluginPermission[];
   toolNames?: readonly string[];
+  capabilities?: readonly string[];
   required?: boolean;
   /** Local source root used only to re-hash an installed development plugin. */
   packageRoot?: string;
@@ -31,6 +32,7 @@ export type PluginLock = {
   entry: string;
   compatibility: PluginCompatibility;
   permissions: readonly PluginPermission[];
+  capabilities?: readonly string[];
   packageHash: string;
   manifestHash: string;
 };
@@ -118,6 +120,9 @@ export class PluginCatalog {
       if (spec.packageHash !== undefined && spec.packageHash !== currentLock.packageHash) {
         throw new Error(`plugin_hash_mismatch:${spec.id}`);
       }
+      if (spec.capabilities !== undefined && canonicalJson([...spec.capabilities].sort()) !== canonicalJson([...(manifest.capabilities ?? [])].sort())) {
+        throw new Error(`plugin_capabilities_mismatch:${spec.id}`);
+      }
       const lock = expected?.get(spec.id);
       if (expected && !lock) throw new Error(`plugin_not_locked:${spec.id}`);
       if (lock && canonicalJson(currentLock) !== canonicalJson(lock)) {
@@ -135,6 +140,7 @@ export function createPluginManifest(input: {
   compatibility: PluginCompatibility;
   permissions?: readonly PluginPermission[];
   toolNames?: readonly string[];
+  capabilities?: readonly string[];
   required?: boolean;
   packageRoot?: string;
 }): PluginManifest {
@@ -148,6 +154,7 @@ export function createPluginManifest(input: {
     compatibility: input.compatibility,
     permissions,
     toolNames: [...(input.toolNames ?? [])].sort(),
+    capabilities: [...(input.capabilities ?? [])].sort(),
     required: input.required === true,
     packageHash,
   };
@@ -155,6 +162,7 @@ export function createPluginManifest(input: {
     ...manifestBody,
     permissions,
     ...(manifestBody.toolNames.length > 0 ? { toolNames: manifestBody.toolNames } : {}),
+    ...(manifestBody.capabilities.length > 0 ? { capabilities: manifestBody.capabilities } : {}),
     ...(manifestBody.required ? { required: true } : {}),
     ...(input.packageRoot ? { packageRoot: input.packageRoot } : {}),
     manifestHash: hash(manifestBody),
@@ -245,6 +253,7 @@ function toLock(manifest: PluginManifest): PluginLock {
     compatibility: manifest.compatibility,
     permissions: [...manifest.permissions].sort(),
     toolNames: [...(manifest.toolNames ?? [])].sort(),
+    capabilities: [...(manifest.capabilities ?? [])].sort(),
     required: manifest.required === true,
     packageHash,
   };
@@ -255,6 +264,7 @@ function toLock(manifest: PluginManifest): PluginLock {
     entry: manifest.entry,
     compatibility: manifest.compatibility,
     permissions: [...manifest.permissions].sort(),
+    ...(manifest.capabilities && manifest.capabilities.length > 0 ? { capabilities: [...manifest.capabilities].sort() } : {}),
     packageHash,
     manifestHash: hash(manifestBody),
   };

@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 import type { ModelMessage } from "./types.js";
@@ -43,6 +43,23 @@ export type FileResourceLoaderOptions = {
   maxFileBytes?: number;
 };
 
+export const MAX_MEMORY_BYTES = 128 * 1024;
+
+export type ResourceSkillSummary = {
+  name: string;
+  summary: string;
+  enabled: boolean;
+  active: boolean;
+  instructions_available: boolean;
+};
+
+export type ResourceMcpSummary = {
+  name: string;
+  enabled: boolean;
+  active: boolean;
+  description: string;
+};
+
 /**
  * Loads trusted, local prompt resources without exposing the filesystem to a
  * plugin. The result is a run-level snapshot; callers must not rebuild it on
@@ -63,6 +80,51 @@ export class FileResourceLoader implements ResourceLoader {
     this.mcpConfigPath = options.mcpConfigPath ?? join(this.projectRoot, "config", "mcp_servers.yaml");
     this.mcpInstructionDir = join(dirname(this.mcpConfigPath), "mcp");
     this.maxFileBytes = options.maxFileBytes ?? 256_000;
+  }
+
+  prompt(profile: string): Record<string, unknown> {
+    const content = this.readPromptProfile(profile);
+    return {
+      version: 1,
+      profile,
+      messages: content ? [{ role: "system", content }] : [],
+      config_path: this.promptConfigPath,
+    };
+  }
+
+  memory(): Record<string, unknown> {
+    const path = join(dirname(this.promptConfigPath), "AGENTS.md");
+    const content = readBoundedFile(path, MAX_MEMORY_BYTES) ?? "";
+    return { exists: existsSync(path), path, content, size_bytes: Buffer.byteLength(content, "utf8") };
+  }
+
+  saveMemory(content: string): Record<string, unknown> {
+    if (Buffer.byteLength(content, "utf8") > MAX_MEMORY_BYTES) {
+      throw new Error(`AGENTS.md is too large. Limit is ${MAX_MEMORY_BYTES} bytes.`);
+    }
+    const path = join(dirname(this.promptConfigPath), "AGENTS.md");
+    writeFileSync(path, content, "utf8");
+    return this.memory();
+  }
+
+  skills(activeNames: ReadonlySet<string> = new Set()): ResourceSkillSummary[] {
+    return this.readSkills().map((skill) => ({
+      name: skill.name,
+      summary: skill.summary,
+      enabled: true,
+      active: activeNames.has(skill.name),
+      instructions_available: Boolean(skill.content),
+    }));
+  }
+
+  mcpServers(activeNames: ReadonlySet<string> = new Set()): ResourceMcpSummary[] {
+    const catalog = this.readMcpCatalog();
+    return catalog.names.map((name) => ({
+      name,
+      enabled: true,
+      active: activeNames.has(name),
+      description: catalog.instructions.get(name)?.split("\n")[0] ?? "",
+    }));
   }
 
   async snapshot(request: ResourceSnapshotRequest): Promise<ResourceSnapshot> {

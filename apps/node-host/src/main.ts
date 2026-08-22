@@ -28,6 +28,13 @@ const defaultPresetModelRef = process.env.ANOMALO_DEFAULT_PRESET_MODEL || DEFAUL
 const apiKey = process.env.OPENROUTER_API_KEY;
 const baseUrl = process.env.OPENAI_BASE_URL ?? "https://openrouter.ai/api/v1";
 const staticDir = process.env.ANOMALO_FRONTEND_DIR ?? join(repoRoot, "agent-backend", "app", "frontend");
+const providerCredits = apiKey && baseUrl.includes("openrouter.ai")
+  ? async (): Promise<unknown> => {
+    const response = await fetch(`${baseUrl.replace(/\/$/, "")}/credits`, { headers: { Authorization: `Bearer ${apiKey}` } });
+    if (!response.ok) throw new Error(`Provider credits request failed with HTTP ${response.status}.`);
+    return response.json();
+  }
+  : undefined;
 
 const extensionsEnabled = process.env.ANOMALO_PI_EXTENSIONS_ENABLED === "true";
 const pluginConfig = extensionsEnabled
@@ -43,6 +50,7 @@ for (const spec of pluginConfig.plugins) {
     entry: spec.entry ?? ".",
     compatibility: spec.compatibility,
     permissions: spec.permissions ?? [],
+    capabilities: spec.capabilities ?? [],
     ...(spec.entry && existsSync(spec.entry) ? { packageRoot: spec.entry } : {}),
   }));
 }
@@ -146,6 +154,10 @@ const app = await buildNodeHost({
   browserBridge,
   tools,
   ...(existsSync(join(staticDir, "index.html")) ? { staticDir } : {}),
+  resources,
+  plugins,
+  ...(providerCredits ? { providerCredits } : {}),
+  ...(process.env.ANOMALO_ADMIN_TOKEN ? { managementToken: process.env.ANOMALO_ADMIN_TOKEN } : {}),
   compute: { auth: serviceAuth, usage: computeStore, idempotency: computeStore },
   logger: process.env.ANOMALO_ENV !== "test",
 });

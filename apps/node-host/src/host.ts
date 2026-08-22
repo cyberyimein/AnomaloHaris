@@ -1,4 +1,5 @@
 import { statSync } from "node:fs";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { resolve } from "node:path";
 
 import fastify, { type FastifyInstance, type FastifyReply } from "fastify";
@@ -20,6 +21,8 @@ import type { CompiledPresetModel, SqlitePresetModelRegistry } from "./preset-mo
 import type { SessionRepository } from "./session.js";
 import type { SessionSnapshot, ToolContext } from "./types.js";
 import type { ToolRuntime } from "./tools.js";
+import type { FileResourceLoader } from "./resources.js";
+import type { PluginHost } from "./plugins.js";
 
 export type NodeHostOptions = {
   controller: RunController;
@@ -37,6 +40,10 @@ export type NodeHostOptions = {
   browserBridge?: BrowserToolBridge;
   tools?: ToolRuntime;
   compute?: Omit<ComputeApiOptions, "registry" | "controller" | "sessions">;
+  resources?: FileResourceLoader;
+  managementToken?: string;
+  plugins?: PluginHost;
+  providerCredits?: () => Promise<unknown>;
 };
 
 export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyInstance> {
@@ -55,6 +62,168 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
     model: options.model,
     default_preset_model: options.defaultPresetModel,
   }));
+
+  app.get("/api/prompts", async (_request, reply) => {
+    if (!options.resources) return reply.code(404).send({ error: "Resource loader is not configured." });
+    return reply.send(options.resources.prompt(options.promptProfile ?? "agent"));
+  });
+
+  app.get("/api/memory", async (_request, reply) => {
+    if (!options.resources) return reply.code(404).send({ error: "Resource loader is not configured." });
+    return reply.send(options.resources.memory());
+  });
+
+  app.get("/api/skills", async (_request, reply) => {
+    if (!options.resources) return reply.code(404).send({ error: "Resource loader is not configured." });
+    return reply.send({ skills: options.resources.skills() });
+  });
+
+  app.get("/api/mcp", async (_request, reply) => {
+    if (!options.resources) return reply.code(404).send({ error: "Resource loader is not configured." });
+    return reply.send({ servers: options.resources.mcpServers() });
+  });
+
+  app.post("/api/mcp/reload", async (_request, reply) => {
+    if (!options.resources) return reply.code(404).send({ error: "Resource loader is not configured." });
+    return reply.send({ reloaded: true, servers: options.resources.mcpServers() });
+  });
+
+  app.post<{ Body: unknown }>("/api/memory/upload", async (request, reply) => {
+    if (!options.resources) return reply.code(404).send({ error: "Resource loader is not configured." });
+    const body = asObject(request.body);
+    const content = typeof body.content === "string" ? body.content : typeof request.body === "string" ? request.body : undefined;
+    if (content === undefined) return reply.code(400).send({ error: "content is required." });
+    try {
+      return reply.send(options.resources.saveMemory(content));
+    } catch (error) {
+      return reply.code(413).send({ error: hostErrorMessage(error), error_code: "memory_too_large" });
+    }
+  });
+
+  app.get<{ Params: { sessionId: string } }>("/api/sessions/:sessionId/search-mode", async (request, reply) => {
+    const snapshot = await options.sessions.open(request.params.sessionId as SessionId);
+    return reply.send(searchModePayload(request.params.sessionId, snapshot.searchMode, options.model));
+  });
+
+  app.patch<{ Params: { sessionId: string }; Body: unknown }>("/api/sessions/:sessionId/search-mode", async (request, reply) => {
+    const sessionId = request.params.sessionId as SessionId;
+    if (options.controller.hasActiveRun(sessionId)) return reply.code(409).send({ error: "Stop the active run before changing search mode.", error_code: "run_already_active" });
+    const mode = asObject(request.body).mode;
+    if (typeof mode !== "string" || !["native", "subagent", "diy"].includes(mode)) return reply.code(400).send({ error: "Invalid search mode.", error_code: "invalid_search_mode" });
+    if (!options.sessions.setSearchMode) return reply.code(501).send({ error: "Search mode persistence is not supported." });
+    await options.sessions.setSearchMode(sessionId, mode);
+    return reply.send(searchModePayload(sessionId, mode, options.model));
+  });
+
+  app.get<{ Params: { sessionId: string } }>("/api/sessions/:sessionId/skills", async (request, reply) => {
+    const snapshot = await options.sessions.open(request.params.sessionId as SessionId);
+    return reply.send({ session_id: request.params.sessionId, active_skills: snapshot.activeSkills, skills: options.resources?.skills(new Set(snapshot.activeSkills)) ?? [] });
+  });
+
+  app.put<{ Params: { sessionId: string }; Body: unknown }>("/api/sessions/:sessionId/skills", async (request, reply) => {
+    const sessionId = request.params.sessionId as SessionId;
+    if (!options.sessions.setResources) return reply.code(501).send({ error: "Session resource persistence is not supported." });
+    const active = readStringArray(asObject(request.body).active_skills);
+    const available = new Set((options.resources?.skills() ?? []).map((skill) => skill.name));
+    const unknown = active.find((name) => !available.has(name));
+    if (unknown) return reply.code(404).send({ error: `Unknown skill: ${unknown}`, error_code: "resource_not_found" });
+    const snapshot = await options.sessions.open(sessionId);
+    await options.sessions.setResources(sessionId, active, snapshot.activeMcpServers);
+    return reply.send({ session_id: sessionId, active_skills: [...new Set(active)].sort(), skills: options.resources?.skills(new Set(active)) ?? [] });
+  });
+
+  app.get<{ Params: { sessionId: string } }>("/api/sessions/:sessionId/mcp", async (request, reply) => {
+    const snapshot = await options.sessions.open(request.params.sessionId as SessionId);
+    return reply.send({ session_id: request.params.sessionId, active_servers: snapshot.activeMcpServers, servers: options.resources?.mcpServers(new Set(snapshot.activeMcpServers)) ?? [] });
+  });
+
+  app.put<{ Params: { sessionId: string }; Body: unknown }>("/api/sessions/:sessionId/mcp", async (request, reply) => {
+    const sessionId = request.params.sessionId as SessionId;
+    if (!options.sessions.setResources) return reply.code(501).send({ error: "Session resource persistence is not supported." });
+    const active = readStringArray(asObject(request.body).active_servers);
+    const available = new Set((options.resources?.mcpServers() ?? []).map((server) => server.name));
+    const unknown = active.find((name) => !available.has(name));
+    if (unknown) return reply.code(404).send({ error: `Unknown MCP server: ${unknown}`, error_code: "resource_not_found" });
+    const snapshot = await options.sessions.open(sessionId);
+    await options.sessions.setResources(sessionId, snapshot.activeSkills, active);
+    return reply.send({ session_id: sessionId, active_servers: [...new Set(active)].sort(), servers: options.resources?.mcpServers(new Set(active)) ?? [] });
+  });
+
+  app.get("/api/models", async () => ({ models: [{ id: options.model, model: options.model, object: "model", owned_by: "anomalo" }] }));
+
+  app.get("/api/manage/providers", async (request, reply) => {
+    try {
+      requireManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
+      return reply.send({ providers: [{ id: "default", adapter: "openai-compatible", model: options.model }] });
+    } catch (error) {
+      return sendHostError(reply, error);
+    }
+  });
+
+  app.get("/api/openrouter/credits", async (request, reply) => {
+    try {
+      requireManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
+      if (!options.providerCredits) throw new HostRequestError(503, "provider_unavailable", "Provider credits are not configured.");
+      return reply.send(await options.providerCredits());
+    } catch (error) {
+      return sendHostError(reply, error);
+    }
+  });
+
+  app.get("/api/manage/preset-models", async (request, reply) => {
+    try {
+      requireManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
+      const models = (options.presetModels?.list({ includeDraft: true, includeRetired: true }) ?? []).map((summary) => {
+        const model = options.presetModels!.resolve(summary.ref, { allowDraft: true });
+        return serializePresetModel(model, true);
+      });
+      return reply.send({ preset_models: models });
+    } catch (error) {
+      return sendHostError(reply, error);
+    }
+  });
+
+  app.post<{ Body: unknown }>("/api/manage/preset-models", async (request, reply) => {
+    try {
+      requireManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
+      if (!options.presetModels) throw new HostRequestError(503, "preset_model_unavailable", "Preset Model registry is not configured.");
+      const created = options.presetModels.createDraft(request.body as any);
+      return reply.code(201).send({ preset_model: serializePresetModel(created, true) });
+    } catch (error) {
+      return sendHostError(reply, error);
+    }
+  });
+
+  app.post<{ Params: { name: string; version: string } }>("/api/manage/preset-models/:name/versions/:version/publish", async (request, reply) => {
+    try {
+      requireManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
+      if (!options.presetModels) throw new HostRequestError(503, "preset_model_unavailable", "Preset Model registry is not configured.");
+      return reply.send({ preset_model: serializePresetModel(options.presetModels.publish(`${request.params.name}@${request.params.version}`), true) });
+    } catch (error) {
+      return sendHostError(reply, error);
+    }
+  });
+
+  app.post<{ Params: { name: string; version: string } }>("/api/manage/preset-models/:name/versions/:version/retire", async (request, reply) => {
+    try {
+      requireManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
+      if (!options.presetModels) throw new HostRequestError(503, "preset_model_unavailable", "Preset Model registry is not configured.");
+      return reply.send({ preset_model: serializePresetModel(options.presetModels.retire(`${request.params.name}@${request.params.version}`), true) });
+    } catch (error) {
+      return sendHostError(reply, error);
+    }
+  });
+
+  app.post<{ Params: { name: string; version: string } }>("/api/manage/preset-models/:name/versions/:version/validate", async (request, reply) => {
+    try {
+      requireManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
+      if (!options.presetModels) throw new HostRequestError(503, "preset_model_unavailable", "Preset Model registry is not configured.");
+      const model = options.presetModels.resolve(`${request.params.name}@${request.params.version}`, { allowDraft: true });
+      return reply.send({ valid: true, preset_model: serializePresetModel(model, true) });
+    } catch (error) {
+      return sendHostError(reply, error);
+    }
+  });
 
   if (options.compute && options.presetModels) {
     registerComputeRoutes(app, {
@@ -108,6 +277,17 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
       activeMcpServers: new Set(snapshot?.activeMcpServers ?? []),
     };
     return { tools: await options.tools.list(context), providers: await options.tools.status(context) };
+  });
+
+  app.get("/api/plugins", async () => ({ plugins: options.plugins?.status() ?? [] }));
+
+  app.get("/api/manage/plugins", async (request, reply) => {
+    try {
+      requireManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
+      return reply.send({ plugins: options.plugins?.status() ?? [] });
+    } catch (error) {
+      return sendHostError(reply, error);
+    }
   });
 
   app.get("/api/sessions", async (request) => {
@@ -468,7 +648,7 @@ function stringPolicy(preset: CompiledPresetModel | undefined, key: string): str
   return typeof value === "string" && value ? value : undefined;
 }
 
-function serializePresetModel(model: CompiledPresetModel): Record<string, unknown> {
+function serializePresetModel(model: CompiledPresetModel, includeDefinition = false): Record<string, unknown> {
   return {
     ref: model.ref,
     name: model.name,
@@ -483,6 +663,7 @@ function serializePresetModel(model: CompiledPresetModel): Record<string, unknow
     tool_catalog: model.toolCatalog,
     allowed_tools: model.allowedToolNames,
     compiled_hash: model.compiledHash,
+    ...(includeDefinition ? { definition: structuredClone(model.definition) } : {}),
   };
 }
 
@@ -531,6 +712,35 @@ function hostErrorCode(error: unknown): string {
 
 function hostErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function requireManagementAccess(headers: Record<string, unknown>, configuredToken: string | undefined): void {
+  if (!configuredToken) return;
+  const provided = typeof headers["x-anomalo-admin-token"] === "string" ? headers["x-anomalo-admin-token"] : "";
+  const expectedHash = createHash("sha256").update(configuredToken).digest();
+  const providedHash = createHash("sha256").update(provided).digest();
+  if (!provided || !timingSafeEqual(expectedHash, providedHash)) {
+    throw new HostRequestError(403, "forbidden", "Management API requires X-Anomalo-Admin-Token.");
+  }
+}
+
+function searchModePayload(sessionId: string, mode: string, model: string): Record<string, unknown> {
+  return {
+    session_id: sessionId,
+    mode,
+    model,
+    subagent_model: model,
+    modes: [
+      { id: "native", label: "Model-native search", description: "Use the provider's native search capability when configured.", provider: "provider" },
+      { id: "subagent", label: "Web research subagent", description: "Delegate research to the configured research model.", provider: "provider_subagent" },
+      { id: "diy", label: "DIY web tools", description: "Use Anomalo's Node web search and fetch tools.", provider: "duckduckgo_html" },
+    ],
+  };
+}
+
+function readStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean))];
 }
 
 async function collectRun(controller: RunController, input: StartRunRequest): Promise<AgentEvent[]> {

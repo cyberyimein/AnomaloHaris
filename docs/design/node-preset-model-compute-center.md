@@ -22,7 +22,7 @@ Luna 必须把本文视为最终产品规格，而不是对当前 Node Host 的�
 - Provider 调用与不同工具调用协议的规范化。
 - 类 Pi 插件加载、工具注册、生命周期 hook、权限和隔离。
 - Session、Run、Usage、Web trace 和审计持久化。
-- Web、Browser、MCP、Buddy、音频、视觉、artifact 和管理 API。
+- Web、Browser、MCP、artifact 和管理 API；Buddy、音频、视觉属于可选插件或待废弃能力，不进入 Node Host 核心。
 - 对其他本地 Agent 服务提供稳定的 OpenAI-compatible 和 Anomalo-native API。
 
 最终生产运行时不得要求 Python 进程。Python 可以在迁移期作为旧实现和对照测试存在，但不能成为最终架构的 Worker、fallback Host 或隐式依赖。确实需要 Python 生态的外部能力时，Anomalo 只能把它当作独立远程服务，通过公开协议调用；它不属于 Anomalo 后端进程树，也不能拥有 Anomalo Session。
@@ -107,9 +107,9 @@ Anomalo 对外负责：
 - 一个 Node Host 是唯一公开服务进程。
 - AgentCore、ProviderGateway、PluginHost、Session 和管理面均为 TypeScript。
 - 生产镜像不安装 Python，不复制 Python virtualenv，不启动 Python child process。
-- Buddy 通过 Node serial/TCP Adapter 连接。
+- Buddy 不由 Node Host 直接连接；若产品继续保留，由独立的 Node 插件声明并实现 serial/TCP 或外部服务协议。
 - Web、MCP、Browser bridge、artifact、管理和数据迁移由 Node 实现。
-- STT/TTS/Vision 使用 Node Adapter、原生可执行文件协议或独立外部服务；不得通过内嵌 Python Worker 实现。
+- STT/TTS/Vision 默认不属于核心产品面；若产品重新启用，只能由独立 Node 插件或外部服务适配，禁止把重型媒体栈和硬件依赖塞进 Node Host，也不得通过内嵌 Python Worker 实现。
 - Python Host 只在迁移分支或历史发布中用于回滚，最终发布后删除其启动路径。
 
 ## 3. 当前实现的已知事实与失败基线
@@ -151,7 +151,7 @@ Node 事件协议和 UI 必须共同以 `@anomalo/contracts` 为唯一来源，�
 - Preset Model/旧 preset agent 列表、管理、普通调用和 streaming 调用。
 - Prompt、memory、session skills、session MCP 和 search mode。
 - Provider model 管理和 OpenRouter credits。
-- Buddy、vision、audio、Copilot bridge。
+- Buddy、vision、audio、Copilot bridge（当前只保留可选插件边界；是否继续产品化另行决策）。
 - Artifact 下载和本地字体。
 - Browser Operator 的完整 handshake 和 preset 绑定。
 
@@ -1051,10 +1051,10 @@ Luna 必须建立机器可读 parity manifest，不能靠手工记忆判断是�
 | Tools | core/web/browser/MCP | Node plugins | real tool runs |
 | Provider | model config/credits/stream/tools | ProviderGateway | conformance profiles |
 | Browser | handshake/tool bridge | Node WebSocket plugin | browser E2E |
-| Buddy | connect/state/events/actions | Node serial/TCP plugin | hardware Gate |
-| Audio | STT/TTS/voice chat | Node/external-service adapters | sample parity |
-| Vision | status/frame/analyze/follow | Node/external-service adapters | camera Gate |
-| Artifacts | secure download | Node artifact plugin | path/security tests |
+| Buddy | connect/state/events/actions | optional external Node plugin; Host core has no Buddy routes | plugin/hardware Gate only if retained |
+| Audio | STT/TTS/voice chat | deprecated by default; optional external plugin | product decision + sample parity |
+| Vision | status/frame/analyze/follow | deprecated by default; optional external plugin | product decision + camera Gate |
+| Artifacts | secure download | optional Node plugin | plugin path/security tests |
 | Management | model/plugin/provider/usage | Node admin APIs | admin UI E2E |
 | Static Web | assets/fonts/SPA fallback | Fastify static | production build smoke |
 
@@ -1221,16 +1221,16 @@ type ParityEntry = {
 
 编码内容：
 
-- 完成 parity manifest 中全部 API。
-- Node Buddy serial/TCP plugin。
-- Node/external-service audio、vision 和 artifact plugins。
+- 完成 parity manifest 中仍属于核心产品范围的 API。
+- 为可选能力增加版本化 Plugin Manifest、capability metadata 和隔离边界；Buddy 的 serial/TCP 实现放在独立插件，不进入 Node Host。
+- 音频、视觉和重型 artifact 能力默认不内置；保留外部插件接入协议，已废弃能力不为兼容而重新实现。
 - 完整 Browser Operator handshake。
 - Provider credits、管理、prompt debug 和静态资源。
 
 退出条件：
 
-- parity manifest 全部为 `parity`。
-- Buddy、audio、vision 人工 Gate 通过。
+- 核心 parity manifest 全部为 `parity`；可选/废弃能力必须明确标记为 `optional-plugin` 或 `deprecated`，不能伪装成 Host 已完成。
+- 如果启用 Buddy、audio 或 vision，再由对应插件单独通过人工 Gate；Node Host 本身不因这些硬件/媒体能力阻塞发布。
 - Node-only 生产构建完成全部旧前端流程。
 - 无请求代理到 Python。
 
@@ -1392,8 +1392,8 @@ CI 默认使用 recorded fixtures；发布前必须保存真实 Gate 的时间�
 - Provider Gateway 支持真实生产 Provider 的工具调用协议。
 - 当前信息问题会实际调用 Web 工具，而不是输出工具 markup 或凭记忆回答。
 - UI 显示正确 Preset Model、Provider Model、prompt、tool 和 run metadata。
-- parity manifest 没有 `missing` 或 `partial`。
-- Chat、Preset Model、Session、Browser、MCP、Buddy、audio、vision、artifact 和管理能力均在 Node 实现。
+- 核心 parity manifest 没有 `missing` 或 `partial`；可选插件/废弃项使用明确的 `optional-plugin`/`deprecated` 状态。
+- Chat、Preset Model、Session、Browser、MCP、artifact（若启用）和管理能力均在 Node 实现；Buddy、audio、vision 不得被误称为 Node Host 内置能力。
 - production image 和 process tree 不含 Python。
 - 没有 Node-to-Python Host/Worker fallback。
 - Session 和旧 preset agent 数据迁移无损、幂等、可审计。

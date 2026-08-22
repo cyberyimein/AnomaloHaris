@@ -335,6 +335,13 @@ export class SqliteSessionAdapter implements SessionRepository {
     for (const name of [...new Set(activeMcpServers)].sort()) insert.run(sessionId, "mcp", name);
   }
 
+  async setSearchMode(sessionId: SessionId, searchMode: string): Promise<void> {
+    this.ensureSession(sessionId);
+    this.db.prepare(
+      "UPDATE agent_sessions SET search_mode = ?, updated_at = ? WHERE session_id = ?",
+    ).run(searchMode, this.clock.now(), sessionId);
+  }
+
   async setPresetModel(sessionId: SessionId, modelRef: string): Promise<void> {
     this.ensureSession(sessionId);
     const current = this.readSnapshot(sessionId);

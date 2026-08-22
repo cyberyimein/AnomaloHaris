@@ -65,6 +65,22 @@ describe("PiPluginHost", () => {
     expect((await host.callTool({ id: "call-registered", name: "pi_registered", arguments: {} }, context, new AbortController().signal)).content).toBe("registered");
   });
 
+  it("keeps optional hardware and media capabilities inside the plugin boundary", async () => {
+    const entry = writeFixture(`
+      export default {
+        capabilities: [{ id: "buddy", kind: "service", description: "Optional Buddy transport" }],
+        tools: [{ name: "buddy.status", description: "Read Buddy status", parameters: { type: "object" }, source: "buddy-plugin" }],
+        callTool(call) { return { name: call.name, ok: true, content: "plugin-owned", data: {} }; }
+      };
+    `);
+    const host = new PiPluginHost({ backend: new InProcessPluginBackend() });
+    const report = await host.load({ plugins: [{ id: "buddy-plugin", entry, compatibility: "L2", capabilities: ["buddy"] }] });
+
+    expect(report.errors).toEqual([]);
+    expect(report.plugins[0]).toMatchObject({ id: "buddy-plugin", loaded: true, capabilities: ["buddy"] });
+    expect((await host.callTool({ id: "buddy-call", name: "buddy.status", arguments: {} }, context, new AbortController().signal)).content).toBe("plugin-owned");
+  });
+
   it("opens a circuit after repeated plugin failures", async () => {
     const entry = writeFixture(`
       export default {
