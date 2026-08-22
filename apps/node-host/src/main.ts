@@ -26,13 +26,46 @@ const computeDatabasePath = process.env.ANOMALO_COMPUTE_DB_PATH || join(dataDir,
 const modelName = process.env.OPENROUTER_MODEL ?? "openai/gpt-4o-mini";
 const defaultPresetModelRef = process.env.ANOMALO_DEFAULT_PRESET_MODEL || DEFAULT_PRESET_MODEL_REF;
 const apiKey = process.env.OPENROUTER_API_KEY;
+const managementApiKey = process.env.OPENROUTER_MANAGEMENT_API_KEY;
 const baseUrl = process.env.OPENAI_BASE_URL ?? "https://openrouter.ai/api/v1";
 const staticDir = process.env.ANOMALO_FRONTEND_DIR ?? join(repoRoot, "agent-backend", "app", "frontend");
-const providerCredits = apiKey && baseUrl.includes("openrouter.ai")
-  ? async (): Promise<unknown> => {
-    const response = await fetch(`${baseUrl.replace(/\/$/, "")}/credits`, { headers: { Authorization: `Bearer ${apiKey}` } });
-    if (!response.ok) throw new Error(`Provider credits request failed with HTTP ${response.status}.`);
-    return response.json();
+const providerCredits = baseUrl.includes("openrouter.ai")
+  ? async (): Promise<Record<string, unknown>> => {
+    if (!managementApiKey) {
+      return {
+        status: "config_missing",
+        configured: false,
+        message: "Set OPENROUTER_MANAGEMENT_API_KEY to show OpenRouter credits.",
+      };
+    }
+    try {
+      const response = await fetch(`${baseUrl.replace(/\/$/, "")}/credits`, {
+        headers: { Authorization: `Bearer ${managementApiKey}`, Accept: "application/json" },
+      });
+      if (!response.ok) throw new Error(`Provider credits request failed with HTTP ${response.status}.`);
+      const raw = await response.json() as { data?: unknown } & Record<string, unknown>;
+      const data = raw.data && typeof raw.data === "object" && !Array.isArray(raw.data)
+        ? raw.data as Record<string, unknown>
+        : raw;
+      const totalCredits = numberOrNull(data.total_credits);
+      const totalUsage = numberOrNull(data.total_usage);
+      return {
+        status: "ready",
+        configured: true,
+        currency: "USD",
+        total_credits: totalCredits,
+        total_usage: totalUsage,
+        remaining_credits: totalCredits !== null && totalUsage !== null ? Math.max(totalCredits - totalUsage, 0) : null,
+        updated_at: new Date().toISOString(),
+        cached: false,
+      };
+    } catch (error) {
+      return {
+        status: "error",
+        configured: true,
+        message: `Credit refresh failed: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
   }
   : undefined;
 
@@ -206,4 +239,9 @@ function parseServiceClients(raw: string | undefined, fallbackToken: string | un
     }
   }
   return fallbackToken ? [{ id: "default", token: fallbackToken, scopes: ["compute:models", "compute:invoke", "compute:read"] }] : [];
+}
+
+function numberOrNull(value: unknown): number | null {
+  const number = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(number) ? number : null;
 }
