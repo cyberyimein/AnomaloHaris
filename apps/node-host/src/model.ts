@@ -285,11 +285,44 @@ function requestPayload(request: ModelRequest): Record<string, unknown> {
   return {
     model: request.model,
     temperature: request.temperature,
-    messages: request.messages,
-    tools: request.tools.length > 0 ? request.tools : undefined,
+    messages: request.messages.map(toProviderMessage),
+    tools: request.tools.length > 0 ? request.tools.map((tool) => ({
+      type: "function",
+      function: {
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters,
+      },
+    })) : undefined,
     tool_choice: request.tools.length > 0 ? "auto" : undefined,
     response_format: request.responseFormat,
   };
+}
+
+function toProviderMessage(message: ModelMessage): Record<string, unknown> {
+  if (message.role === "assistant" && Array.isArray(message.tool_calls)) {
+    return {
+      role: "assistant",
+      content: message.content || null,
+      tool_calls: message.tool_calls.map((call) => ({
+        id: call.id,
+        type: "function",
+        function: {
+          name: call.name,
+          arguments: JSON.stringify(call.arguments ?? {}),
+        },
+      })),
+    };
+  }
+  if (message.role === "tool") {
+    return {
+      role: "tool",
+      tool_call_id: message.tool_call_id,
+      ...(message.name ? { name: message.name } : {}),
+      content: message.content,
+    };
+  }
+  return { role: message.role, content: message.content };
 }
 
 function parseToolCalls(

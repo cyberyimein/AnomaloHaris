@@ -49,6 +49,38 @@ describe("OpenAICompatibleAdapter", () => {
     ]);
   });
 
+  it("serializes tool definitions and loop messages using the OpenAI wire shape", async () => {
+    let body: Record<string, unknown> | undefined;
+    const adapter = new OpenAICompatibleAdapter({
+      model: "native-model",
+      baseUrl: "https://example.test/v1",
+      apiKey: "test-key",
+      fetchImpl: async (_url, init) => {
+        body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return sseResponse([{ choices: [{ delta: { content: "done" } }] }, "[DONE]"]);
+      },
+    });
+    await collect(adapter.stream({
+      model: "native-model",
+      messages: [
+        { role: "user", content: "What time is it?" },
+        { role: "assistant", content: "", tool_calls: [{ id: "call-1", name: "time_now", arguments: {} }] },
+        { role: "tool", content: "2026-08-22T00:00:00.000Z", tool_call_id: "call-1", name: "time_now" },
+      ],
+      tools: [{ name: "time_now", description: "Read UTC time", parameters: { type: "object" }, source: "host-core" }],
+    }, new AbortController().signal));
+
+    expect(body?.tools).toEqual([{
+      type: "function",
+      function: { name: "time_now", description: "Read UTC time", parameters: { type: "object" } },
+    }]);
+    expect(body?.messages).toEqual([
+      { role: "user", content: "What time is it?" },
+      { role: "assistant", content: null, tool_calls: [{ id: "call-1", type: "function", function: { name: "time_now", arguments: "{}" } }] },
+      { role: "tool", tool_call_id: "call-1", name: "time_now", content: "2026-08-22T00:00:00.000Z" },
+    ]);
+  });
+
   it("captures usage sent after the finish chunk", async () => {
     const adapter = new OpenAICompatibleAdapter({
       model: "usage-model",

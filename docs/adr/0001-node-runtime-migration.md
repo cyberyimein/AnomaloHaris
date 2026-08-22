@@ -27,11 +27,12 @@ Implement the migration in independently revertible slices:
 3. Add an npm workspace and a single `@anomalo/contracts` source for the
    cross-process event, tool, and run-request contracts.
 
-The migration now has a live Node Host path. The Python Host remains the safe
-default until the Node Host reaches public API parity; deployments can opt in
-with `ANOMALO_RUNTIME_IMPL=node`. The Python process can still be used as a
-loopback Worker for Python-only tools, audio, vision, and Buddy capabilities,
-without deleting v2 tables.
+This ADR is historical. The completed target is the Node-only Host described by
+ADR-0002 and `docs/design/node-preset-model-compute-center.md`; there is no
+runtime switch and no Node-to-Python Worker fallback in the production path.
+Python-specific, Buddy, audio, and vision behavior may remain as migration
+fixtures or separately deployed services, but it is not part of the Node Host
+process tree.
 
 ## Consequences
 
@@ -39,11 +40,9 @@ without deleting v2 tables.
   compatibility boundary.
 - Python and TypeScript can validate the same fixture payloads before either
   runtime is switched in production.
-- The opt-in Node path owns HTTP, WebSocket, Agent Run, and Session lifecycle;
-  the Worker does not write the primary Session tables.
-- Web, Browser, Python Worker, and Pi L1-L3 adapters are behind the Node
-  `ToolRuntime` and `PluginHost` seams. Unavailable Worker capabilities degrade
-  to structured `worker_unavailable` tool results.
-- A failure in the Node path can be reverted by stopping new runs, preserving
-  checkpoints, and switching the Host owner back to Python; v2 tables remain
-  intact for that rollback.
+- The Node Host owns HTTP, WebSocket, Agent Run, and Session lifecycle.
+- Web, Browser, and Pi L1-L3 adapters are behind the Node `ToolRuntime` and
+  `PluginHost` seams. Buddy/audio/vision are optional plugin boundaries, not
+  built-in Host capabilities.
+- Rollback is to a previous Node image with a compatible database backup; the
+  removed Python launcher is not a production fallback.

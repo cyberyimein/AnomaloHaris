@@ -14,7 +14,6 @@ import { DEFAULT_PRESET_MODEL_REF, SqlitePresetModelRegistry } from "./preset-mo
 import { SqliteSessionAdapter } from "./sqlite.js";
 import { RunController } from "./controller.js";
 import { asToolAdapter, CompositeToolRuntime, CoreToolRuntime, PluginToolAdapter } from "./tools.js";
-import { PythonWorkerProcess, PythonWorkerToolRuntime, workerClientFromEnvironment, workerCommandFromEnvironment } from "./worker.js";
 import { WebToolRuntime } from "./web.js";
 import { ServiceAuth, SqliteComputeStore } from "./compute-api.js";
 
@@ -71,7 +70,7 @@ const providerCredits = baseUrl.includes("openrouter.ai")
 
 const extensionsEnabled = process.env.ANOMALO_PI_EXTENSIONS_ENABLED === "true";
 const pluginConfig = extensionsEnabled
-  ? readPluginLoadConfig(process.env.ANOMALO_PLUGIN_CONFIG ?? join(repoRoot, "config", "plugins.yaml"))
+  ? readPluginLoadConfig(process.env.ANOMALO_PLUGIN_CONFIG ?? join(repoRoot, "agent-backend", "config", "plugins.yaml"))
   : { plugins: [] };
 const pluginCatalog = builtinPluginCatalog();
 for (const spec of pluginConfig.plugins) {
@@ -102,26 +101,6 @@ presetModels.ensureBuiltinDefault({
 const defaultPresetModel = presetModels.resolve(defaultPresetModelRef);
 
 const browserBridge = new BrowserToolBridge(Number(process.env.BROWSER_TOOL_TIMEOUT_SECONDS ?? "60") * 1000);
-const workerClient = workerClientFromEnvironment();
-let workerProcess: PythonWorkerProcess | undefined;
-if (process.env.ANOMALO_PYTHON_WORKER_AUTO_START === "true") {
-  workerProcess = new PythonWorkerProcess({
-    client: workerClient,
-    command: workerCommandFromEnvironment(),
-    cwd: join(repoRoot, "agent-backend"),
-    env: {
-      PYTHONPATH: [join(repoRoot, "agent-backend"), join(repoRoot, "buddy-backend"), process.env.PYTHONPATH].filter(Boolean).join(":"),
-      ...(process.env.ANOMALO_PYTHON_WORKER_TOKEN ? { ANOMALO_PYTHON_WORKER_TOKEN: process.env.ANOMALO_PYTHON_WORKER_TOKEN } : {}),
-    },
-  });
-  try {
-    await workerProcess.start();
-  } catch (error) {
-    console.warn(`[node-host] Python Worker unavailable; continuing without Worker tools: ${error instanceof Error ? error.message : String(error)}`);
-    await workerProcess.stop();
-    workerProcess = undefined;
-  }
-}
 
 const plugins = new PiPluginHost({
   timeoutMs: Number(process.env.ANOMALO_PLUGIN_TIMEOUT_MS ?? "30000"),
@@ -157,13 +136,12 @@ const tools = new CompositeToolRuntime([
     maxChars: Number(process.env.WEB_FETCH_MAX_CHARS ?? "30000"),
   })),
   asToolAdapter("browser-bridge", 70, new BrowserToolRuntime(browserBridge)),
-  asToolAdapter("python-worker", 40, new PythonWorkerToolRuntime(workerClient)),
   new PluginToolAdapter(plugins),
 ]);
 const sessions = new SqliteSessionAdapter(databasePath);
 const resources = new FileResourceLoader({
   projectRoot: repoRoot,
-  skillDirs: [join(repoRoot, "agent-backend", "skills"), join(repoRoot, "buddy-backend", "skills")],
+  skillDirs: [join(repoRoot, "agent-backend", "skills")],
   mcpConfigPath: join(repoRoot, "agent-backend", "config", "mcp_servers.yaml"),
 });
 const core = new AgentCore({
@@ -207,7 +185,6 @@ if (host !== requestedHost) {
 await app.listen({ port, host });
 
 async function shutdown(): Promise<void> {
-  await workerProcess?.stop();
   sessions.close();
   presetModels.close();
   computeStore.close();

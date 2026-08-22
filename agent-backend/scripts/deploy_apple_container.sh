@@ -25,8 +25,6 @@ Environment:
   CONTAINER_NAME          Remote container name. Default: anomalo
   HOST_PORT               Remote host HTTP port. Default: 8000
   APP_PORT                Container HTTP port. Default: 8000
-  BUDDY_TRANSPORT         Buddy transport for deployed app. Default: tcp
-  BUDDY_TCP_PORT          Buddy TCP port. Default: 8787
   SITE_URL                Public site URL. Default: http://<ssh-host>:HOST_PORT
   MOUNT_ARTIFACTS         Mount persistent agent artifacts. Default: 1
   ALLOW_EPHEMERAL_DATA    Allow starting without the persistent data volume after a mount failure. Default: 0
@@ -100,8 +98,6 @@ REMOTE_CONTAINER_CLI="${REMOTE_CONTAINER_CLI:-container}"
 CONTAINER_NAME="${CONTAINER_NAME:-anomalo}"
 HOST_PORT="${HOST_PORT:-8000}"
 APP_PORT="${APP_PORT:-8000}"
-BUDDY_TRANSPORT="${BUDDY_TRANSPORT:-tcp}"
-BUDDY_TCP_PORT="${BUDDY_TCP_PORT:-8787}"
 MOUNT_ARTIFACTS="${MOUNT_ARTIFACTS:-1}"
 ALLOW_EPHEMERAL_DATA="${ALLOW_EPHEMERAL_DATA:-0}"
 START_CONTAINER_SYSTEM="${START_CONTAINER_SYSTEM:-1}"
@@ -141,8 +137,6 @@ ssh "${ssh_args[@]}" "$ssh_target" "bash -s" -- \
     "$CONTAINER_NAME" \
     "$HOST_PORT" \
     "$APP_PORT" \
-    "$BUDDY_TRANSPORT" \
-    "$BUDDY_TCP_PORT" \
     "$SITE_URL" \
     "$REMOTE_ENV_FILE" \
     "$REMOTE_DATA_DIR" \
@@ -158,15 +152,13 @@ image_ref="$3"
 container_name="$4"
 host_port="$5"
 app_port="$6"
-buddy_transport="$7"
-buddy_tcp_port="$8"
-site_url="$9"
-remote_env_file="${10}"
-remote_data_dir="${11}"
-mount_artifacts="${12}"
-allow_ephemeral_data="${13}"
-start_container_system="${14}"
-container_network="${15}"
+site_url="$7"
+remote_env_file="${8}"
+remote_data_dir="${9}"
+mount_artifacts="${10}"
+allow_ephemeral_data="${11}"
+start_container_system="${12}"
+container_network="${13}"
 
 if [[ "$start_container_system" == "1" ]]; then
     "$container_cli" system start >/dev/null 2>&1 || true
@@ -197,18 +189,10 @@ build_run_args() {
         run_args+=(--network "$container_network")
     fi
     run_args+=(--publish "${host_port}:${app_port}")
-    if [[ "$buddy_transport" == "tcp" && -n "$buddy_tcp_port" ]]; then
-        run_args+=(--publish "${buddy_tcp_port}:${buddy_tcp_port}")
-    fi
     if [[ -f "$remote_env_file" ]]; then
         run_args+=(--env-file "$remote_env_file")
     fi
     run_args+=(--env "ANOMALO_SITE_URL=$site_url")
-    run_args+=(--env "ANOMALO_BUDDY_TRANSPORT=$buddy_transport")
-    if [[ "$buddy_transport" == "tcp" ]]; then
-        run_args+=(--env "ANOMALO_BUDDY_TCP_HOST=0.0.0.0")
-        run_args+=(--env "ANOMALO_BUDDY_TCP_PORT=$buddy_tcp_port")
-    fi
     if [[ "$include_data" == "1" ]]; then
         mkdir -p "$remote_data_dir"
         run_args+=(--env "ANOMALO_DATA_DIR=/data")

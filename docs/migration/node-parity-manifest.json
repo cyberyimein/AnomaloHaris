@@ -14,7 +14,7 @@
       "legacy_routes": ["POST /api/chat", "POST /api/chat/stream", "POST /api/chat/stop", "WS /ws/chat/{session_id}"],
       "node_routes": ["POST /api/chat", "POST /api/chat/stream", "POST /api/chat/stop", "WS /ws/chat/{session_id}"],
       "status": "partial",
-      "gaps": ["default preset model resolution", "provider encoded tool calls", "legacy response-shape parity"],
+      "gaps": ["default preset model resolution", "legacy response-shape parity"],
       "tests": ["apps/node-host/src/host.test.ts", "apps/node-host/src/core.test.ts"]
     },
     {
@@ -22,7 +22,7 @@
       "legacy_routes": ["GET /api/manage/agents", "POST /api/manage/agents", "PATCH /api/manage/agents/{agent_ref}", "POST /api/agents/{agent_ref}", "POST /api/agents/{agent_ref}/chat", "POST /api/agents/{agent_ref}/chat/stream"],
       "node_routes": ["GET /api/preset-models", "GET /api/manage/preset-models", "POST /api/manage/preset-models", "POST /api/manage/preset-models/{name}/versions/{version}/validate", "POST /api/manage/preset-models/{name}/versions/{version}/publish", "POST /api/manage/preset-models/{name}/versions/{version}/retire", "POST /api/preset-models/{name}/versions/{version}/runs", "POST /api/preset-models/{name}/versions/{version}/runs/stream", "POST /api/agents/{agent_ref}/chat", "POST /api/agents/{agent_ref}/chat/stream"],
       "status": "partial",
-      "gaps": ["legacy management alias intentionally not used by new UI", "provider encoded tool calls", "migration fixture"],
+      "gaps": ["legacy management alias intentionally not used by new UI", "migration fixture"],
       "tests": ["apps/node-host/src/preset-models.test.ts", "apps/node-host/src/compute-api.test.ts", "apps/node-host/src/host.test.ts"]
     },
     {
@@ -46,7 +46,7 @@
       "legacy_routes": ["GET /api/tools", "GET /api/models", "GET /api/openrouter/credits"],
       "node_routes": ["GET /api/tools", "GET /api/models", "GET /api/manage/providers", "GET /api/openrouter/credits"],
       "status": "partial",
-      "gaps": ["provider encoded tool calls", "credits require configured provider key", "DSML conformance"],
+      "gaps": ["credits require configured provider key", "DSML conformance"],
       "tests": ["apps/node-host/src/model.test.ts", "apps/node-host/src/host.test.ts"]
     },
     {
@@ -71,6 +71,8 @@
     "node_startup_is_not_completion": true,
     "real_provider_tool_call_required": true,
     "frontend_must_not_infer_missing_llm_fields": true,
-    "python_retirement_blocked_until_all_capabilities_are_green": true
+    "production_image_runtime": "node",
+    "python_runtime_is_not_a_production_dependency": true,
+    "optional_media_capabilities_do_not_block_core": true
   }
 }

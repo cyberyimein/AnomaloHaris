@@ -14,67 +14,34 @@ RUN npm ci --ignore-scripts
 COPY packages/contracts ./packages/contracts
 COPY apps/node-host ./apps/node-host
 COPY frontend ./frontend
+COPY agent-backend/config ./agent-backend/config
+COPY agent-backend/skills ./agent-backend/skills
 RUN npm run build --workspace @anomalo/contracts \
     && npm run build --workspace @anomalo/node-host \
     && npm run build --workspace frontend
 
-FROM python:3.12-slim AS runtime
+FROM node:22-bookworm-slim AS runtime
 
-ARG ANOMALO_INSTALL_EXTRAS=buddy,vision
-
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+ENV NODE_ENV=production \
     ANOMALO_ENV=production \
-    ANOMALO_RUNTIME_IMPL=python \
-    ANOMALO_BUDDY_AUDIO_AI_ENABLED=false \
-    ANOMALO_BUDDY_AUDIO_DEBUG_STORAGE=off \
     ANOMALO_ACKNOWLEDGE_PUBLIC_HOST=true \
-    ANOMALO_PYTHON_WORKER_AUTO_START=true \
-    ANOMALO_PYTHON_WORKER_URL=http://127.0.0.1:8849 \
     ANOMALO_DATA_DIR=/data \
-    PYTHON_SANDBOX_ENABLED=true \
-    FRUITSPY_PYTHON_TOOL_BASE_URL=http://127.0.0.1:8848
+    HOST=0.0.0.0 \
+    PORT=8000
 
 WORKDIR /app
 
 RUN mkdir -p /data
 
-RUN set -eux; \
-    apt_packages=""; \
-    case ",$ANOMALO_INSTALL_EXTRAS," in \
-        *,audio,*) apt_packages="$apt_packages ffmpeg libsndfile1" ;; \
-    esac; \
-    case ",$ANOMALO_INSTALL_EXTRAS," in \
-        *,vision,*) apt_packages="$apt_packages libgl1 libglib2.0-0" ;; \
-    esac; \
-    if [ -n "$apt_packages" ]; then \
-        apt-get update; \
-        apt-get install -y --no-install-recommends $apt_packages; \
-        rm -rf /var/lib/apt/lists/*; \
-    fi
-
-COPY pyproject.toml README.md ./
-COPY agent-backend ./agent-backend
-COPY buddy-backend ./buddy-backend
-COPY --from=frontend /src/agent-backend/app/frontend ./agent-backend/app/frontend
-
-RUN if [ -z "$ANOMALO_INSTALL_EXTRAS" ] || [ "$ANOMALO_INSTALL_EXTRAS" = "none" ]; then \
-        pip install --no-cache-dir .; \
-    else \
-        pip install --no-cache-dir ".[${ANOMALO_INSTALL_EXTRAS}]"; \
-    fi
-
-EXPOSE 8000 8787
-
-ENV PYTHONPATH=/app/agent-backend:/app/buddy-backend
-ENV HOST=0.0.0.0 \
-    PORT=8000
-
-COPY --from=frontend /usr/local/bin/node /usr/local/bin/node
-COPY --from=frontend /usr/local/lib/node_modules /usr/local/lib/node_modules
+COPY --from=frontend /src/package.json ./package.json
 COPY --from=frontend /src/node_modules ./node_modules
+COPY --from=frontend /src/apps/node-host/package.json ./apps/node-host/package.json
 COPY --from=frontend /src/apps/node-host/dist ./apps/node-host/dist
 COPY --from=frontend /src/packages/contracts ./packages/contracts
+COPY --from=frontend /src/agent-backend/app/frontend ./agent-backend/app/frontend
+COPY --from=frontend /src/agent-backend/config ./agent-backend/config
+COPY --from=frontend /src/agent-backend/skills ./agent-backend/skills
 
-CMD ["python", "agent-backend/scripts/start_host.py"]
+EXPOSE 8000
+
+CMD ["node", "apps/node-host/dist/main.js"]

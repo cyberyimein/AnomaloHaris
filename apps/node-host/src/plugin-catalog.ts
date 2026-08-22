@@ -217,14 +217,6 @@ export function builtinPluginCatalog(): PluginCatalog {
       compatibility: "L2",
       permissions: ["tools.register", "lifecycle.context", "lifecycle.run"],
     }),
-    createPluginManifest({
-      id: "python-worker",
-      version: "1.0.0",
-      package: "@anomalo/node-host",
-      entry: "builtin:python-worker",
-      compatibility: "L1",
-      permissions: ["tools.register"],
-    }),
   ]);
 }
 

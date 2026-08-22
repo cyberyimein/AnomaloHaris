@@ -15,4 +15,3 @@ export * from "./sqlite.js";
 export * from "./tools.js";
 export * from "./types.js";
 export * from "./web.js";
-export * from "./worker.js";
