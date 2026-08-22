@@ -39,10 +39,13 @@ export class AgentCore {
     const runSignal = AbortSignal.any([signal, AbortSignal.timeout(policy.runTimeoutMs)]);
     const session = await this.dependencies.sessions.open(input.sessionId);
     let checkpoint: SessionCheckpoint | undefined;
+    let resumedRunId: AgentRunInput["runId"] | undefined;
 
     if (input.resume) {
       try {
-        checkpoint = (await this.dependencies.sessions.resume(input.sessionId)).checkpoint;
+        const resumable = await this.dependencies.sessions.resume(input.sessionId);
+        checkpoint = resumable.checkpoint;
+        resumedRunId = resumable.runId;
       } catch {
         yield makeEvent("run.error", input, clock, {
           error: "No paused run is available for this session.",
@@ -78,17 +81,20 @@ export class AgentCore {
         return;
       }
     }
-    const effectiveResponseFormat = input.responseFormat ?? checkpoint?.state.responseFormat;
-    const effectiveTemperature = input.temperature ?? checkpoint?.state.temperature;
-    const effectiveAllowedToolNames = input.allowedToolNames
-      ?? (checkpoint?.state.allowedToolNames ? new Set(checkpoint.state.allowedToolNames) : undefined);
+    const effectiveResponseFormat = checkpoint ? checkpoint.state.responseFormat : input.responseFormat;
+    const effectiveTemperature = checkpoint?.state.temperature ?? input.temperature;
+    const effectiveAllowedToolNames = checkpoint?.state.allowedToolNames !== undefined
+      ? new Set(checkpoint.state.allowedToolNames)
+      : input.allowedToolNames;
+    const effectiveSystemPrompt = checkpoint?.state.systemPrompt ?? input.systemPrompt;
     const runInput: AgentRunInput = {
       ...input,
+      runId: resumedRunId ?? input.runId,
       model: checkpoint?.state.model ?? input.model,
       promptProfile: checkpoint?.state.promptProfile ?? input.promptProfile,
-      ...(input.systemPrompt === undefined && checkpoint?.state.systemPrompt === undefined
+      ...(effectiveSystemPrompt === undefined
         ? {}
-        : { systemPrompt: input.systemPrompt ?? checkpoint?.state.systemPrompt }),
+        : { systemPrompt: effectiveSystemPrompt }),
       searchMode: checkpoint?.state.searchMode ?? input.searchMode,
       ...(effectiveTemperature === undefined ? {} : { temperature: effectiveTemperature }),
       ...(effectiveResponseFormat ? { responseFormat: effectiveResponseFormat } : {}),
@@ -101,14 +107,17 @@ export class AgentCore {
         ? "Continue the interrupted task from the saved context."
         : originalUserContent,
     };
-    const loopMessages = structuredClone(checkpoint?.state.loopMessages ?? []);
+    const loopMessages = dropPersistedLoopMessages(
+      session.messages,
+      structuredClone(checkpoint?.state.loopMessages ?? []),
+    );
     const bootstrapContext = structuredClone(checkpoint?.state.bootstrapContext ?? []);
     let currentAssistantText = checkpoint?.state.assistantText ?? "";
     let iteration = checkpoint?.iteration ?? 0;
     let lastEntryId = session.activeLeafEntryId;
 
     await this.dependencies.sessions.beginRun({
-      runId: input.runId,
+      runId: runInput.runId,
       sessionId: input.sessionId,
       status: "active",
       ...(lastEntryId ? { lastEntryId } : {}),
@@ -125,9 +134,9 @@ export class AgentCore {
       const entryId = ids.entryId();
       await this.dependencies.sessions.append([{
         entryId,
-        sessionId: input.sessionId,
+        sessionId: runInput.sessionId,
         ...(lastEntryId ? { parentEntryId: lastEntryId } : {}),
-        runId: input.runId,
+        runId: runInput.runId,
         kind: "message",
         role: "user",
         payload: { content: currentUserMessage.content },
@@ -147,7 +156,7 @@ export class AgentCore {
         for (const [index, definition] of input.bootstrapTools.entries()) {
           yield makeEvent("tool.started", runInput, clock, {
             phase: "bootstrap",
-            tool_call_id: `bootstrap-${input.runId}-${index + 1}`,
+            tool_call_id: `bootstrap-${runInput.runId}-${index + 1}`,
             tool: definition.name,
             result_key: definition.resultKey ?? definition.name,
             arguments: definition.arguments ?? {},
@@ -168,7 +177,7 @@ export class AgentCore {
         bootstrapContext.push(...bootstrap.context);
         if (bootstrap.requiredFailure) {
           await this.dependencies.sessions.failRun({
-            runId: input.runId,
+            runId: runInput.runId,
             sessionId: input.sessionId,
             errorCode: "bootstrap_failed",
             ...(lastEntryId ? { lastEntryId } : {}),
@@ -263,6 +272,10 @@ export class AgentCore {
                   responseFormat: runInput.responseFormat,
                 };
                 finalText = await this.dependencies.model.complete(finalizerRequest, runSignal);
+                if (runSignal.aborted) {
+                  validationError = "Finalizer was interrupted.";
+                  break;
+                }
                 finalOutput = validateFinalOutput(finalText, runInput.responseFormat!);
                 outputFormat = runInput.responseFormat!.type;
                 finalizerSucceeded = true;
@@ -281,6 +294,24 @@ export class AgentCore {
               }
             }
             if (!finalizerSucceeded) {
+              if (runSignal.aborted) {
+                await this.saveCheckpoint(
+                  runInput,
+                  currentUserMessage,
+                  originalUserContent,
+                  currentAssistantText,
+                  [],
+                  loopMessages,
+                  bootstrapContext,
+                  iteration,
+                  clock,
+                  runSignalTimeout(runSignal) ? "run_timeout" : "stopped",
+                );
+                yield runSignalTimeout(runSignal)
+                  ? makeEvent("run.error", runInput, clock, { error: "Agent run timed out.", error_code: "run_timeout", checkpointed: true, can_resume: true })
+                  : makeEvent("run.stopped", runInput, clock, { reason: runSignal.reason === "disconnect" ? "disconnect" : "user_stop", checkpointed: true, can_resume: true });
+                return;
+              }
               await this.saveCheckpoint(
                 runInput,
                 currentUserMessage,
@@ -296,7 +327,7 @@ export class AgentCore {
               const errorCode = runSignalTimeout(runSignal)
                 ? "run_timeout"
                 : validationError?.startsWith("Finalizer output") ? "structured_output_invalid" : "finalizer_failed";
-              await this.dependencies.sessions.failRun({ runId: input.runId, sessionId: input.sessionId, errorCode, ...(lastEntryId ? { lastEntryId } : {}), endedAt: clock.now() });
+              await this.dependencies.sessions.failRun({ runId: runInput.runId, sessionId: runInput.sessionId, errorCode, ...(lastEntryId ? { lastEntryId } : {}), endedAt: clock.now() });
               yield makeEvent("run.error", runInput, clock, { error: validationError ?? "Finalizer failed.", error_code: errorCode, can_resume: true });
               return;
             }
@@ -304,7 +335,7 @@ export class AgentCore {
 
           lastEntryId = await appendLoopMessages(this.dependencies.sessions, runInput, loopMessages, lastEntryId, ids, clock);
           lastEntryId = await appendAssistant(this.dependencies.sessions, runInput, finalText, lastEntryId, ids, clock);
-          await this.dependencies.sessions.finishRun({ runId: input.runId, sessionId: input.sessionId, ...(lastEntryId ? { lastEntryId } : {}), endedAt: clock.now() });
+          await this.dependencies.sessions.finishRun({ runId: runInput.runId, sessionId: runInput.sessionId, ...(lastEntryId ? { lastEntryId } : {}), endedAt: clock.now() });
           if (isStructured(runInput)) yield makeEvent("message.delta", runInput, clock, { content: finalText });
           yield makeEvent("message.done", runInput, clock, {});
           yield makeEvent("run.finished", runInput, clock, { final_text: finalText, output: finalOutput, output_format: outputFormat });
@@ -316,10 +347,19 @@ export class AgentCore {
           const contextForTool = toolContext(runInput, call.id);
           yield makeEvent("tool.started", runInput, clock, { tool_call_id: call.id, tool: call.name, arguments: call.arguments });
           let result: ToolResult;
-          try {
-            result = await this.dependencies.tools.call(call, contextForTool, runSignal);
-          } catch (error) {
-            result = { name: call.name, ok: false, content: error instanceof Error ? error.message : String(error), data: { error_type: "ToolError" } };
+          if (runInput.allowedToolNames && !runInput.allowedToolNames.has(call.name)) {
+            result = {
+              name: call.name,
+              ok: false,
+              content: `Tool is not enabled for this run: ${call.name}`,
+              data: { error_code: "tool_not_allowed" },
+            };
+          } else {
+            try {
+              result = await this.dependencies.tools.call(call, contextForTool, runSignal);
+            } catch (error) {
+              result = { name: call.name, ok: false, content: error instanceof Error ? error.message : String(error), data: { error_type: "ToolError" } };
+            }
           }
           loopMessages.push({ role: "tool", tool_call_id: call.id, name: call.name, content: result.content });
           yield makeEvent(result.ok ? "tool.finished" : "tool.error", runInput, clock, { tool_call_id: call.id, tool: call.name, ok: result.ok, content: result.content, data: result.data });
@@ -335,7 +375,7 @@ export class AgentCore {
       }
 
       lastEntryId = await appendLoopMessages(this.dependencies.sessions, runInput, loopMessages, lastEntryId, ids, clock);
-      await this.dependencies.sessions.failRun({ runId: input.runId, sessionId: input.sessionId, errorCode: "max_tool_iterations", ...(lastEntryId ? { lastEntryId } : {}), endedAt: clock.now() });
+      await this.dependencies.sessions.failRun({ runId: runInput.runId, sessionId: runInput.sessionId, errorCode: "max_tool_iterations", ...(lastEntryId ? { lastEntryId } : {}), endedAt: clock.now() });
       yield makeEvent("run.error", runInput, clock, { error: "Maximum tool iterations reached.", error_code: "max_tool_iterations", can_resume: false });
     } catch (error) {
       if (runSignal.aborted) {
@@ -346,7 +386,7 @@ export class AgentCore {
         return;
       }
       await this.saveCheckpoint(runInput, currentUserMessage, originalUserContent, currentAssistantText, [], loopMessages, bootstrapContext, iteration, clock, "model_failed");
-      await this.dependencies.sessions.failRun({ runId: input.runId, sessionId: input.sessionId, errorCode: "model_failed", ...(lastEntryId ? { lastEntryId } : {}), endedAt: clock.now() });
+      await this.dependencies.sessions.failRun({ runId: runInput.runId, sessionId: runInput.sessionId, errorCode: "model_failed", ...(lastEntryId ? { lastEntryId } : {}), endedAt: clock.now() });
       yield makeEvent("run.error", runInput, clock, { error: error instanceof Error ? error.message : String(error), error_code: "model_failed", can_resume: true });
     }
   }
@@ -532,6 +572,18 @@ function bootstrapMessages(context: Record<string, unknown>[]): ModelMessage[] {
     role: "system",
     content: `Authoritative runtime context captured at the start of this run. Use these values directly; do not call a tool to rediscover them:\n${JSON.stringify(context)}`,
   }];
+}
+
+function dropPersistedLoopMessages(
+  persistedMessages: ModelMessage[],
+  loopMessages: ModelMessage[],
+): ModelMessage[] {
+  if (loopMessages.length === 0 || persistedMessages.length < loopMessages.length) return loopMessages;
+  const offset = persistedMessages.length - loopMessages.length;
+  const alreadyPersisted = loopMessages.every((message, index) => (
+    JSON.stringify(persistedMessages[offset + index]) === JSON.stringify(message)
+  ));
+  return alreadyPersisted ? [] : loopMessages;
 }
 
 function isStructured(input: AgentRunInput): boolean {

@@ -7,12 +7,15 @@ WORKDIR /src
 COPY package.json package-lock.json tsconfig.base.json ./
 COPY frontend/package.json ./frontend/package.json
 COPY packages/contracts/package.json packages/contracts/tsconfig.json ./packages/contracts/
+COPY apps/node-host/package.json apps/node-host/tsconfig.json ./apps/node-host/
 
 RUN npm ci --ignore-scripts
 
 COPY packages/contracts ./packages/contracts
+COPY apps/node-host ./apps/node-host
 COPY frontend ./frontend
 RUN npm run build --workspace @anomalo/contracts \
+    && npm run build --workspace @anomalo/node-host \
     && npm run build --workspace frontend
 
 FROM python:3.12-slim AS runtime
@@ -61,5 +64,13 @@ RUN if [ -z "$ANOMALO_INSTALL_EXTRAS" ] || [ "$ANOMALO_INSTALL_EXTRAS" = "none" 
 EXPOSE 8000 8787
 
 ENV PYTHONPATH=/app/agent-backend:/app/buddy-backend
+ENV HOST=0.0.0.0 \
+    PORT=8000
+
+COPY --from=frontend /usr/local/bin/node /usr/local/bin/node
+COPY --from=frontend /usr/local/lib/node_modules /usr/local/lib/node_modules
+COPY --from=frontend /src/node_modules ./node_modules
+COPY --from=frontend /src/apps/node-host/dist ./apps/node-host/dist
+COPY --from=frontend /src/packages/contracts ./packages/contracts
 
 CMD ["python", "agent-backend/scripts/start_host.py"]

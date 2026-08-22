@@ -130,6 +130,85 @@ describe("SqliteSessionAdapter", () => {
     adapter.close();
   });
 
+  it("normalizes Python v2 checkpoint fields for Node resume", async () => {
+    const adapter = new SqliteSessionAdapter(":memory:", { clock });
+    await adapter.open("python-checkpoint" as SessionId);
+    adapter.db.prepare(
+      "INSERT INTO runs(run_id, session_id, status, config_json, started_at) VALUES (?, ?, 'paused', '{}', ?)",
+    ).run("python-run", "python-checkpoint", clock.now());
+    adapter.db.prepare(
+      `INSERT INTO run_checkpoints(
+        run_id, session_id, reason, iteration, state_json, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      "python-run",
+      "python-checkpoint",
+      "user_stop",
+      2,
+      JSON.stringify({
+        messages: [
+          { role: "user", content: "hello" },
+          { role: "assistant", content: "partial" },
+        ],
+        prompt_profile: "agent",
+        user_content: "hello",
+        response_format: { type: "json_object" },
+        bootstrap_context: [{ key: "time", result: "now" }],
+      }),
+      clock.now(),
+      clock.now(),
+    );
+
+    const checkpoint = (await adapter.resume("python-checkpoint" as SessionId)).checkpoint;
+    expect(checkpoint.state.promptProfile).toBe("agent");
+    expect(checkpoint.state.originalUserContent).toBe("hello");
+    expect(checkpoint.state.responseFormat).toEqual({ type: "json_object" });
+    expect(checkpoint.state.bootstrapContext).toEqual([{ key: "time", result: "now" }]);
+    expect(checkpoint.state.loopMessages).toEqual([{ role: "assistant", content: "partial" }]);
+    adapter.close();
+  });
+
+  it("reports malformed legacy JSON without creating a migrated session", () => {
+    const directory = mkdtempSync(join(tmpdir(), "anomalo-session-v2-invalid-"));
+    tempDirectories.push(directory);
+    const dbPath = join(directory, "sessions.sqlite");
+    const legacy = new DatabaseSync(dbPath);
+    legacy.exec(`
+      CREATE TABLE sessions (
+        session_id TEXT PRIMARY KEY,
+        messages_json TEXT NOT NULL,
+        active_skills_json TEXT NOT NULL,
+        active_mcp_servers_json TEXT NOT NULL,
+        web_traces_json TEXT NOT NULL,
+        checkpoint_json TEXT,
+        search_mode TEXT NOT NULL,
+        title TEXT NOT NULL,
+        message_count INTEGER NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    `);
+    legacy.prepare("INSERT INTO sessions VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)").run(
+      "invalid-session",
+      "{not-json",
+      "[]",
+      "[]",
+      "[]",
+      "diy",
+      "Invalid",
+      1,
+      clock.now(),
+    );
+    legacy.close();
+
+    const dryRun = migrateLegacyDatabase(dbPath, { dryRun: true, clock });
+    expect(dryRun.errors).toEqual([{ sessionId: "invalid-session", error: expect.stringContaining("messages_json") }]);
+    const report = migrateLegacyDatabase(dbPath, { clock });
+    expect(report.errors).toEqual([{ sessionId: "invalid-session", error: expect.stringContaining("messages_json") }]);
+    const verify = new DatabaseSync(dbPath);
+    expect(verify.prepare("SELECT 1 FROM agent_sessions WHERE session_id = ?").get("invalid-session")).toBeUndefined();
+    verify.close();
+  });
+
   it("reports a non-mutating dry run before migrating legacy rows", () => {
     const directory = mkdtempSync(join(tmpdir(), "anomalo-session-v2-dry-"));
     tempDirectories.push(directory);

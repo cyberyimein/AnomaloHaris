@@ -49,7 +49,7 @@ const app = await buildNodeHost({
   logger: process.env.ANOMALO_ENV !== "test",
 });
 
-const port = Number(process.env.PORT ?? "8788");
+const port = Number(process.env.PORT ?? "8000");
 const host = process.env.HOST ?? "127.0.0.1";
 await app.listen({ port, host });
 

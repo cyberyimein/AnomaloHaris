@@ -105,7 +105,7 @@ export type SessionCheckpoint = {
     bootstrapContext: Record<string, unknown>[];
     responseFormat?: ResponseFormat | undefined;
     allowedToolNames?: string[] | undefined;
-    model: string;
+    model?: string;
     temperature?: number | undefined;
     searchMode: SearchMode;
   };

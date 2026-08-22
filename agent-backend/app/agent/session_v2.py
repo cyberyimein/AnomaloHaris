@@ -8,8 +8,8 @@ API handlers.
 
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import sqlite3
 import threading
 from copy import deepcopy
@@ -560,8 +560,12 @@ class SessionV2Store:
         ).fetchone():
             return
         now = str(row["updated_at"] or _now())
-        checkpoint = _nullable_object(row["checkpoint_json"])
-        messages = _array(checkpoint.get("messages")) if checkpoint is not None else _array(row["messages_json"])
+        checkpoint = _strict_nullable_object(row["checkpoint_json"], "checkpoint_json")
+        messages = (
+            _strict_array(checkpoint.get("messages"), "checkpoint.messages")
+            if checkpoint is not None
+            else _strict_array(row["messages_json"], "messages_json")
+        )
         with self._connection:
             self._connection.execute(
                 """
@@ -585,8 +589,18 @@ class SessionV2Store:
             self._connection.executemany(
                 "INSERT INTO session_resources(session_id, resource_type, resource_name, active) VALUES (?, ?, ?, 1)",
                 [
-                    *[(session_id, "skill", name) for name in _string_list(row["active_skills_json"])],
-                    *[(session_id, "mcp", name) for name in _string_list(row["active_mcp_servers_json"])],
+                    *[
+                        (session_id, "skill", name)
+                        for name in _strict_string_list(
+                            row["active_skills_json"], "active_skills_json"
+                        )
+                    ],
+                    *[
+                        (session_id, "mcp", name)
+                        for name in _strict_string_list(
+                            row["active_mcp_servers_json"], "active_mcp_servers_json"
+                        )
+                    ],
                 ],
             )
             parent: str | None = None
@@ -617,10 +631,14 @@ class SessionV2Store:
             if checkpoint is not None:
                 run_id = str(checkpoint.get("run_id") or f"legacy-run-{session_id}")
                 state = {
-                    "messages": _array(checkpoint.get("messages")),
+                    "legacy_messages": _strict_array(
+                        checkpoint.get("messages"), "checkpoint.messages"
+                    ),
                     "prompt_profile": str(checkpoint.get("prompt_profile") or "agent"),
                     "user_content": str(checkpoint.get("user_content") or ""),
-                    "bootstrap_context": _array(checkpoint.get("bootstrap_context")),
+                    "bootstrap_context": _strict_array(
+                        checkpoint.get("bootstrap_context"), "checkpoint.bootstrap_context"
+                    ),
                     **(
                         {"response_format": deepcopy(checkpoint["response_format"])}
                         if checkpoint.get("response_format") is not None
@@ -650,7 +668,7 @@ class SessionV2Store:
                         now,
                     ),
                 )
-            for trace in _array(row["web_traces_json"]):
+            for trace in _strict_array(row["web_traces_json"], "web_traces_json"):
                 if not isinstance(trace, dict):
                     continue
                 trace_id = str(trace.get("id") or f"legacy-trace-{uuid4().hex}")
@@ -673,7 +691,12 @@ class SessionV2Store:
 
 def _checkpoint_from_row(row: sqlite3.Row) -> SessionCheckpoint:
     state = _object(row["state_json"])
-    messages = _array(state.get("messages") or state.get("loopMessages"))
+    messages = _array(
+        state.get("messages")
+        or state.get("legacy_messages")
+        or state.get("legacyMessages")
+        or state.get("loopMessages")
+    )
     prompt_profile = str(state.get("prompt_profile") or state.get("promptProfile") or "agent")
     user_content = str(state.get("user_content") or state.get("originalUserContent") or "")
     bootstrap_context = _array(state.get("bootstrap_context") or state.get("bootstrapContext"))
@@ -735,11 +758,20 @@ def _object(value: Any) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def _nullable_object(value: Any) -> dict[str, Any] | None:
+def _strict_nullable_object(value: Any, field: str) -> dict[str, Any] | None:
     if value in (None, ""):
         return None
-    parsed = _object(value)
-    return parsed or None
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str):
+        raise ValueError(f"Invalid {field}: expected a JSON object.")
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid {field}: {exc.msg}") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError(f"Invalid {field}: expected a JSON object.")
+    return parsed
 
 
 def _array(value: Any) -> list[Any]:
@@ -754,5 +786,25 @@ def _array(value: Any) -> list[Any]:
     return parsed if isinstance(parsed, list) else []
 
 
+def _strict_array(value: Any, field: str) -> list[Any]:
+    if value in (None, ""):
+        return []
+    if isinstance(value, list):
+        return value
+    if not isinstance(value, str):
+        raise ValueError(f"Invalid {field}: expected a JSON array.")
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid {field}: {exc.msg}") from exc
+    if not isinstance(parsed, list):
+        raise ValueError(f"Invalid {field}: expected a JSON array.")
+    return parsed
+
+
 def _string_list(value: Any) -> list[str]:
     return [str(item) for item in _array(value) if isinstance(item, str)]
+
+
+def _strict_string_list(value: Any, field: str) -> list[str]:
+    return [str(item) for item in _strict_array(value, field) if isinstance(item, str)]

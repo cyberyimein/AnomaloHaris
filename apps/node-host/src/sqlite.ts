@@ -10,13 +10,16 @@ import { randomIds, type IdFactory } from "./ids.js";
 import type {
   FailedRunRecord,
   FinishedRunRecord,
+  ModelMessage,
   NewRunRecord,
   NewSessionEntry,
   ResumableRun,
+  ResponseFormat,
   SessionCheckpoint,
   SessionListQuery,
   SessionSnapshot,
   SessionSummary,
+  ToolCall,
 } from "./types.js";
 import type { SessionRepository } from "./session.js";
 
@@ -127,6 +130,7 @@ export class SqliteSessionAdapter implements SessionRepository {
     this.clock = options.clock ?? systemClock;
     this.ids = options.ids ?? randomIds;
     this.db.exec("PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;");
+    if (dbPath !== ":memory:") this.db.exec("PRAGMA journal_mode = DELETE;");
     initializeSessionV2Database(this.db, this.clock);
   }
 
@@ -491,7 +495,17 @@ export function migrateLegacyDatabase(
       errors: [],
       sourceHash: hashJson(rows),
     };
-    if (dryRun) return report;
+    if (dryRun) {
+      for (const row of rows) {
+        const sessionId = String(row.session_id);
+        try {
+          validateLegacyRow(row);
+        } catch (error) {
+          report.errors.push({ sessionId, error: error instanceof Error ? error.message : String(error) });
+        }
+      }
+      return report;
+    }
     initializeSessionV2Database(db, clock);
     for (const row of rows) {
       const sessionId = String(row.session_id);
@@ -522,8 +536,7 @@ function migrateLegacySession(db: DatabaseSync, sessionId: SessionId, clock: Clo
 function migrateLegacyRow(db: DatabaseSync, row: Row, clock: Clock): void {
   const sessionId = String(row.session_id);
   const now = String(row.updated_at || clock.now());
-  const checkpoint = parseNullableObject(row.checkpoint_json);
-  const messages = checkpoint ? parseArray(checkpoint.messages) : parseArray(row.messages_json);
+  const { checkpoint, messages } = validateLegacyRow(row);
   db.exec("BEGIN IMMEDIATE");
   try {
     db.prepare(`
@@ -545,8 +558,8 @@ function migrateLegacyRow(db: DatabaseSync, row: Row, clock: Clock): void {
     const insertResource = db.prepare(
       "INSERT INTO session_resources(session_id, resource_type, resource_name, active) VALUES (?, ?, ?, 1)",
     );
-    for (const name of parseStringArray(row.active_skills_json)) insertResource.run(sessionId, "skill", name);
-    for (const name of parseStringArray(row.active_mcp_servers_json)) insertResource.run(sessionId, "mcp", name);
+    for (const name of parseStringArrayStrict(row.active_skills_json, "active_skills_json")) insertResource.run(sessionId, "skill", name);
+    for (const name of parseStringArrayStrict(row.active_mcp_servers_json, "active_mcp_servers_json")) insertResource.run(sessionId, "mcp", name);
     let parent: string | null = null;
     for (const [index, message] of messages.entries()) {
       if (!message || typeof message !== "object") continue;
@@ -561,7 +574,7 @@ function migrateLegacyRow(db: DatabaseSync, row: Row, clock: Clock): void {
     db.prepare("UPDATE agent_sessions SET active_leaf_entry_id = ? WHERE session_id = ?").run(parent, sessionId);
     if (checkpoint) {
       const runId = String(checkpoint.run_id || `legacy-run-${sessionId}`);
-      const checkpointMessages = parseArray(checkpoint.messages);
+      const checkpointMessages = parseArrayStrict(checkpoint.messages, "checkpoint.messages");
       db.prepare(`
         INSERT INTO runs(run_id, session_id, status, last_entry_id, config_json, started_at)
         VALUES (?, ?, 'paused', ?, '{}', ?)
@@ -583,7 +596,7 @@ function migrateLegacyRow(db: DatabaseSync, row: Row, clock: Clock): void {
           completedToolCallIds: [],
           loopMessages: [],
           legacyMessages: checkpointMessages,
-          bootstrapContext: parseArray(checkpoint.bootstrap_context),
+          bootstrapContext: parseArrayStrict(checkpoint.bootstrap_context, "checkpoint.bootstrap_context"),
           ...(checkpoint.response_format ? { responseFormat: checkpoint.response_format } : {}),
           model: "legacy",
           searchMode: String(row.search_mode || "diy"),
@@ -592,7 +605,7 @@ function migrateLegacyRow(db: DatabaseSync, row: Row, clock: Clock): void {
         now,
       );
     }
-    for (const trace of parseArray(row.web_traces_json)) {
+    for (const trace of parseArrayStrict(row.web_traces_json, "web_traces_json")) {
       if (!trace || typeof trace !== "object") continue;
       const payload = trace as Record<string, unknown>;
       const traceId = typeof payload.id === "string" ? payload.id : `legacy-trace-${hashJson(payload).slice(0, 24)}`;
@@ -608,16 +621,118 @@ function migrateLegacyRow(db: DatabaseSync, row: Row, clock: Clock): void {
   }
 }
 
+function validateLegacyRow(row: Row): {
+  checkpoint: Record<string, unknown> | undefined;
+  messages: unknown[];
+} {
+  const checkpoint = parseNullableObjectStrict(row.checkpoint_json, "checkpoint_json");
+  const messages = checkpoint
+    ? parseArrayStrict(checkpoint.messages, "checkpoint.messages")
+    : parseArrayStrict(row.messages_json, "messages_json");
+  parseStringArrayStrict(row.active_skills_json, "active_skills_json");
+  parseStringArrayStrict(row.active_mcp_servers_json, "active_mcp_servers_json");
+  if (checkpoint) {
+    parseArrayStrict(checkpoint.messages, "checkpoint.messages");
+    parseArrayStrict(checkpoint.bootstrap_context, "checkpoint.bootstrap_context");
+  }
+  parseArrayStrict(row.web_traces_json, "web_traces_json");
+  return { checkpoint, messages };
+}
+
 function checkpointFromRow(row: Row): SessionCheckpoint {
+  const raw = parseObject(row.state_json);
+  const legacyMessages = raw.legacyMessages ?? raw.legacy_messages;
+  const rawMessages = parseModelMessages(raw.messages ?? legacyMessages);
+  const explicitLoopMessages = raw.loopMessages ?? raw.loop_messages;
+  const loopMessages = Array.isArray(explicitLoopMessages)
+    ? parseModelMessages(explicitLoopMessages)
+    : legacyMessages === undefined
+      ? inferLoopMessages(rawMessages)
+      : [];
+  const responseFormat = parseResponseFormat(raw.responseFormat ?? raw.response_format);
+  const model = typeof raw.model === "string" && raw.model !== "legacy" ? raw.model : undefined;
+  const systemPrompt = stringValue(raw.systemPrompt ?? raw.system_prompt);
+  const allowedToolNames = parseStringArray(raw.allowedToolNames ?? raw.allowed_tool_names);
   return {
     runId: row.run_id as RunId,
     sessionId: row.session_id as SessionId,
     reason: String(row.reason),
     iteration: Number(row.iteration),
-    state: parseObject(row.state_json) as SessionCheckpoint["state"],
+    state: {
+      promptProfile: stringValue(raw.promptProfile ?? raw.prompt_profile) ?? "agent",
+      ...(systemPrompt === undefined ? {} : { systemPrompt }),
+      originalUserContent: stringValue(
+        raw.originalUserContent ?? raw.original_user_content ?? raw.user_content,
+      ) ?? "",
+      currentUserMessage: parseCurrentUserMessage(raw.currentUserMessage ?? raw.current_user_message),
+      assistantText: stringValue(raw.assistantText ?? raw.assistant_text) ?? "",
+      pendingToolCalls: parseToolCalls(raw.pendingToolCalls ?? raw.pending_tool_calls),
+      completedToolCallIds: parseStringArray(raw.completedToolCallIds ?? raw.completed_tool_call_ids),
+      loopMessages,
+      bootstrapContext: parseRecordArray(raw.bootstrapContext ?? raw.bootstrap_context),
+      ...(responseFormat === undefined ? {} : { responseFormat }),
+      ...(allowedToolNames.length === 0 && raw.allowedToolNames === undefined && raw.allowed_tool_names === undefined
+        ? {}
+        : { allowedToolNames }),
+      ...(model === undefined ? {} : { model }),
+      ...(typeof raw.temperature === "number" ? { temperature: raw.temperature } : {}),
+      searchMode: stringValue(raw.searchMode ?? raw.search_mode) ?? "diy",
+    },
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
+}
+
+function inferLoopMessages(messages: ModelMessage[]): ModelMessage[] {
+  let lastUserIndex = -1;
+  for (let index = 0; index < messages.length; index += 1) {
+    if (messages[index]?.role === "user") lastUserIndex = index;
+  }
+  return lastUserIndex < 0 ? messages : messages.slice(lastUserIndex + 1);
+}
+
+function parseCurrentUserMessage(value: unknown): ModelMessage {
+  const messages = parseModelMessages([value]);
+  return messages[0] ?? { role: "user", content: "Continue the interrupted task from the saved context." };
+}
+
+function parseModelMessages(value: unknown): ModelMessage[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!isRecord(item)) return [];
+    const role = item.role;
+    if (role !== "system" && role !== "user" && role !== "assistant" && role !== "tool") return [];
+    return [{
+      ...item,
+      role,
+      content: typeof item.content === "string" ? item.content : "",
+    } as ModelMessage];
+  });
+}
+
+function parseToolCalls(value: unknown): ToolCall[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!isRecord(item) || typeof item.id !== "string" || typeof item.name !== "string") return [];
+    const argumentsValue = isRecord(item.arguments) ? item.arguments : {};
+    return [{ id: item.id, name: item.name, arguments: argumentsValue } as ToolCall];
+  });
+}
+
+function parseRecordArray(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.filter(isRecord) : [];
+}
+
+function parseResponseFormat(value: unknown): ResponseFormat | undefined {
+  return isRecord(value) && typeof value.type === "string" ? value as ResponseFormat : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, any> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
 }
 
 function legacyTableExists(db: DatabaseSync): boolean {
@@ -637,10 +752,17 @@ function parseObject(value: unknown): Record<string, unknown> {
   }
 }
 
-function parseNullableObject(value: unknown): Record<string, unknown> | undefined {
+function parseNullableObjectStrict(value: unknown, field: string): Record<string, unknown> | undefined {
   if (value === null || value === undefined || value === "") return undefined;
-  const parsed = parseObject(value);
-  return Object.keys(parsed).length > 0 ? parsed : undefined;
+  if (isRecord(value)) return value;
+  if (typeof value !== "string") throw new Error(`Invalid ${field}: expected a JSON object.`);
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!isRecord(parsed)) throw new Error("expected a JSON object");
+    return parsed;
+  } catch (error) {
+    throw new Error(`Invalid ${field}: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 function parseArray(value: unknown): unknown[] {
@@ -654,8 +776,25 @@ function parseArray(value: unknown): unknown[] {
   }
 }
 
+function parseArrayStrict(value: unknown, field: string): unknown[] {
+  if (Array.isArray(value)) return value;
+  if (value === null || value === undefined || value === "") return [];
+  if (typeof value !== "string") throw new Error(`Invalid ${field}: expected a JSON array.`);
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!Array.isArray(parsed)) throw new Error("expected a JSON array");
+    return parsed;
+  } catch (error) {
+    throw new Error(`Invalid ${field}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 function parseStringArray(value: unknown): string[] {
   return parseArray(value).filter((item): item is string => typeof item === "string");
+}
+
+function parseStringArrayStrict(value: unknown, field: string): string[] {
+  return parseArrayStrict(value, field).filter((item): item is string => typeof item === "string");
 }
 
 function stringOrNull(value: unknown): string | null {
