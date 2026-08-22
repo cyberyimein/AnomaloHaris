@@ -27,7 +27,7 @@
             type="button"
             @click="setActiveView('preset-agents')"
           >
-            Preset Agents
+            Preset Models
           </button>
           <button
             class="nav-tab"
@@ -35,7 +35,7 @@
             type="button"
             @click="setActiveView('dashboard')"
           >
-            Dashboard
+            Plugins
           </button>
         </nav>
 
@@ -76,7 +76,6 @@
             type="button"
             title="Refresh dashboard"
             aria-label="Refresh dashboard"
-            :disabled="buddyActionInFlight"
             @click="refreshDashboard"
           >
             <RefreshCw :size="17" />
@@ -290,13 +289,9 @@
         @save-management-token="saveManagementToken"
       />
 
-      <BuddyDashboard
+      <CapabilityDashboard
         v-else-if="activeView === 'dashboard'"
-        :controller="buddyDashboard"
-        :management="managementAccess"
-        :model-settings="modelSettings"
-        @save-management-token="saveManagementToken"
-        @clear-management-token="clearManagementToken"
+        ref="capabilityDashboardEl"
       />
 
       <form
@@ -309,7 +304,7 @@
           <div v-if="presetMode" class="composer-preset-bar">
             <div class="composer-preset-heading">
               <Bot :size="16" />
-              <span>Preset Agent</span>
+              <span>Preset Model</span>
             </div>
             <div ref="presetPickerEl" class="composer-preset-picker">
               <button
@@ -318,7 +313,7 @@
                 role="combobox"
                 aria-haspopup="listbox"
                 aria-controls="presetAgentOptions"
-                aria-label="Select preset agent"
+                aria-label="Select preset model"
                 :aria-expanded="presetPickerOpen"
                 :disabled="chatRunActive || presetAgentsLoading"
                 @click="presetPickerOpen = !presetPickerOpen"
@@ -331,7 +326,7 @@
                   <span v-if="selectedPresetAgent" class="composer-preset-selected-ghost">
                     {{ selectedPresetAgent.ghost || "👻" }}
                   </span>
-                  <span>{{ selectedPresetAgent?.name || "Select a preset agent…" }}</span>
+                  <span>{{ selectedPresetAgent?.name || "Select a preset model…" }}</span>
                 </span>
                 <ChevronDown :size="16" aria-hidden="true" />
               </button>
@@ -341,10 +336,10 @@
                   id="presetAgentOptions"
                   class="composer-preset-options"
                   role="listbox"
-                  aria-label="Preset agents"
+                  aria-label="Preset models"
                 >
                   <div v-if="!presetAgents.length" class="composer-preset-empty">
-                    {{ presetAgentsError || "No preset agents yet." }}
+                    {{ presetAgentsError || "No preset models yet." }}
                   </div>
                   <button
                     v-for="agent in presetAgents"
@@ -372,19 +367,19 @@
             <button
               class="composer-preset-close"
               type="button"
-              title="Exit preset agent mode"
-              aria-label="Exit preset agent mode"
+              title="Exit preset model mode"
+              aria-label="Exit preset model mode"
               :disabled="chatRunActive"
               @click="closePresetMode"
             >
               <X :size="16" />
             </button>
-            <p v-if="presetAgentsLoading" class="composer-preset-note">Loading preset agents…</p>
+            <p v-if="presetAgentsLoading" class="composer-preset-note">Loading preset models…</p>
             <p v-else-if="presetAgentsError" class="composer-preset-note error">
               {{ presetAgentsError }}
             </p>
             <p v-else-if="!presetAgents.length" class="composer-preset-note">
-              No preset agents yet. Create one in Preset Agents.
+              No preset models yet. Create one in Preset Models.
             </p>
             <p v-else-if="selectedPresetAgent" class="composer-preset-note">
               {{ selectedPresetAgent.description || selectedPresetAgent.model }}
@@ -414,7 +409,7 @@
                 </button>
                 <button class="composer-action-item" type="button" @click="openPresetPicker">
                   <Bot :size="16" />
-                  <span>Use Preset Agent</span>
+                  <span>Use Preset Model</span>
                 </button>
               </div>
             </Transition>
@@ -1030,10 +1025,8 @@ import {
 import { createAgentTransport } from "./agent/agentTransport";
 import { createPresetAgentTransport } from "./agent/presetAgentTransport";
 import anomaloIconUrl from "./assets/anomalo-shrimp.png";
-import BuddyDashboard from "./dashboard/BuddyDashboard.vue";
-import { createBuddyDashboardController } from "./dashboard/buddyDashboardController";
+import CapabilityDashboard from "./dashboard/CapabilityDashboard.vue";
 import { createManagementAccess } from "./management/managementAccess";
-import { createModelSettingsController } from "./management/modelSettingsController";
 import { createSearchModeController } from "./management/searchModeController";
 import PresetAgents from "./preset-agents/PresetAgents.vue";
 
@@ -1046,29 +1039,11 @@ const historyOpen = ref(false);
 const composerActionsOpen = ref(false);
 const activeView = ref("agent");
 const presetAgentsEl = ref(null);
+const capabilityDashboardEl = ref(null);
 const managementAccess = createManagementAccess();
-const {
-  input: managementTokenInput,
-  accessRequired: managementAccessRequired,
-} = managementAccess.state;
+const { input: managementTokenInput } = managementAccess.state;
 const fetchJson = managementAccess.requestJson;
-const markManagementAccessError = managementAccess.markError;
-const buddyDashboard = createBuddyDashboardController({
-  requestJson: fetchJson,
-  markAccessError: markManagementAccessError,
-  clearAccessError: () => {
-    managementAccessRequired.value = false;
-  },
-});
-const { actionInFlight: buddyActionInFlight } = buddyDashboard.state;
-const refreshDashboard = buddyDashboard.refresh;
-const modelSettings = createModelSettingsController({
-  requestJson: fetchJson,
-  markAccessError: markManagementAccessError,
-  clearAccessError: () => {
-    managementAccessRequired.value = false;
-  },
-});
+const refreshDashboard = () => capabilityDashboardEl.value?.refresh();
 
 const tools = ref([]);
 const historySessions = ref([]);
@@ -1225,7 +1200,7 @@ const composerPlaceholder = computed(() => {
     return `Message ${selectedPresetAgent.value.name}`;
   }
   if (presetMode.value) {
-    return "Select a preset agent";
+    return "Select a preset model";
   }
   return "Message Anomalo";
 });
@@ -1370,10 +1345,8 @@ function handleAgentEventAndRefresh(event) {
 function saveManagementToken() {
   const nextToken = managementTokenInput.value.trim();
   managementAccess.save();
-  buddyDashboard.notify(nextToken ? "Admin token saved." : "Admin token cleared.");
   if (activeView.value === "dashboard") {
     void refreshDashboard();
-    void modelSettings.load();
   }
   if (activeView.value === "preset-agents") {
     void presetAgentsEl.value?.refresh();
@@ -1382,7 +1355,6 @@ function saveManagementToken() {
 
 function clearManagementToken() {
   managementAccess.clear();
-  buddyDashboard.notify("Admin token cleared.");
   if (activeView.value === "dashboard") {
     void refreshDashboard();
   }
@@ -1396,12 +1368,23 @@ async function loadPresetAgents() {
     presetAgentsLoading.value = true;
     presetAgentsError.value = "";
     try {
-      const response = await fetch("/api/agents");
+      const response = await fetch("/api/preset-models");
       const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.detail || "Preset agents failed to load.");
+        throw new Error(data.detail || "Preset models failed to load.");
       }
-      presetAgents.value = Array.isArray(data.agents) ? data.agents : [];
+      presetAgents.value = Array.isArray(data.preset_models)
+        ? data.preset_models.map((model) => ({
+          id: model.ref,
+          ref: model.ref,
+          name: model.name,
+          version: model.version,
+          description: model.description,
+          ghost: "👻",
+          model: model.provider_model,
+          tool_names: [],
+        }))
+        : [];
       if (
         selectedPresetAgentId.value &&
         !presetAgents.value.some((agent) => agent.id === selectedPresetAgentId.value)
@@ -1409,7 +1392,7 @@ async function loadPresetAgents() {
         selectedPresetAgentId.value = "";
       }
     } catch (error) {
-      presetAgentsError.value = `Preset agents failed to load: ${formatError(error)}`;
+      presetAgentsError.value = `Preset models failed to load: ${formatError(error)}`;
     } finally {
       presetAgentsLoading.value = false;
     }
@@ -1864,7 +1847,7 @@ async function switchPresetHistorySession(historySession) {
     return;
   }
   if (presetAgent.deleted) {
-    historyError.value = "This conversation belongs to a deleted preset agent.";
+    historyError.value = "This conversation belongs to a retired preset model.";
     return;
   }
 
@@ -1873,7 +1856,7 @@ async function switchPresetHistorySession(historySession) {
   }
   await loadPresetAgents();
   if (!presetAgents.value.some((agent) => agent.id === presetAgent.id)) {
-    historyError.value = "The preset agent for this conversation is no longer available.";
+    historyError.value = "The preset model for this conversation is no longer available.";
     return;
   }
 

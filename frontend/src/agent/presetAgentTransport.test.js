@@ -27,7 +27,7 @@ function ndjsonResponse(events) {
   };
 }
 
-describe("PresetAgentTransport", () => {
+describe("PresetModelTransport", () => {
   it("streams NDJSON events and tracks terminal state", async () => {
     const events = [];
     const fetchImpl = vi.fn(async () =>
@@ -42,9 +42,9 @@ describe("PresetAgentTransport", () => {
       onEvent: (event) => events.push(event),
     });
 
-    expect(await transport.send("agent_1", "Summarize this", "preset_session")).toBe(true);
+    expect(await transport.send("luna@1", "Summarize this", "preset_session")).toBe(true);
     expect(fetchImpl).toHaveBeenCalledWith(
-      "/api/agents/agent_1/chat/stream",
+      "/api/preset-models/luna/versions/1/runs/stream",
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({
@@ -79,7 +79,7 @@ describe("PresetAgentTransport", () => {
       checkpointPollAttempts: 1,
     });
 
-    const request = transport.send("agent_1", "Long task", "preset_session");
+    const request = transport.send("luna@1", "Long task", "preset_session");
     await Promise.resolve();
     expect(transport.stopRun()).toBe(true);
     expect(await request).toBe(true);
@@ -107,7 +107,7 @@ describe("PresetAgentTransport", () => {
       checkpointPollAttempts: 1,
     });
 
-    const request = transport.send("agent_1", "Long task", "preset_session");
+    const request = transport.send("luna@1", "Long task", "preset_session");
     await Promise.resolve();
     transport.stopRun();
     await request;

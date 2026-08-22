@@ -4,12 +4,12 @@
       <header class="preset-agents-hero">
         <div>
           <span>Reusable AI services</span>
-          <h2>Preset Agents</h2>
-          <p>Define focused agents once, then call them by name or ID from other systems.</p>
+          <h2>Preset Models</h2>
+          <p>Define a fixed prompt, provider and plugin combination, then call it by name and version.</p>
         </div>
         <button class="preset-primary-button" type="button" @click="beginCreate">
           <Plus :size="17" />
-          New agent
+          New model
         </button>
       </header>
 
@@ -35,11 +35,11 @@
         {{ notice }}
       </div>
 
-      <div v-if="loading" class="preset-empty">Loading preset agents…</div>
+      <div v-if="loading" class="preset-empty">Loading preset models…</div>
       <div v-else-if="!agents.length && !editing" class="preset-empty">
         <Ghost :size="30" />
-        <strong>No preset agents yet</strong>
-        <span>Create one for your stock system or another external application.</span>
+        <strong>No preset models yet</strong>
+        <span>Create one for your coding workflow or another external application.</span>
       </div>
 
       <div v-else class="preset-agent-grid">
@@ -58,6 +58,7 @@
           </span>
           <span class="preset-agent-card-meta">
             {{ agent.model }} · {{ agent.tool_names.length }} tools
+            <span v-if="agent.status"> · {{ agent.status }}</span>
             <span v-if="agent.search_mode"> · {{ searchModeLabel(agent.search_mode) }}</span>
             <span v-if="agent.bootstrap_tools?.length"> · {{ agent.bootstrap_tools.length }} startup</span>
           </span>
@@ -68,8 +69,8 @@
       <form v-if="editing" class="preset-editor" @submit.prevent="saveAgent">
         <header>
           <div>
-            <span>{{ form.id ? "Edit preset" : "Create preset" }}</span>
-            <h3>{{ form.name || "Untitled agent" }}</h3>
+            <span>{{ form.id ? "Create new version" : "Create preset model" }}</span>
+            <h3>{{ form.name || "Untitled model" }}</h3>
           </div>
           <button class="preset-icon-button" type="button" aria-label="Close editor" @click="closeEditor">
             <X :size="19" />
@@ -84,6 +85,10 @@
           <label class="preset-field">
             <span>Name</span>
             <input v-model="form.name" required maxlength="80" placeholder="fomc-brief" />
+          </label>
+          <label class="preset-field">
+            <span>Version</span>
+            <input v-model.number="form.version" type="number" min="1" required />
           </label>
           <label class="preset-field preset-field-wide">
             <span>Description</span>
@@ -114,7 +119,7 @@
 
         <fieldset class="preset-tools-fieldset">
           <legend>Available tools</legend>
-          <p>Only checked tools are exposed to this agent. An empty selection means no tools.</p>
+          <p>Only checked tools are exposed to this preset model. An empty selection means no tools.</p>
           <div class="preset-tool-grid">
             <label
               v-for="tool in tools"
@@ -169,8 +174,8 @@
 
         <section v-if="form.id" class="preset-api-callout">
           <span>API reference</span>
-          <code>POST /api/agents/{{ encodeURIComponent(form.name) }}/chat</code>
-          <small>ID: {{ form.id }}</small>
+          <code>POST /api/preset-models/{{ encodeURIComponent(form.name) }}/versions/{{ form.version }}/runs</code>
+          <small>Model Ref: {{ form.name }}@{{ form.version }}</small>
         </section>
 
         <footer>
@@ -179,16 +184,16 @@
             class="preset-danger-button"
             type="button"
             :disabled="saving"
-            @click="deleteAgent"
+            @click="retireModel"
           >
             <Trash2 :size="16" />
-            Delete
+            Retire
           </button>
           <span class="preset-footer-spacer"></span>
           <button class="preset-secondary-button" type="button" @click="closeEditor">Cancel</button>
           <button class="preset-primary-button" type="submit" :disabled="saving">
             <Save :size="16" />
-            {{ saving ? "Saving…" : "Save agent" }}
+            {{ saving ? "Saving…" : form.id ? "Publish new version" : "Create model" }}
           </button>
         </footer>
       </form>
@@ -230,6 +235,7 @@ const startupClocks = [
 function emptyForm() {
   return {
     id: "",
+    version: 1,
     name: "",
     description: "",
     ghost: "👻",
@@ -239,15 +245,18 @@ function emptyForm() {
     tool_names: [],
     search_mode: "diy",
     bootstrap_tools: [],
+    fixed_plugins: ["host-core"],
   };
 }
 
 function replaceForm(value) {
   const toolNames = [...(value?.tool_names || [])];
   Object.assign(form, emptyForm(), value, {
+    version: Number(value?.version || 1),
     tool_names: toolNames,
     search_mode: toolNames.includes("web_search") ? value?.search_mode || "diy" : null,
     bootstrap_tools: [...(value?.bootstrap_tools || [])],
+    fixed_plugins: [...(value?.fixed_plugins || ["host-core"])],
   });
 }
 
@@ -267,19 +276,19 @@ function editAgent(agent) {
 
 function hasBootstrapClock(timezone) {
   return form.bootstrap_tools.some(
-    (tool) => tool?.name === "core_get_time" && tool?.arguments?.timezone === timezone,
+    (tool) => tool?.name === "time_now" && tool?.arguments?.timezone === timezone,
   );
 }
 
 function setBootstrapClock(clock, enabled) {
   form.bootstrap_tools = form.bootstrap_tools.filter(
-    (tool) => !(tool?.name === "core_get_time" && tool?.arguments?.timezone === clock.timezone),
+    (tool) => !(tool?.name === "time_now" && tool?.arguments?.timezone === clock.timezone),
   );
   if (enabled) {
     form.bootstrap_tools.push({
-      name: "core_get_time",
+      name: "time_now",
       arguments: { timezone: clock.timezone },
-      result_key: clock.timezone === "America/New_York" ? "us_eastern_time" : "local_time",
+      resultKey: clock.timezone === "America/New_York" ? "us_eastern_time" : "local_time",
       required: true,
     });
   }
@@ -294,18 +303,14 @@ async function load() {
   loading.value = true;
   notice.value = "";
   try {
-    const [agentData, toolResponse] = await Promise.all([
-      props.management.requestJson("/api/manage/agents"),
+    const [modelData, toolResponse] = await Promise.all([
+      props.management.requestJson("/api/manage/preset-models"),
       fetch("/api/tools").then(async (response) => {
         if (!response.ok) throw new Error("Unable to load tools.");
         return response.json();
       }),
     ]);
-    agents.value = agentData.agents || [];
-    Object.assign(defaults, agentData.defaults || {});
-    if (Array.isArray(agentData.search_modes) && agentData.search_modes.length) {
-      searchModeOptions.value = agentData.search_modes;
-    }
+    agents.value = (modelData.preset_models || []).map(toAgentForm);
     tools.value = toolResponse.tools || [];
   } catch (error) {
     props.management.markError(error);
@@ -315,30 +320,81 @@ async function load() {
   }
 }
 
+function toAgentForm(model) {
+  const definition = model?.definition || {};
+  const provider = definition.provider || {};
+  const plugins = definition.plugins || {};
+  const policy = definition.policy || {};
+  return {
+    id: model.ref,
+    ref: model.ref,
+    version: Number(model.version || 1),
+    name: model.name,
+    description: model.description || "",
+    ghost: definition.metadata?.ghost || "👻",
+    system_prompt: definition.prompt?.system || "",
+    prompt_profile: definition.prompt?.profile || "agent",
+    model: provider.model || model.provider_model || defaults.model,
+    temperature: Number(policy.temperature ?? defaults.temperature),
+    tool_names: [...(plugins.allowed_tools || model.tool_catalog || [])],
+    search_mode: policy.search_mode || "diy",
+    bootstrap_tools: [...(plugins.bootstrap_tools || [])],
+    fixed_plugins: [...(plugins.fixed || model.fixed_plugins || ["host-core"])],
+    status: model.status,
+  };
+}
+
+function splitModelRef(ref) {
+  const value = String(ref || "");
+  const at = value.lastIndexOf("@");
+  return at > 0 ? { name: value.slice(0, at), version: Number(value.slice(at + 1)) } : null;
+}
+
+function pluginBindingsForTools(toolNames) {
+  const fixed = new Set(["host-core"]);
+  for (const toolName of toolNames) {
+    const source = tools.value.find((tool) => tool.name === toolName)?.source;
+    if (source === "web" || toolName === "web_search" || toolName === "web_fetch") fixed.add("web");
+    else if (source === "browser-bridge" || toolName.startsWith("browser.")) fixed.add("browser-bridge");
+    else if (source && source !== "host-core") fixed.add("pi-plugin-host");
+  }
+  return [...fixed];
+}
+
 async function saveAgent() {
   saving.value = true;
   notice.value = "";
+  const nextVersion = form.id ? Number(form.version || 1) + 1 : Number(form.version || 1);
+  const toolNames = [...new Set(form.tool_names)];
   const payload = {
-    name: form.name,
+    name: form.name.trim().toLowerCase(),
+    version: nextVersion,
     description: form.description,
-    ghost: form.ghost,
-    system_prompt: form.system_prompt,
-    model: form.model,
-    temperature: form.temperature,
-    tool_names: form.tool_names,
-    search_mode: retrievalToolSelected.value ? form.search_mode : null,
-    bootstrap_tools: form.bootstrap_tools,
+    provider: { adapter: "openai-compatible", model: form.model, tool_protocol: "auto" },
+    prompt: { profile: form.prompt_profile || "agent", system: form.system_prompt },
+    plugins: {
+      fixed: pluginBindingsForTools(toolNames),
+      allowed_tools: toolNames,
+      bootstrap_tools: form.bootstrap_tools,
+    },
+    policy: {
+      temperature: Number(form.temperature),
+      search_mode: retrievalToolSelected.value ? form.search_mode : "diy",
+    },
+    metadata: { ghost: form.ghost },
   };
   try {
-    const url = form.id ? `/api/manage/agents/${encodeURIComponent(form.id)}` : "/api/manage/agents";
-    const data = await props.management.requestJson(url, {
-      method: form.id ? "PUT" : "POST",
+    const created = await props.management.requestJson("/api/manage/preset-models", {
+      method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
+    const ref = `${payload.name}@${nextVersion}`;
+    await props.management.requestJson(`/api/manage/preset-models/${encodeURIComponent(payload.name)}/versions/${nextVersion}/validate`, { method: "POST" });
+    const published = await props.management.requestJson(`/api/manage/preset-models/${encodeURIComponent(payload.name)}/versions/${nextVersion}/publish`, { method: "POST" });
     await load();
-    editAgent(data.agent);
-    showNotice(`Saved ${data.agent.name}.`);
+    editAgent(toAgentForm(published.preset_model || created.preset_model));
+    showNotice(`Published ${ref}.`);
   } catch (error) {
     props.management.markError(error);
     showNotice(error.message || String(error), true);
@@ -347,25 +403,17 @@ async function saveAgent() {
   }
 }
 
-async function deleteAgent() {
-  if (!window.confirm(`Delete preset agent “${form.name}”?`)) return;
+async function retireModel() {
+  if (!window.confirm(`Retire preset model “${form.name}@${form.version}”?`)) return;
+  const ref = splitModelRef(form.id || `${form.name}@${form.version}`);
+  if (!ref) return;
   saving.value = true;
   try {
-    const response = await props.management.request(
-      `/api/manage/agents/${encodeURIComponent(form.id)}`,
-      { method: "DELETE" },
-    );
-    if (!response.ok) {
-      const payload = await response.json().catch(() => ({}));
-      const error = new Error(payload.detail || "Unable to delete preset agent.");
-      error.status = response.status;
-      error.detail = payload.detail;
-      throw error;
-    }
-    const deletedName = form.name;
+    await props.management.requestJson(`/api/manage/preset-models/${encodeURIComponent(ref.name)}/versions/${ref.version}/retire`, { method: "POST" });
+    const retiredName = `${ref.name}@${ref.version}`;
     closeEditor();
     await load();
-    showNotice(`Deleted ${deletedName}.`);
+    showNotice(`Retired ${retiredName}.`);
   } catch (error) {
     props.management.markError(error);
     showNotice(error.message || String(error), true);
