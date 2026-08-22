@@ -39,7 +39,7 @@ These goals share one runtime: agent-harness experiments can be tested through t
 └── uv.lock          Reproducible Python dependency lockfile
 ```
 
-The production frontend build is committed under `agent-backend/app/frontend/` so FastAPI can serve the application without a separate Node.js process.
+The production frontend build is committed under `agent-backend/app/frontend/` so the Node Host can serve the application without a separate frontend process. Python remains available as a rollback Host and as the loopback Worker for Python-specific capabilities.
 
 ## Requirements
 
@@ -64,11 +64,19 @@ Install the core application plus the common development integrations:
 uv sync --extra buddy --extra dev
 ```
 
-Start FastAPI from the repository root:
+Start the default Python Host from the repository root:
 
 ```bash
 PYTHONPATH=agent-backend:buddy-backend \
-  uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+  uv run python agent-backend/scripts/start_host.py
+```
+
+To opt into the Node Host after verifying its API surface:
+
+```bash
+npm install
+npm run build --workspaces
+ANOMALO_RUNTIME_IMPL=node node apps/node-host/dist/main.js
 ```
 
 Open <http://127.0.0.1:8000>.
@@ -123,6 +131,14 @@ All runtime configuration comes from the root `.env`. The most commonly used var
 | `MAX_TOOL_ITERATIONS` | Maximum model/tool loop iterations per run | `50` |
 | `AGENT_RUN_TIMEOUT_SECONDS` | Maximum wall-clock duration for one resumable run | `600` |
 | `ANOMALO_ADMIN_TOKEN` | Authorizes remote management requests | unset |
+| `ANOMALO_RUNTIME_IMPL` | Host owner: `python` or opt-in `node` | `python` |
+| `ANOMALO_SESSION_SCHEMA` | Session adapter schema | `v2` |
+| `ANOMALO_PYTHON_WORKER_URL` | Loopback Python Worker URL | `http://127.0.0.1:8849` |
+| `ANOMALO_PYTHON_WORKER_AUTO_START` | Let Node launch the Worker child process | `false` |
+| `ANOMALO_PYTHON_WORKER_TIMEOUT_MS` | Timeout for a Python Worker request | `2000` |
+| `ANOMALO_PI_EXTENSIONS_ENABLED` | Enable the configured trusted Pi extensions | `false` |
+| `ANOMALO_PLUGIN_CONFIG` | Explicit plugin allowlist | `./config/plugins.yaml` |
+| `ANOMALO_PLUGIN_TIMEOUT_MS` | Plugin hook/tool timeout | `30000` |
 | `ANOMALO_AGENT_PROMPT_PROFILE` | Browser-agent prompt profile | `agent` |
 | `ANOMALO_BUDDY_PROMPT_PROFILE` | Buddy voice prompt profile | `buddy_voice` |
 | `ANOMALO_BUDDY_TRANSPORT` | Buddy transport: `serial` or `tcp` | `serial` |

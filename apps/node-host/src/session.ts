@@ -23,6 +23,8 @@ export interface SessionRepository {
   checkpoint(record: SessionCheckpoint): Promise<void>;
   finishRun(record: FinishedRunRecord): Promise<void>;
   failRun(record: FailedRunRecord): Promise<void>;
+  setResources?(sessionId: SessionId, activeSkills: string[], activeMcpServers: string[]): Promise<void>;
+  setPresetModel?(sessionId: SessionId, modelRef: string): Promise<void>;
   resume(sessionId: SessionId): Promise<ResumableRun>;
   list(query?: SessionListQuery): Promise<SessionSummary[]>;
 }
@@ -136,6 +138,11 @@ export class InMemorySessionAdapter implements SessionRepository {
     const stored = await this.ensure(sessionId);
     stored.snapshot.activeSkills = [...new Set(activeSkills)].sort();
     stored.snapshot.activeMcpServers = [...new Set(activeMcpServers)].sort();
+  }
+
+  async setPresetModel(sessionId: SessionId, modelRef: string): Promise<void> {
+    const stored = await this.ensure(sessionId);
+    stored.snapshot.metadata = { ...stored.snapshot.metadata, preset_model_ref: modelRef };
   }
 
   async appendWebTrace(sessionId: SessionId, trace: Record<string, unknown>): Promise<void> {

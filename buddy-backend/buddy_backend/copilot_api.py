@@ -1,10 +1,9 @@
 from typing import Any
 
-from app.api.security import require_management_access
-from app.container import get_codex_buddy_projection
 from fastapi import APIRouter, Body, Depends, HTTPException, status
 
 from buddy_backend import BuddyConfigurationError
+from buddy_backend.bridge import get_codex_buddy_projection, require_management_access
 from buddy_backend.codex_projection import CodexProjectionError
 
 router = APIRouter(

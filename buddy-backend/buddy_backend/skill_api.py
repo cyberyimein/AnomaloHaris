@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from app.container import get_buddy_gateway
+from buddy_backend.bridge import get_buddy_gateway
 
 ALLOWED_PRESENCE_STATES = frozenset(
     {"idle", "listening", "thinking", "speaking", "coding", "done", "error"}

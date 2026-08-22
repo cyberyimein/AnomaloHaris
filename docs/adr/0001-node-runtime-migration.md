@@ -1,6 +1,6 @@
 # ADR-0001: Node.js Host with a Python Worker boundary
 
-- Status: Accepted for phased implementation
+- Status: Superseded as the final target by ADR-0002; retained as migration history
 - Date: 2026-08-22
 - Decision owners: Anomalo runtime maintainers
 
@@ -14,6 +14,11 @@ behavior is frozen first.
 
 ## Decision
 
+> ADR-0002 replaces the final “Node Host + Python Worker” destination with a
+> Node-only Host and versioned Preset Model compute center. The phased seams and
+> compatibility work in this ADR remain useful migration inputs, but Python is
+> no longer an accepted component of the completed production architecture.
+
 Implement the migration in independently revertible slices:
 
 1. Freeze the current behavior with JSON Schema fixtures and replayable tests.
@@ -22,9 +27,11 @@ Implement the migration in independently revertible slices:
 3. Add an npm workspace and a single `@anomalo/contracts` source for the
    cross-process event, tool, and run-request contracts.
 
-The Python Host remains the only production run owner during these phases.
-Node code is fixture/replay-only until the later Node Host phases. No Session
-schema migration, hardware change, or live dual execution is included here.
+The migration now has a live Node Host path. The Python Host remains the safe
+default until the Node Host reaches public API parity; deployments can opt in
+with `ANOMALO_RUNTIME_IMPL=node`. The Python process can still be used as a
+loopback Worker for Python-only tools, audio, vision, and Buddy capabilities,
+without deleting v2 tables.
 
 ## Consequences
 
@@ -32,7 +39,11 @@ schema migration, hardware change, or live dual execution is included here.
   compatibility boundary.
 - Python and TypeScript can validate the same fixture payloads before either
   runtime is switched in production.
-- The new modules add explicit seams, but adapters and production traffic stay
-  unchanged until their dedicated phases.
-- A failure in a later phase can be reverted without reverting the frozen
-  contract fixtures or changing persisted Session data.
+- The opt-in Node path owns HTTP, WebSocket, Agent Run, and Session lifecycle;
+  the Worker does not write the primary Session tables.
+- Web, Browser, Python Worker, and Pi L1-L3 adapters are behind the Node
+  `ToolRuntime` and `PluginHost` seams. Unavailable Worker capabilities degrade
+  to structured `worker_unavailable` tool results.
+- A failure in the Node path can be reverted by stopping new runs, preserving
+  checkpoints, and switching the Host owner back to Python; v2 tables remain
+  intact for that rollback.

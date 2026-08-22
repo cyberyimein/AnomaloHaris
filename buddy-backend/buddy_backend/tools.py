@@ -1,8 +1,7 @@
 from typing import Any
 
-from app.tools.base import ToolContext, ToolProvider, ToolResult, ToolSpec
-
 from buddy_backend import BuddyConfigurationError, BuddyConnectionError, BuddyGateway
+from buddy_backend.tooling import ToolContext, ToolProvider, ToolResult, ToolSpec
 
 
 class BuddyToolProvider(ToolProvider):

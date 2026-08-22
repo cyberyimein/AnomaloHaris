@@ -54,6 +54,27 @@ describe("@anomalo/contracts", () => {
       validateContract("runRequest", { message: "hello", resume: false }).valid,
     ).toBe(true);
     expect(
+      validateContract("runRequest", { message: "hello", preset_model: "anomalo@1" }).valid,
+    ).toBe(true);
+    expect(
+      validateContract("presetModelDefinition", {
+        name: "anomalo",
+        version: 1,
+        description: "Default",
+        provider: { adapter: "openai-compatible", model: "test", tool_protocol: "auto" },
+        plugins: { fixed: ["host-core"] },
+      }).valid,
+    ).toBe(true);
+    expect(
+      validateContract("llmRequestEventData", {
+        model_ref: "anomalo@1",
+        provider_model: "test",
+        iteration: 1,
+        request: { message_count: 2, tool_count: 1, response_format: "text" },
+        context: { segment_counts: { prompt: 1 }, total_message_count: 2, tool_count: 1, compiled_hash: "uncompiled" },
+      }).valid,
+    ).toBe(true);
+    expect(
       validateContract("toolDefinition", {
         name: "deterministic_echo",
         description: "Echo a value.",

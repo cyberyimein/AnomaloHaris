@@ -335,6 +335,15 @@ export class SqliteSessionAdapter implements SessionRepository {
     for (const name of [...new Set(activeMcpServers)].sort()) insert.run(sessionId, "mcp", name);
   }
 
+  async setPresetModel(sessionId: SessionId, modelRef: string): Promise<void> {
+    this.ensureSession(sessionId);
+    const current = this.readSnapshot(sessionId);
+    const metadata = { ...current.metadata, preset_model_ref: modelRef };
+    this.db.prepare(
+      "UPDATE agent_sessions SET metadata_json = ?, updated_at = ? WHERE session_id = ?",
+    ).run(JSON.stringify(metadata), this.clock.now(), sessionId);
+  }
+
   async appendWebTrace(sessionId: SessionId, trace: Record<string, unknown>): Promise<void> {
     this.ensureSession(sessionId);
     const traceId = typeof trace.id === "string" && trace.id ? trace.id : this.ids.entryId();
@@ -652,6 +661,7 @@ function checkpointFromRow(row: Row): SessionCheckpoint {
   const responseFormat = parseResponseFormat(raw.responseFormat ?? raw.response_format);
   const model = typeof raw.model === "string" && raw.model !== "legacy" ? raw.model : undefined;
   const systemPrompt = stringValue(raw.systemPrompt ?? raw.system_prompt);
+  const presetModelRef = stringValue(raw.presetModelRef ?? raw.preset_model_ref);
   const allowedToolNames = parseStringArray(raw.allowedToolNames ?? raw.allowed_tool_names);
   return {
     runId: row.run_id as RunId,
@@ -675,6 +685,7 @@ function checkpointFromRow(row: Row): SessionCheckpoint {
         ? {}
         : { allowedToolNames }),
       ...(model === undefined ? {} : { model }),
+      ...(presetModelRef === undefined ? {} : { presetModelRef: presetModelRef as SessionCheckpoint["state"]["presetModelRef"] }),
       ...(typeof raw.temperature === "number" ? { temperature: raw.temperature } : {}),
       searchMode: stringValue(raw.searchMode ?? raw.search_mode) ?? "diy",
     },

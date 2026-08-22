@@ -2,6 +2,8 @@ import Ajv, { type ErrorObject, type ValidateFunction } from "ajv";
 
 import {
   ConnectionMessageSchema,
+  LlmRequestEventDataSchema,
+  PresetModelDefinitionSchema,
   RunEventEnvelopeSchema,
   RunRequestSchema,
   ToolDefinitionSchema,
@@ -24,6 +26,8 @@ const connectionMessageValidator = ajv.compile<ConnectionMessage>(ConnectionMess
 const validators = {
   agentEvent: ajv.compile<RunEventEnvelope>(RunEventEnvelopeSchema),
   connectionMessage: connectionMessageValidator,
+  llmRequestEventData: ajv.compile(LlmRequestEventDataSchema),
+  presetModelDefinition: ajv.compile(PresetModelDefinitionSchema),
   runRequest: ajv.compile<RunRequest>(RunRequestSchema),
   toolDefinition: ajv.compile<ToolDefinition>(ToolDefinitionSchema),
   toolResult: ajv.compile<ToolResult>(ToolResultSchema),

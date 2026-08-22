@@ -13,8 +13,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from app.config import Settings
-
 logger = logging.getLogger(__name__)
 
 
@@ -65,7 +63,7 @@ class _BuddyBinaryFrame:
 class BuddyGateway:
     def __init__(
         self,
-        settings: Settings,
+        settings: Any,
         *,
         serial_factory: Callable[..., Any] | None = None,
         glob_func: Callable[[str], list[str]] | None = None,

@@ -10,12 +10,15 @@ import { ReplayModelAdapter, type ReplayStep } from "./model.js";
 import { InMemorySessionAdapter } from "./session.js";
 import { buildNodeHost } from "./host.js";
 import { DeterministicToolRuntime } from "./tools.js";
+import { SqlitePresetModelRegistry } from "./preset-models.js";
 
 const apps: Array<{ close(): Promise<void> }> = [];
 const tempDirectories: string[] = [];
+const registries: SqlitePresetModelRegistry[] = [];
 
 afterEach(async () => {
   for (const app of apps.splice(0)) await app.close();
+  for (const registry of registries.splice(0)) registry.close();
   for (const directory of tempDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
@@ -28,6 +31,8 @@ describe("Node Host", () => {
     apps.push(app);
 
     expect((await app.inject({ method: "GET", url: "/health" })).json()).toMatchObject({ status: "ok", runtime: "node", session_schema: 2 });
+
+    expect((await app.inject({ method: "GET", url: "/api/tools?session_id=host-session" })).json().tools).toEqual([]);
 
     const response = await app.inject({
       method: "POST",
@@ -89,11 +94,59 @@ describe("Node Host", () => {
     expect(asset.statusCode).toBe(200);
     expect(asset.body).toContain("asset");
   });
+
+  it("resolves the default Preset Model and rejects a session model switch", async () => {
+    const registry = new SqlitePresetModelRegistry(":memory:");
+    registries.push(registry);
+    registry.ensureBuiltinDefault({ model: "replay-model" });
+    registry.publish(registry.createDraft({
+      name: "luna",
+      version: 1,
+      description: "Coding model",
+      provider: { adapter: "openai-compatible", model: "luna-provider", tool_protocol: "auto" },
+      plugins: { fixed: ["host-core"] },
+    }).ref);
+    const app = await makeApp([
+      [{ type: "text.delta", text: "default" }, { type: "done" }],
+      [{ type: "text.delta", text: "compat" }, { type: "done" }],
+    ], undefined, registry);
+    apps.push(app);
+
+    const models = await app.inject({ method: "GET", url: "/api/preset-models" });
+    expect(models.json()).toMatchObject({ default_preset_model: "anomalo@1" });
+    expect(models.json().preset_models).toEqual(expect.arrayContaining([
+      expect.objectContaining({ ref: "anomalo@1", status: "published" }),
+      expect.objectContaining({ ref: "luna@1", status: "published" }),
+    ]));
+
+    const first = await app.inject({
+      method: "POST",
+      url: "/api/chat",
+      payload: { session_id: "bound-session", message: "hello" },
+    });
+    expect(first.statusCode).toBe(200);
+    const compat = await app.inject({
+      method: "POST",
+      url: "/api/agents/anomalo%401/chat/stream",
+      payload: { session_id: "compat-session", message: "hello from legacy route" },
+    });
+    expect(compat.statusCode).toBe(200);
+    expect(compat.headers["x-anomalo-agent-id"]).toBe("anomalo@1");
+    expect(compat.body).toContain('"type":"run.finished"');
+    const mismatch = await app.inject({
+      method: "POST",
+      url: "/api/chat",
+      payload: { session_id: "bound-session", message: "switch", preset_model: "luna@1" },
+    });
+    expect(mismatch.statusCode).toBe(409);
+    expect(mismatch.json()).toMatchObject({ error_code: "session_model_mismatch" });
+  });
 });
 
 async function makeApp(
   steps: ReplayStep[],
   staticDir?: string,
+  presetModels?: SqlitePresetModelRegistry,
 ) {
   const tools = new DeterministicToolRuntime([]);
   const model = new ReplayModelAdapter(steps);
@@ -103,6 +156,8 @@ async function makeApp(
     controller: new RunController(core),
     sessions,
     model: "replay-model",
+    ...(presetModels ? { presetModels, defaultPresetModel: "anomalo@1" } : {}),
+    tools,
     ...(staticDir ? { staticDir } : {}),
   });
 }

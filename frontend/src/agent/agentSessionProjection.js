@@ -50,8 +50,13 @@ export function createAgentSessionProjection({
         addEventLog("run.started", event.run_id);
         break;
       case "llm.request": {
-        renderLlmRequest(data.request, data.context, data.iteration);
-        const summary = summarizeLlmRequest(data.request);
+        const request = {
+          ...(data.request || {}),
+          ...(data.model_ref ? { model_ref: data.model_ref } : {}),
+          ...(data.provider_model ? { provider_model: data.provider_model } : {}),
+        };
+        renderLlmRequest(request, data.context, data.iteration);
+        const summary = summarizeLlmRequest(request);
         setAgentState("LLM Request", summary);
         activeThinkingActivityId = addConversationActivity({
           kind: "thinking",
@@ -484,7 +489,17 @@ export function createAgentSessionProjection({
   function renderLlmRequest(request, context, iteration) {
     const safeRequest = request || {};
     const messages = Array.isArray(safeRequest.messages) ? safeRequest.messages : [];
-    latestMessagesJson.value = JSON.stringify(messages, null, 2);
+    latestMessagesJson.value = JSON.stringify(
+      messages.length > 0
+        ? messages
+        : {
+            message_count: safeRequest.message_count ?? 0,
+            tool_count: safeRequest.tool_count ?? 0,
+            response_format: safeRequest.response_format || "text",
+          },
+      null,
+      2,
+    );
     copyMessagesDisabled.value = messages.length === 0;
     promptProfile.value = context?.profile || "default";
     iterationCount.value = String(iteration || 0);
@@ -671,9 +686,14 @@ function refreshTargets(data) {
 }
 
 function summarizeLlmRequest(request) {
-  const messageCount = request?.messages?.length || 0;
-  const toolCount = request?.tools?.length || 0;
-  return `${messageCount} prompt parts · ${toolCount} tools · ${request?.model || "unknown model"}`;
+  const messageCount = Number.isFinite(request?.message_count)
+    ? request.message_count
+    : request?.messages?.length || 0;
+  const toolCount = Number.isFinite(request?.tool_count)
+    ? request.tool_count
+    : request?.tools?.length || 0;
+  const model = request?.model || request?.provider_model || request?.model_ref || "unknown model";
+  return `${messageCount} prompt parts · ${toolCount} tools · ${model}`;
 }
 
 function summarizeToolArguments(argumentsValue) {
@@ -696,14 +716,20 @@ function truncateInline(value, maxLength) {
 }
 
 function contextStatRows(request, context, messages) {
+  const messageCount = Number.isFinite(request?.message_count)
+    ? request.message_count
+    : messages.length;
+  const toolCount = Number.isFinite(request?.tool_count)
+    ? request.tool_count
+    : request?.tools?.length || 0;
   return [
-    { label: "Prompt Parts", value: messages.length },
+    { label: "Prompt Parts", value: messageCount },
     { label: "Prompt", value: context?.prompt_message_count ?? 0 },
     { label: "Memory", value: context?.memory_message_count ?? 0 },
     { label: "Skills", value: context?.active_skill_count ?? 0 },
     { label: "MCP", value: context?.active_mcp_server_count ?? 0 },
     { label: "History", value: context?.history_message_count ?? 0 },
-    { label: "Tools", value: context?.tool_count ?? request?.tools?.length ?? 0 },
+    { label: "Tools", value: context?.tool_count ?? toolCount },
   ];
 }
 

@@ -6,8 +6,6 @@ from dataclasses import asdict, dataclass
 from io import BytesIO
 from typing import Any, Protocol
 
-from app.config import Settings
-
 from buddy_backend.gateway import BuddyConnectionError, BuddyGateway
 
 
@@ -48,7 +46,7 @@ class BuddyFaceDetector(Protocol):
 class BuddyVisionService:
     def __init__(
         self,
-        settings: Settings,
+        settings: Any,
         *,
         gateway: BuddyGateway,
         detector_factory: Callable[[], BuddyFaceDetector] | None = None,
@@ -298,7 +296,7 @@ class BuddyVisionService:
 class _MediaPipeBlazeFaceDetector:
     provider = "mediapipe_blazeface_full_range"
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Any) -> None:
         try:
             import mediapipe as mp
         except ImportError as exc:
@@ -369,7 +367,7 @@ class _OpenCvHaarFaceDetector:
         "haarcascade_profileface.xml",
     )
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Any) -> None:
         del settings
         try:
             import cv2
@@ -507,7 +505,7 @@ class _OpenCvHaarFaceDetector:
         )
 
 
-def _create_face_detector(settings: Settings) -> BuddyFaceDetector:
+def _create_face_detector(settings: Any) -> BuddyFaceDetector:
     provider = _normalize_provider(settings.buddy_vision_provider)
     if provider == "opencv_haar":
         return _OpenCvHaarFaceDetector(settings)

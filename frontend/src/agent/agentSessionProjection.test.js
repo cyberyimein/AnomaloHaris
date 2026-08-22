@@ -104,6 +104,31 @@ describe("AgentSessionProjection", () => {
     });
   });
 
+  it("renders the explicit Node llm.request counts without inferring arrays", () => {
+    const projection = createProjection();
+
+    projection.handle(
+      event("llm.request", {
+        model_ref: "anomalo@1",
+        provider_model: "deepseek/deepseek-chat",
+        iteration: 2,
+        request: { message_count: 7, tool_count: 4, response_format: "text" },
+        context: {
+          profile: "agent",
+          segment_counts: { prompt: 1, history: 6 },
+          total_message_count: 7,
+          tool_count: 4,
+          compiled_hash: "uncompiled",
+        },
+      }),
+    );
+
+    expect(projection.state.agentState.value).toBe("LLM Request");
+    expect(projection.state.stateDetail.value).toContain("7 prompt parts · 4 tools · deepseek/deepseek-chat");
+    expect(projection.state.contextStats.value[0]).toEqual({ label: "Prompt Parts", value: 7 });
+    expect(projection.state.contextStats.value.at(-1)).toEqual({ label: "Tools", value: 4 });
+  });
+
   it("keeps partial output and exposes a resumable paused state", () => {
     const projection = createProjection();
 

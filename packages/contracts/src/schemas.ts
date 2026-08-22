@@ -87,6 +87,73 @@ export const ResponseFormatSchema = Type.Union([
   }),
 ]);
 
+export const LlmRequestEventDataSchema = Type.Object(
+  {
+    model_ref: Type.String({ minLength: 1 }),
+    provider_model: Type.String({ minLength: 1 }),
+    iteration: Type.Integer({ minimum: 0 }),
+    request: Type.Object({
+      message_count: Type.Integer({ minimum: 0 }),
+      tool_count: Type.Integer({ minimum: 0 }),
+      response_format: Type.String({ minLength: 1 }),
+    }),
+    context: Type.Object({
+      segment_counts: Type.Record(Type.String(), Type.Integer({ minimum: 0 })),
+      total_message_count: Type.Integer({ minimum: 0 }),
+      tool_count: Type.Integer({ minimum: 0 }),
+      compiled_hash: Type.String({ minLength: 1 }),
+    }, { additionalProperties: true }),
+  },
+  { additionalProperties: true, $id: "https://anomalo.dev/schemas/llm-request-event-data.schema.json" },
+);
+
+export const PresetModelRefSchema = Type.String({
+  pattern: "^[a-z][a-z0-9._-]{0,63}@[1-9][0-9]{0,8}$",
+  minLength: 3,
+});
+
+export const PresetModelDefinitionSchema = Type.Object(
+  {
+    name: Type.String({ pattern: "^[a-z][a-z0-9._-]{0,63}$", minLength: 1 }),
+    version: Type.Integer({ minimum: 1 }),
+    description: Type.String(),
+    provider: Type.Object({
+      adapter: Type.String({ minLength: 1 }),
+      model: Type.String({ minLength: 1 }),
+      credential_ref: Type.Optional(Type.String({ minLength: 1 })),
+      tool_protocol: Type.Optional(Type.Union([
+        Type.Literal("openai"),
+        Type.Literal("dsml"),
+        Type.Literal("auto"),
+        Type.Literal("none"),
+      ])),
+      capabilities: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+    }),
+    prompt: Type.Optional(Type.Object({
+      profile: Type.Optional(Type.String({ minLength: 1 })),
+      system: Type.Optional(Type.String()),
+    })),
+    plugins: Type.Optional(Type.Object({
+      fixed: Type.Array(Type.String({ minLength: 1 })),
+      allowed_tools: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+      bootstrap_tools: Type.Optional(Type.Array(Type.Record(Type.String(), Type.Unknown()))),
+    })),
+    policy: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+    metadata: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+  },
+  { additionalProperties: true, $id: "https://anomalo.dev/schemas/preset-model-definition.schema.json" },
+);
+
+export const PresetModelSummarySchema = Type.Object({
+  ref: PresetModelRefSchema,
+  name: Type.String({ minLength: 1 }),
+  version: Type.Integer({ minimum: 1 }),
+  description: Type.String(),
+  status: Type.Union([Type.Literal("draft"), Type.Literal("published"), Type.Literal("retired")]),
+  provider_model: Type.String({ minLength: 1 }),
+  compiled_hash: Type.String({ minLength: 1 }),
+});
+
 export const RunRequestSchema = Type.Object(
   {
     message: Type.Union([Type.String(), Type.Null()]),
@@ -94,6 +161,7 @@ export const RunRequestSchema = Type.Object(
     resume: Type.Optional(Type.Boolean()),
     prompt_profile: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     search_mode: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    preset_model: Type.Optional(Type.Union([PresetModelRefSchema, Type.Null()])),
     response_format: Type.Optional(Type.Union([ResponseFormatSchema, Type.Null()])),
   },
   { additionalProperties: true, $id: "https://anomalo.dev/schemas/run-request.schema.json" },

@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.runtime_switch import host_command, normalize_runtime_impl
+from app.runtime_switch import host_command, normalize_runtime_impl  # noqa: E402, I001
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -14,6 +14,15 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 def main() -> None:
     runtime = normalize_runtime_impl(os.environ.get("ANOMALO_RUNTIME_IMPL"))
+    requested_host = os.environ.get("HOST", "127.0.0.1")
+    public_host = requested_host not in {"127.0.0.1", "::1", "localhost"}
+    host = requested_host
+    if (
+        os.environ.get("ANOMALO_ENV") == "production"
+        and public_host
+        and os.environ.get("ANOMALO_ACKNOWLEDGE_PUBLIC_HOST") != "true"
+    ):
+        host = "127.0.0.1"
     command = host_command(
         runtime,
         repo_root=REPO_ROOT,
@@ -24,6 +33,8 @@ def main() -> None:
             else None
         ),
         node_executable=os.environ.get("ANOMALO_NODE_EXECUTABLE"),
+        host=host,
+        port=int(os.environ.get("PORT", "8000")),
     )
     if runtime == "node" and not Path(command[1]).exists():
         raise RuntimeError(

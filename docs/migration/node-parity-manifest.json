@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "target_runtime": "node",
+  "default_preset_model": "anomalo@1",
+  "status": "partial",
+  "source": {
+    "python_host": "agent-backend/app",
+    "node_host": "apps/node-host/src",
+    "frontend": "frontend/src"
+  },
+  "capabilities": [
+    {
+      "id": "chat",
+      "legacy_routes": ["POST /api/chat", "POST /api/chat/stream", "POST /api/chat/stop", "WS /ws/chat/{session_id}"],
+      "node_routes": ["POST /api/chat", "POST /api/chat/stream", "POST /api/chat/stop", "WS /ws/chat/{session_id}"],
+      "status": "partial",
+      "gaps": ["default preset model resolution", "provider encoded tool calls", "legacy response-shape parity"],
+      "tests": ["apps/node-host/src/host.test.ts", "apps/node-host/src/core.test.ts"]
+    },
+    {
+      "id": "preset_models",
+      "legacy_routes": ["GET /api/manage/agents", "POST /api/manage/agents", "PATCH /api/manage/agents/{agent_ref}", "POST /api/agents/{agent_ref}", "POST /api/agents/{agent_ref}/chat", "POST /api/agents/{agent_ref}/chat/stream"],
+      "node_routes": ["GET /api/preset-models", "GET /api/agents", "POST /api/agents/{agent_ref}/chat", "POST /api/agents/{agent_ref}/chat/stream"],
+      "status": "partial",
+      "gaps": ["management lifecycle", "published definition compiler", "session model binding"],
+      "tests": ["apps/node-host/src/preset-models.test.ts"]
+    },
+    {
+      "id": "sessions",
+      "legacy_routes": ["GET /api/sessions", "GET /api/sessions/{session_id}", "DELETE /api/sessions/{session_id}", "GET /api/sessions/{session_id}/skills", "GET /api/sessions/{session_id}/mcp"],
+      "node_routes": ["GET /api/sessions", "GET /api/sessions/{session_id}", "DELETE /api/sessions/{session_id}", "GET /api/sessions/{session_id}/web-traces"],
+      "status": "partial",
+      "gaps": ["session resource management routes", "model_ref metadata binding"],
+      "tests": ["apps/node-host/src/sqlite.test.ts", "apps/node-host/src/host.test.ts"]
+    },
+    {
+      "id": "context_resources",
+      "legacy_routes": ["GET /api/prompts", "GET /api/memory", "GET /api/skills", "GET /api/mcp", "POST /api/mcp/reload"],
+      "node_routes": [],
+      "status": "missing",
+      "gaps": ["prompt and memory APIs", "skill and MCP management APIs"],
+      "tests": []
+    },
+    {
+      "id": "tools_and_provider",
+      "legacy_routes": ["GET /api/tools", "GET /api/models", "GET /api/openrouter/credits"],
+      "node_routes": ["GET /api/tools"],
+      "status": "partial",
+      "gaps": ["provider gateway capabilities", "credits and model management", "DSML conformance"],
+      "tests": ["apps/node-host/src/model.test.ts", "apps/node-host/src/host.test.ts"]
+    },
+    {
+      "id": "buddy_media_artifacts",
+      "legacy_routes": ["/api/buddy/*", "/api/audio/*", "/api/vision/*", "/api/copilot/*", "/api/artifacts/*"],
+      "node_routes": [],
+      "status": "missing",
+      "gaps": ["Node adapters and public API parity"],
+      "tests": []
+    },
+    {
+      "id": "management_and_observability",
+      "legacy_routes": ["/api/manage/*", "/api/health", "/api/runtime"],
+      "node_routes": ["GET /health", "GET /api/runtime"],
+      "status": "partial",
+      "gaps": ["admin auth", "usage and cost records", "migration report"],
+      "tests": ["apps/node-host/src/host.test.ts"]
+    }
+  ],
+  "acceptance": {
+    "node_startup_is_not_completion": true,
+    "real_provider_tool_call_required": true,
+    "frontend_must_not_infer_missing_llm_fields": true,
+    "python_retirement_blocked_until_all_capabilities_are_green": true
+  }
+}

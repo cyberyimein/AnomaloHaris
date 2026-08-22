@@ -3,6 +3,9 @@ import { dirname, resolve } from "node:path";
 
 import {
   AgentEventSchema,
+  LlmRequestEventDataSchema,
+  PresetModelDefinitionSchema,
+  PresetModelSummarySchema,
   RunRequestSchema,
   ToolDefinitionSchema,
   WebSocketControlMessageSchema,
@@ -12,6 +15,9 @@ import {
 const root = resolve(new URL("..", import.meta.url).pathname);
 const schemas = [
   ["agent-event", AgentEventSchema],
+  ["llm-request-event-data", LlmRequestEventDataSchema],
+  ["preset-model-definition", PresetModelDefinitionSchema],
+  ["preset-model-summary", PresetModelSummarySchema],
   ["run-request", RunRequestSchema],
   ["tool", ToolDefinitionSchema],
   ["websocket-control-message", WebSocketControlMessageSchema],

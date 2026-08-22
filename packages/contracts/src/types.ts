@@ -4,6 +4,10 @@ import type {
   AgentEventSchema,
   AgentEventTypeSchema,
   ConnectionMessageSchema,
+  LlmRequestEventDataSchema,
+  PresetModelDefinitionSchema,
+  PresetModelRefSchema,
+  PresetModelSummarySchema,
   ResponseFormatSchema,
   RunEventEnvelopeSchema,
   RunRequestSchema,
@@ -24,6 +28,7 @@ export type EntryId = string & { readonly __entryId: unique symbol };
 
 export type AgentEventType = Static<typeof AgentEventTypeSchema>;
 export type AgentEvent = Static<typeof AgentEventSchema>;
+export type LlmRequestEventData = Static<typeof LlmRequestEventDataSchema>;
 export type RunEventEnvelope = Static<typeof RunEventEnvelopeSchema>;
 export type ConnectionMessage = Static<typeof ConnectionMessageSchema>;
 export type WebSocketClientMessageType = Static<typeof WebSocketClientMessageTypeSchema>;
@@ -34,6 +39,9 @@ export type WebSocketServerControlMessageType = Static<
 >;
 export type WebSocketMessage = Static<typeof WebSocketMessageSchema>;
 export type ResponseFormat = Static<typeof ResponseFormatSchema>;
+export type PresetModelRef = Static<typeof PresetModelRefSchema>;
+export type PresetModelDefinition = Static<typeof PresetModelDefinitionSchema>;
+export type PresetModelSummary = Static<typeof PresetModelSummarySchema>;
 export type RunRequest = Static<typeof RunRequestSchema>;
 export type ToolCall = Static<typeof ToolCallSchema>;
 export type ToolDefinition = Static<typeof ToolDefinitionSchema>;
@@ -51,6 +59,9 @@ export type ErrorCode =
   | "max_tool_iterations"
   | "bootstrap_failed"
   | "model_failed"
+  | "provider_protocol_error"
+  | "preset_model_not_found"
+  | "session_model_mismatch"
   | "tool_failed"
   | "finalizer_failed"
   | "structured_output_invalid"

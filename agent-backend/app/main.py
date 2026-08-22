@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from buddy_backend import BuddyConfigurationError, BuddyConnectionError, copilot_api
 from buddy_backend import api as buddy_api
 from buddy_backend import vision_api as buddy_vision_api
+from buddy_backend.bridge import configure_buddy_runtime
 from fastapi import FastAPI, Response
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -23,8 +24,15 @@ from app.api import (
     tools,
     websocket,
 )
+from app.api.security import require_management_access
 from app.config import get_settings
-from app.container import get_buddy_audio_bridge, get_buddy_gateway, get_preset_agent_store
+from app.container import (
+    get_buddy_audio_bridge,
+    get_buddy_gateway,
+    get_buddy_vision_service,
+    get_codex_buddy_projection,
+    get_preset_agent_store,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +109,13 @@ def create_app() -> FastAPI:
     _configure_logging()
     settings = get_settings()
     app = FastAPI(title=settings.app_title, lifespan=_lifespan)
+    configure_buddy_runtime(
+        gateway=get_buddy_gateway,
+        settings=get_settings,
+        vision=get_buddy_vision_service,
+        projection=get_codex_buddy_projection,
+        access_checker=require_management_access,
+    )
 
     settings.static_dir.mkdir(parents=True, exist_ok=True)
     settings.frontend_dir.mkdir(parents=True, exist_ok=True)

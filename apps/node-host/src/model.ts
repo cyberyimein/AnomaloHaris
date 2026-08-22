@@ -1,5 +1,6 @@
 import type { ToolCall } from "@anomalo/contracts";
 
+import { DsmlProtocolError, DsmlToolCallParser } from "./dsml.js";
 import type { ModelMessage, ResponseFormat, ToolDefinition } from "./types.js";
 
 export type ModelRequest = {
@@ -24,6 +25,15 @@ export class ModelInterruptedError extends Error {
     this.name = "ModelInterruptedError";
     this.partialText = partialText;
     this.toolCalls = toolCalls;
+  }
+}
+
+export class ModelProtocolError extends Error {
+  readonly errorCode = "provider_protocol_error";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "ModelProtocolError";
   }
 }
 
@@ -91,17 +101,20 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
   private readonly baseUrl: string;
   private readonly apiKey: string;
   private readonly fetchImpl: typeof fetch;
+  private readonly toolProtocol: "auto" | "openai" | "dsml" | "none";
 
   constructor(options: {
     model: string;
     baseUrl: string;
     apiKey: string;
     fetchImpl?: typeof fetch;
+    toolProtocol?: "auto" | "openai" | "dsml" | "none";
   }) {
     this.model = options.model;
     this.baseUrl = options.baseUrl.replace(/\/$/, "");
     this.apiKey = options.apiKey;
     this.fetchImpl = options.fetchImpl ?? fetch;
+    this.toolProtocol = options.toolProtocol ?? "auto";
   }
 
   async *stream(request: ModelRequest, signal: AbortSignal): AsyncIterable<ModelStreamEvent> {
@@ -122,6 +135,9 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
     const decoder = new TextDecoder();
     let buffer = "";
     const pendingCalls = new Map<number, { id: string; name: string; arguments: string }>();
+    const dsmlParser = this.toolProtocol === "openai" || this.toolProtocol === "none"
+      ? undefined
+      : new DsmlToolCallParser();
     let emittedText = "";
     try {
       while (true) {
@@ -133,18 +149,30 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
           const data = line.startsWith("data:") ? line.slice(5).trim() : "";
           if (!data) continue;
           if (data === "[DONE]") {
-            if (pendingCalls.size > 0) {
-              yield { type: "tool.calls", calls: parseToolCalls(pendingCalls) };
-            } else {
-              yield { type: "done" };
+            const parsed = finishDsml(dsmlParser);
+            if (parsed.text) {
+              emittedText += parsed.text;
+              yield { type: "text.delta", text: parsed.text };
             }
+            const calls = [...parseToolCalls(pendingCalls), ...parsed.calls];
+            yield calls.length > 0 ? { type: "tool.calls", calls } : { type: "done" };
             return;
           }
           const payload = JSON.parse(data) as Record<string, any>;
           const delta = payload.choices?.[0]?.delta;
           if (typeof delta?.content === "string") {
-            emittedText += delta.content;
-            yield { type: "text.delta", text: delta.content };
+            const parsed = dsmlParser?.feed(delta.content) ?? { text: delta.content, calls: [] };
+            if (parsed.text) {
+              emittedText += parsed.text;
+              yield { type: "text.delta", text: parsed.text };
+            }
+            if (parsed.calls.length > 0) {
+              yield {
+                type: "tool.calls",
+                calls: [...parseToolCalls(pendingCalls), ...parsed.calls],
+              };
+              return;
+            }
           }
           for (const toolDelta of delta?.tool_calls ?? []) {
             const index = Number(toolDelta.index ?? 0);
@@ -155,21 +183,28 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
             pendingCalls.set(index, pending);
           }
           if (["stop", "length", "content_filter"].includes(payload.choices?.[0]?.finish_reason)) {
-            if (pendingCalls.size > 0) {
-              yield { type: "tool.calls", calls: parseToolCalls(pendingCalls) };
-            } else {
-              yield { type: "done" };
+            const parsed = finishDsml(dsmlParser);
+            if (parsed.text) {
+              emittedText += parsed.text;
+              yield { type: "text.delta", text: parsed.text };
             }
+            const calls = [...parseToolCalls(pendingCalls), ...parsed.calls];
+            yield calls.length > 0 ? { type: "tool.calls", calls } : { type: "done" };
             return;
           }
         }
         if (chunk.done) break;
       }
-      yield pendingCalls.size > 0
-        ? { type: "tool.calls", calls: parseToolCalls(pendingCalls) }
-        : { type: "done" };
+      const parsed = finishDsml(dsmlParser);
+      if (parsed.text) {
+        emittedText += parsed.text;
+        yield { type: "text.delta", text: parsed.text };
+      }
+      const calls = [...parseToolCalls(pendingCalls), ...parsed.calls];
+      yield calls.length > 0 ? { type: "tool.calls", calls } : { type: "done" };
     } catch (error) {
       if (signal.aborted) throw new ModelInterruptedError(emittedText, parseToolCalls(pendingCalls));
+      if (error instanceof DsmlProtocolError) throw new ModelProtocolError(error.message);
       throw error;
     } finally {
       reader.releaseLock();
@@ -188,8 +223,25 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
     });
     if (!response.ok) throw new Error(`Model request failed (${response.status}).`);
     const payload = (await response.json()) as Record<string, any>;
-    return String(payload.choices?.[0]?.message?.content ?? "");
+    const content = String(payload.choices?.[0]?.message?.content ?? "");
+    if (this.toolProtocol === "openai" || this.toolProtocol === "none") return content;
+    try {
+      const parsed = new DsmlToolCallParser();
+      const first = parsed.feed(content);
+      const last = parsed.finish();
+      const calls = [...first.calls, ...last.calls];
+      if (calls.length > 0) throw new ModelProtocolError("Non-streaming provider response contained tool calls.");
+      return first.text + last.text;
+    } catch (error) {
+      if (error instanceof ModelProtocolError) throw error;
+      if (error instanceof DsmlProtocolError) throw new ModelProtocolError(error.message);
+      throw error;
+    }
   }
+}
+
+function finishDsml(parser: DsmlToolCallParser | undefined): { text: string; calls: ToolCall[] } {
+  return parser?.finish() ?? { text: "", calls: [] };
 }
 
 function requestPayload(request: ModelRequest): Record<string, unknown> {

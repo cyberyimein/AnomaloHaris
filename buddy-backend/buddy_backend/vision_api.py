@@ -1,12 +1,17 @@
 from typing import Any
 
-from app.api.security import require_management_access
-from app.config import get_settings
-from app.container import get_buddy_gateway, get_buddy_vision_service
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 
 from buddy_backend import BuddyConnectionError
+from buddy_backend.bridge import (
+    get_buddy_gateway,
+    get_buddy_settings,
+    get_buddy_vision_service,
+    require_management_access,
+)
 from buddy_backend.vision import BuddyVisionConfigurationError, BuddyVisionProcessingError
+
+get_settings = get_buddy_settings
 
 router = APIRouter(
     prefix="/api/buddy/vision",

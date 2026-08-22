@@ -27,8 +27,26 @@ class Settings(BaseSettings):
     environment: str = Field(default="development", alias="ANOMALO_ENV")
     site_url: str = Field(default="http://localhost:8000", alias="ANOMALO_SITE_URL")
     runtime_impl: str = Field(default="python", alias="ANOMALO_RUNTIME_IMPL")
-    session_schema: str = Field(default="v1", alias="ANOMALO_SESSION_SCHEMA")
+    session_schema: str = Field(default="v2", alias="ANOMALO_SESSION_SCHEMA")
     node_host_url: str = Field(default="http://127.0.0.1:8000", alias="ANOMALO_NODE_HOST_URL")
+    python_worker_url: str = Field(
+        default="http://127.0.0.1:8849",
+        alias="ANOMALO_PYTHON_WORKER_URL",
+    )
+    python_worker_token: str | None = Field(default=None, alias="ANOMALO_PYTHON_WORKER_TOKEN")
+    python_worker_auto_start: bool = Field(default=False, alias="ANOMALO_PYTHON_WORKER_AUTO_START")
+    python_worker_timeout_ms: int = Field(
+        default=2_000,
+        gt=0,
+        alias="ANOMALO_PYTHON_WORKER_TIMEOUT_MS",
+    )
+    pi_extensions_enabled: bool = Field(default=False, alias="ANOMALO_PI_EXTENSIONS_ENABLED")
+    plugin_config: Path = Field(
+        default=REPO_ROOT / "config" / "plugins.yaml",
+        alias="ANOMALO_PLUGIN_CONFIG",
+    )
+    plugin_timeout_ms: int = Field(default=30_000, gt=0, alias="ANOMALO_PLUGIN_TIMEOUT_MS")
+    event_schema_version: int = Field(default=1, ge=1, alias="ANOMALO_EVENT_SCHEMA_VERSION")
 
     openrouter_api_key: str | None = Field(default=None, alias="OPENROUTER_API_KEY")
     openrouter_management_api_key: str | None = Field(

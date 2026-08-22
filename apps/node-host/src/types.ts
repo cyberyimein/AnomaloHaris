@@ -1,6 +1,7 @@
 import type {
   AgentEvent,
   EntryId,
+  PresetModelRef,
   ResponseFormat,
   RunId,
   SessionId,
@@ -9,7 +10,7 @@ import type {
   ToolResult,
 } from "@anomalo/contracts";
 
-export type { AgentEvent, EntryId, ResponseFormat, RunId, SessionId, ToolCall, ToolDefinition, ToolResult };
+export type { AgentEvent, EntryId, PresetModelRef, ResponseFormat, RunId, SessionId, ToolCall, ToolDefinition, ToolResult };
 
 export type ModelMessage = {
   role: "system" | "user" | "assistant" | "tool";
@@ -37,6 +38,7 @@ export type AgentRunInput = {
   promptProfile: string;
   systemPrompt?: string | undefined;
   model: string;
+  presetModelRef?: PresetModelRef | undefined;
   temperature?: number | undefined;
   searchMode: SearchMode;
   allowedToolNames?: ReadonlySet<string> | undefined;
@@ -59,6 +61,7 @@ export type ContextDiagnostics = {
   segmentCounts: Record<string, number>;
   totalMessageCount: number;
   toolCount: number;
+  compiledHash?: string | undefined;
 };
 
 export type BuiltContext = {
@@ -106,6 +109,7 @@ export type SessionCheckpoint = {
     responseFormat?: ResponseFormat | undefined;
     allowedToolNames?: string[] | undefined;
     model?: string;
+    presetModelRef?: PresetModelRef | undefined;
     temperature?: number | undefined;
     searchMode: SearchMode;
   };

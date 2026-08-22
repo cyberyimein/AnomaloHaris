@@ -1,11 +1,10 @@
 from typing import Any
 
-from app.api.security import require_management_access
-from app.container import get_buddy_gateway
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from buddy_backend import BuddyConfigurationError, BuddyConnectionError
+from buddy_backend.bridge import get_buddy_gateway, require_management_access
 
 router = APIRouter(
     prefix="/api/buddy",

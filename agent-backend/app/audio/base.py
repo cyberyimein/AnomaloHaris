@@ -5,6 +5,10 @@ import unicodedata
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
+from buddy_backend.audio_contract import AudioConfigurationError, AudioProcessingError
+
+__all__ = ["AudioConfigurationError", "AudioProcessingError"]
+
 
 def normalize_language_code(language: str | None) -> str | None:
     if language is None:
@@ -72,14 +76,6 @@ def sanitize_tts_text(text: str) -> str:
     cleaned = _TTS_EMOJI_RE.sub(" ", cleaned)
     cleaned = "".join(char if _is_tts_safe_character(char) else " " for char in cleaned)
     return re.sub(r"\s+", " ", cleaned).strip()
-
-
-class AudioConfigurationError(RuntimeError):
-    """Raised when a local audio provider is unavailable or misconfigured."""
-
-
-class AudioProcessingError(RuntimeError):
-    """Raised when audio input/output processing fails."""
 
 
 @dataclass(frozen=True)

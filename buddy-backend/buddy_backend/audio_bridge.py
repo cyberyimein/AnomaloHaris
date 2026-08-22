@@ -12,17 +12,10 @@ import wave
 from array import array
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
-from app.audio.base import (
-    AudioConfigurationError,
-    AudioProcessingError,
-    SynthesisResult,
-    TranscriptionResult,
-)
-from app.audio.service import VoiceService
-from app.config import Settings
-
+from buddy_backend.audio_contract import AudioConfigurationError, AudioProcessingError
 from buddy_backend.gateway import BuddyAudioTurn, BuddyGateway
 
 logger = logging.getLogger(__name__)
@@ -31,10 +24,10 @@ logger = logging.getLogger(__name__)
 class BuddyAudioBridge:
     def __init__(
         self,
-        settings: Settings,
+        settings: Any,
         *,
         gateway: BuddyGateway,
-        voice: VoiceService,
+        voice: Any,
         output_sample_rate_hz: int = 24000,
         output_chunk_bytes: int = 960,
     ) -> None:
@@ -159,7 +152,7 @@ class BuddyAudioBridge:
             except RuntimeError:
                 return
 
-    async def _transcribe_turn(self, turn: BuddyAudioTurn) -> TranscriptionResult:
+    async def _transcribe_turn(self, turn: BuddyAudioTurn) -> Any:
         wav_bytes = _pcm16_to_wav_bytes(turn)
         self._persist_debug_audio("last_input_stt.wav", wav_bytes, archive=True)
         auto_result = await _safe_transcribe(
@@ -247,9 +240,9 @@ class BuddyAudioBridge:
 
 
 async def _safe_transcribe(
-    voice: VoiceService,
+    voice: Any,
     **kwargs: object,
-) -> TranscriptionResult | None:
+) -> Any | None:
     try:
         return await voice.transcribe(**kwargs)
     except AudioProcessingError as exc:
@@ -258,7 +251,7 @@ async def _safe_transcribe(
         raise
 
 
-def _is_supported_auto_result(result: TranscriptionResult) -> bool:
+def _is_supported_auto_result(result: Any) -> bool:
     language = result.language
     probability = float(result.metadata.get("language_probability") or 0.0)
     if language not in {"en", "zh"}:
@@ -266,7 +259,7 @@ def _is_supported_auto_result(result: TranscriptionResult) -> bool:
     return probability >= 0.55
 
 
-def _log_candidate(label: str, result: TranscriptionResult | None) -> None:
+def _log_candidate(label: str, result: Any | None) -> None:
     if result is None:
         logger.info("Buddy STT %s candidate: empty", label)
         return
@@ -280,10 +273,10 @@ def _log_candidate(label: str, result: TranscriptionResult | None) -> None:
 
 
 def _select_buddy_transcript(
-    auto_result: TranscriptionResult | None,
-    zh_result: TranscriptionResult | None,
-    en_result: TranscriptionResult | None,
-) -> TranscriptionResult | None:
+    auto_result: Any | None,
+    zh_result: Any | None,
+    en_result: Any | None,
+) -> Any | None:
     candidates = [
         ("auto", auto_result),
         ("zh", zh_result),
@@ -310,7 +303,7 @@ def _select_buddy_transcript(
     return best_result
 
 
-def _score_transcript_candidate(label: str, result: TranscriptionResult) -> float:
+def _score_transcript_candidate(label: str, result: Any) -> float:
     text = result.text.strip()
     probability = float(result.metadata.get("language_probability") or 0.0)
     cjk_count = sum(1 for char in text if _is_cjk(char))
@@ -395,7 +388,7 @@ def _pcm16_to_wav_bytes(turn: BuddyAudioTurn) -> bytes:
 
 
 def _convert_synthesis_to_buddy_pcm(
-    result: SynthesisResult,
+    result: Any,
     *,
     sample_rate_hz: int,
 ) -> bytes:

@@ -3,19 +3,68 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { AgentCore } from "./core.js";
+import { ResourceContextBuilder } from "./context.js";
 import { buildNodeHost } from "./host.js";
 import { OpenAICompatibleAdapter, type ModelAdapter, type ModelStreamEvent } from "./model.js";
+import { BrowserToolBridge, BrowserToolRuntime } from "./browser.js";
+import { FileResourceLoader } from "./resources.js";
+import { ChildProcessPluginBackend, PiPluginHost, readPluginLoadConfig } from "./plugins.js";
+import { DEFAULT_PRESET_MODEL_REF, SqlitePresetModelRegistry } from "./preset-models.js";
 import { SqliteSessionAdapter } from "./sqlite.js";
 import { RunController } from "./controller.js";
-import { DeterministicToolRuntime } from "./tools.js";
+import { asToolAdapter, CompositeToolRuntime, CoreToolRuntime, PluginToolAdapter } from "./tools.js";
+import { PythonWorkerProcess, PythonWorkerToolRuntime, workerClientFromEnvironment, workerCommandFromEnvironment } from "./worker.js";
+import { WebToolRuntime } from "./web.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..", "..");
 const dataDir = resolve(process.env.ANOMALO_DATA_DIR ?? join(repoRoot, "data"));
-const databasePath = process.env.ANOMALO_SESSION_DB_PATH ?? join(dataDir, "sessions.sqlite3");
+const databasePath = process.env.ANOMALO_SESSION_DB_PATH || join(dataDir, "sessions.sqlite3");
+const presetModelDatabasePath = process.env.ANOMALO_PRESET_MODEL_DB_PATH || join(dataDir, "preset-models.sqlite3");
 const modelName = process.env.OPENROUTER_MODEL ?? "openai/gpt-4o-mini";
+const defaultPresetModelRef = process.env.ANOMALO_DEFAULT_PRESET_MODEL || DEFAULT_PRESET_MODEL_REF;
 const apiKey = process.env.OPENROUTER_API_KEY;
 const baseUrl = process.env.OPENAI_BASE_URL ?? "https://openrouter.ai/api/v1";
 const staticDir = process.env.ANOMALO_FRONTEND_DIR ?? join(repoRoot, "agent-backend", "app", "frontend");
+
+const presetModels = new SqlitePresetModelRegistry(presetModelDatabasePath);
+presetModels.ensureBuiltinDefault({
+  model: modelName,
+  promptProfile: process.env.ANOMALO_AGENT_PROMPT_PROFILE ?? "agent",
+});
+const defaultPresetModel = presetModels.resolve(defaultPresetModelRef);
+
+const browserBridge = new BrowserToolBridge(Number(process.env.BROWSER_TOOL_TIMEOUT_SECONDS ?? "60") * 1000);
+const workerClient = workerClientFromEnvironment();
+let workerProcess: PythonWorkerProcess | undefined;
+if (process.env.ANOMALO_PYTHON_WORKER_AUTO_START === "true") {
+  workerProcess = new PythonWorkerProcess({
+    client: workerClient,
+    command: workerCommandFromEnvironment(),
+    cwd: join(repoRoot, "agent-backend"),
+    env: {
+      PYTHONPATH: [join(repoRoot, "agent-backend"), join(repoRoot, "buddy-backend"), process.env.PYTHONPATH].filter(Boolean).join(":"),
+      ...(process.env.ANOMALO_PYTHON_WORKER_TOKEN ? { ANOMALO_PYTHON_WORKER_TOKEN: process.env.ANOMALO_PYTHON_WORKER_TOKEN } : {}),
+    },
+  });
+  try {
+    await workerProcess.start();
+  } catch (error) {
+    console.warn(`[node-host] Python Worker unavailable; continuing without Worker tools: ${error instanceof Error ? error.message : String(error)}`);
+    await workerProcess.stop();
+    workerProcess = undefined;
+  }
+}
+
+const extensionsEnabled = process.env.ANOMALO_PI_EXTENSIONS_ENABLED === "true";
+const plugins = new PiPluginHost({
+  timeoutMs: Number(process.env.ANOMALO_PLUGIN_TIMEOUT_MS ?? "30000"),
+  ...(extensionsEnabled ? { backend: new ChildProcessPluginBackend() } : {}),
+});
+if (extensionsEnabled) {
+  const pluginConfig = readPluginLoadConfig(process.env.ANOMALO_PLUGIN_CONFIG ?? join(repoRoot, "config", "plugins.yaml"));
+  const report = await plugins.load(pluginConfig);
+  if (report.errors.length > 0) console.warn(`[node-host] Plugin load report: ${JSON.stringify(report)}`);
+}
 
 class StaticFallbackModel implements ModelAdapter {
   constructor(readonly model: string) {}
@@ -32,38 +81,72 @@ class StaticFallbackModel implements ModelAdapter {
   }
 }
 
-const model = createModel(modelName, baseUrl, apiKey);
-const tools = new DeterministicToolRuntime([]);
+const model = createModel(modelName, baseUrl, apiKey, defaultPresetModel.toolProtocol);
+const tools = new CompositeToolRuntime([
+  asToolAdapter("host-core", 100, new CoreToolRuntime()),
+  asToolAdapter("web", 80, new WebToolRuntime({
+    enabled: process.env.WEB_TOOLS_ENABLED !== "false",
+    timeoutMs: Number(process.env.WEB_FETCH_TIMEOUT_SECONDS ?? "30") * 1000,
+    maxChars: Number(process.env.WEB_FETCH_MAX_CHARS ?? "30000"),
+  })),
+  asToolAdapter("browser-bridge", 70, new BrowserToolRuntime(browserBridge)),
+  asToolAdapter("python-worker", 40, new PythonWorkerToolRuntime(workerClient)),
+  new PluginToolAdapter(plugins),
+]);
 const sessions = new SqliteSessionAdapter(databasePath);
-const core = new AgentCore({ model, tools, sessions });
+const resources = new FileResourceLoader({
+  projectRoot: repoRoot,
+  skillDirs: [join(repoRoot, "agent-backend", "skills"), join(repoRoot, "buddy-backend", "skills")],
+  mcpConfigPath: join(repoRoot, "agent-backend", "config", "mcp_servers.yaml"),
+});
+const core = new AgentCore({
+  model,
+  tools,
+  sessions,
+  context: new ResourceContextBuilder(tools, resources),
+  plugins,
+});
 const controller = new RunController(core);
 const app = await buildNodeHost({
   controller,
   sessions,
   model: modelName,
+  presetModels,
+  defaultPresetModel: defaultPresetModel.ref,
   promptProfile: process.env.ANOMALO_AGENT_PROMPT_PROFILE ?? "agent",
   searchMode: process.env.ANOMALO_SEARCH_MODE ?? "diy",
   runtimeImpl: "node",
   sessionSchema: 2,
+  browserBridge,
+  tools,
   ...(existsSync(join(staticDir, "index.html")) ? { staticDir } : {}),
   logger: process.env.ANOMALO_ENV !== "test",
 });
 
 const port = Number(process.env.PORT ?? "8000");
-const host = process.env.HOST ?? "127.0.0.1";
+const requestedHost = process.env.HOST ?? "127.0.0.1";
+const isPublicHost = requestedHost !== "127.0.0.1" && requestedHost !== "::1" && requestedHost !== "localhost";
+const host = process.env.ANOMALO_ENV === "production" && isPublicHost && process.env.ANOMALO_ACKNOWLEDGE_PUBLIC_HOST !== "true"
+  ? "127.0.0.1"
+  : requestedHost;
+if (host !== requestedHost) {
+  console.warn("[node-host] Refusing public production bind without ANOMALO_ACKNOWLEDGE_PUBLIC_HOST=true.");
+}
 await app.listen({ port, host });
 
 async function shutdown(): Promise<void> {
+  await workerProcess?.stop();
   sessions.close();
+  presetModels.close();
   await app.close();
 }
 
 process.once("SIGINT", () => void shutdown());
 process.once("SIGTERM", () => void shutdown());
 
-function createModel(modelName: string, baseUrl: string, apiKey: string | undefined): ModelAdapter {
+function createModel(modelName: string, baseUrl: string, apiKey: string | undefined, toolProtocol: "openai" | "dsml" | "auto" | "none"): ModelAdapter {
   if (apiKey) {
-    return new OpenAICompatibleAdapter({ model: modelName, baseUrl, apiKey });
+    return new OpenAICompatibleAdapter({ model: modelName, baseUrl, apiKey, toolProtocol });
   }
   return new StaticFallbackModel(modelName);
 }

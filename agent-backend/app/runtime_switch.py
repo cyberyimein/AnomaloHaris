@@ -26,6 +26,8 @@ def host_command(
     python_executable: str,
     node_entry: Path | None = None,
     node_executable: str | None = None,
+    host: str = "127.0.0.1",
+    port: int = 8000,
 ) -> list[str]:
     runtime = normalize_runtime_impl(runtime_impl)
     if runtime == "python":
@@ -35,9 +37,9 @@ def host_command(
             "uvicorn",
             "app.main:app",
             "--host",
-            "0.0.0.0",
+            host,
             "--port",
-            "8000",
+            str(port),
         ]
     selected_node = node_executable or shutil.which("node") or "node"
     selected_entry = node_entry or repo_root / "apps" / "node-host" / "dist" / "main.js"

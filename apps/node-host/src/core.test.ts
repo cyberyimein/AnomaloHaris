@@ -7,6 +7,7 @@ import { ModelInterruptedError, ReplayModelAdapter, type ModelAdapter, type Mode
 import { InMemorySessionAdapter } from "./session.js";
 import { SqliteSessionAdapter } from "./sqlite.js";
 import { DeterministicToolRuntime } from "./tools.js";
+import type { PluginEvent, PluginHost } from "./plugins.js";
 import type { AgentRunInput } from "./types.js";
 
 const input: AgentRunInput = {
@@ -86,6 +87,62 @@ describe("AgentCore", () => {
     expect(events.find((event) => event.type === "tool.error")?.data).toMatchObject({
       data: { error_code: "tool_not_allowed" },
     });
+  });
+
+  it("applies before_agent_start messages before the first model request", async () => {
+    const tools = new DeterministicToolRuntime([]);
+    const model = new ReplayModelAdapter([[{ type: "text.delta", text: "Done." }, { type: "done" }]]);
+    const sessions = new InMemorySessionAdapter();
+    const pluginEvents: PluginEvent["type"][] = [];
+    const plugins: PluginHost = {
+      load: async () => ({ plugins: [], errors: [], unsupported: [] }),
+      unload: async () => undefined,
+      tools: async () => [],
+      callTool: async (call) => ({ name: call.name, ok: false, content: "unused", data: {} }),
+      dispatch: async (event) => {
+        pluginEvents.push(event.type);
+        if (event.type === "before_agent_start") {
+          return { messages: [...event.messages, { role: "system", content: "plugin context" }] };
+        }
+        return {};
+      },
+      status: () => [],
+    };
+    const core = new AgentCore({ model, tools, sessions, plugins });
+
+    for await (const _event of core.execute({ ...input, runId: "run-plugin-context" as AgentRunInput["runId"] }, new AbortController().signal)) {
+      // Consume the run so the hook and model request complete.
+    }
+
+    expect(model.streamCalls[0]?.messages.map((message) => message.content)).toContain("plugin context");
+    expect(pluginEvents).toContain("before_agent_start");
+    expect(pluginEvents).toContain("agent_end");
+  });
+
+  it("persists skill and MCP activation results for the next model turn", async () => {
+    const tools = new DeterministicToolRuntime(
+      [{ name: "skill_activate", description: "Activate", parameters: { type: "object" }, source: "skill-router" }],
+      {
+        skill_activate: () => ({
+          name: "skill_activate",
+          ok: true,
+          content: "activated",
+          data: { skill_action: "activate", skill_name: "skill-a" },
+        }),
+      },
+    );
+    const model = new ReplayModelAdapter([
+      [{ type: "tool.calls", calls: [{ id: "call-activate", name: "skill_activate", arguments: { skill_name: "skill-a" } }] }],
+      [{ type: "text.delta", text: "Done." }, { type: "done" }],
+    ]);
+    const sessions = new InMemorySessionAdapter();
+    const core = new AgentCore({ model, tools, sessions });
+
+    for await (const _event of core.execute({ ...input, runId: "run-resource-action" as AgentRunInput["runId"] }, new AbortController().signal)) {
+      // Consume the run so the resource update is persisted.
+    }
+
+    expect((await sessions.open(input.sessionId)).activeSkills).toEqual(["skill-a"]);
   });
 
   it("uses a bounded finalizer for structured output", async () => {
