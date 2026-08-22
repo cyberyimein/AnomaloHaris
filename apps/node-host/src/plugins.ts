@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import type { ToolCall, ToolDefinition, ToolResult } from "@anomalo/contracts";
 
 import type { ModelMessage, ToolContext } from "./types.js";
+import { type PluginLock, PluginCatalog } from "./plugin-catalog.js";
 
 export type PluginCompatibility = "L1" | "L2" | "L3" | "L4" | "L5";
 
@@ -13,8 +14,11 @@ export type PluginPermission = "tools.register" | "lifecycle.context" | "lifecyc
 
 export type PluginSpec = {
   id: string;
+  version?: string;
   package?: string;
   entry?: string;
+  manifestHash?: string;
+  packageHash?: string;
   enabled?: boolean;
   required?: boolean;
   trust?: "local-code";
@@ -23,7 +27,10 @@ export type PluginSpec = {
   priority?: number;
 };
 
-export type PluginLoadConfig = { plugins: readonly PluginSpec[] };
+export type PluginLoadConfig = {
+  plugins: readonly PluginSpec[];
+  locks?: readonly PluginLock[];
+};
 
 export function readPluginLoadConfig(path: string): PluginLoadConfig {
   if (!existsSync(path)) return { plugins: [] };
@@ -89,6 +96,9 @@ export type PiExtension = {
 
 export type PluginStatus = {
   id: string;
+  version?: string;
+  manifestHash?: string;
+  packageHash?: string;
   compatibility: PluginCompatibility;
   enabled: boolean;
   loaded: boolean;
@@ -145,17 +155,23 @@ export class PiPluginHost implements PluginHost {
   private readonly loaded = new Map<string, LoadedPlugin>();
   private readonly timeoutMs: number;
   private readonly backend: PluginBackend;
+  private readonly catalog: PluginCatalog | undefined;
 
-  constructor(options: { timeoutMs?: number; backend?: PluginBackend } = {}) {
+  constructor(options: { timeoutMs?: number; backend?: PluginBackend; catalog?: PluginCatalog } = {}) {
     this.timeoutMs = Math.max(1, options.timeoutMs ?? 30_000);
     this.backend = options.backend ?? new InProcessPluginBackend();
+    this.catalog = options.catalog;
   }
 
   async load(config: PluginLoadConfig): Promise<PluginLoadReport> {
+    this.catalog?.assertSpecs(config.plugins, config.locks);
     const report: PluginLoadReport = { plugins: [], errors: [], unsupported: [] };
     for (const spec of config.plugins) {
       const status: PluginStatus = {
         id: spec.id,
+        ...(spec.version ? { version: spec.version } : {}),
+        ...(spec.manifestHash ? { manifestHash: spec.manifestHash } : {}),
+        ...(spec.packageHash ? { packageHash: spec.packageHash } : {}),
         compatibility: spec.compatibility,
         enabled: spec.enabled !== false,
         loaded: false,
@@ -464,7 +480,10 @@ function parsePluginField(target: Partial<PluginSpec>, field: string): void {
   if (separator < 0) return;
   const key = field.slice(0, separator).trim() as keyof PluginSpec;
   const raw = field.slice(separator + 1).trim().replace(/^['"]|['"]$/g, "");
-  if (key === "enabled") target.enabled = raw === "true";
+  if (key === "version") target.version = raw;
+  else if (key === "manifestHash") target.manifestHash = raw;
+  else if (key === "packageHash") target.packageHash = raw;
+  else if (key === "enabled") target.enabled = raw === "true";
   else if (key === "required") target.required = raw === "true";
   else if (key === "priority") target.priority = Number(raw);
   else if (key === "id" || key === "package" || key === "entry" || key === "trust" || key === "compatibility") target[key] = raw as never;

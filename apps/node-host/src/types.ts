@@ -39,6 +39,7 @@ export type AgentRunInput = {
   systemPrompt?: string | undefined;
   model: string;
   presetModelRef?: PresetModelRef | undefined;
+  compiledHash?: string | undefined;
   temperature?: number | undefined;
   searchMode: SearchMode;
   allowedToolNames?: ReadonlySet<string> | undefined;
@@ -110,6 +111,7 @@ export type SessionCheckpoint = {
     allowedToolNames?: string[] | undefined;
     model?: string;
     presetModelRef?: PresetModelRef | undefined;
+    compiledHash?: string | undefined;
     temperature?: number | undefined;
     searchMode: SearchMode;
   };

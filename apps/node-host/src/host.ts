@@ -408,8 +408,16 @@ function toStartRunRequest(
   };
   if (preset) {
     input.presetModelRef = preset.ref;
+    input.compiledHash = preset.compiledHash;
     if (preset.systemPrompt !== undefined) input.systemPrompt = preset.systemPrompt;
-    if (preset.allowedToolNames) input.allowedToolNames = new Set(preset.allowedToolNames);
+    if (preset.toolCatalog.length > 0) {
+      const fixedTools = new Set(preset.toolCatalog);
+      input.allowedToolNames = preset.allowedToolNames
+        ? new Set(preset.allowedToolNames.filter((name) => fixedTools.has(name)))
+        : fixedTools;
+    } else if (preset.allowedToolNames) {
+      input.allowedToolNames = new Set(preset.allowedToolNames);
+    }
     if (preset.bootstrapTools) input.bootstrapTools = structuredClone(preset.bootstrapTools);
   }
   if (body.response_format && typeof body.response_format === "object") {
@@ -451,6 +459,8 @@ function serializePresetModel(model: CompiledPresetModel): Record<string, unknow
     tool_protocol: model.toolProtocol,
     prompt_profile: model.promptProfile,
     fixed_plugins: model.fixedPlugins,
+    plugin_locks: model.pluginLocks,
+    tool_catalog: model.toolCatalog,
     allowed_tools: model.allowedToolNames,
     compiled_hash: model.compiledHash,
   };

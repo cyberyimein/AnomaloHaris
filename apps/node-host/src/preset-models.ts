@@ -11,6 +11,7 @@ import type {
 import { validateContract } from "@anomalo/contracts";
 
 import type { BootstrapToolRequest } from "./types.js";
+import { PluginCatalog, type PluginLock } from "./plugin-catalog.js";
 
 export const DEFAULT_PRESET_MODEL_REF = "anomalo@1" as PresetModelRef;
 
@@ -26,6 +27,8 @@ export type CompiledPresetModel = {
   promptProfile?: string | undefined;
   systemPrompt?: string | undefined;
   fixedPlugins: string[];
+  pluginLocks: PluginLock[];
+  toolCatalog: string[];
   allowedToolNames?: string[] | undefined;
   bootstrapTools?: BootstrapToolRequest[] | undefined;
   definition: PresetModelDefinition;
@@ -91,18 +94,34 @@ CREATE TABLE IF NOT EXISTS preset_model_versions (
 );
 CREATE INDEX IF NOT EXISTS idx_preset_model_versions_status
   ON preset_model_versions(name, status, version DESC);
+CREATE TABLE IF NOT EXISTS preset_model_plugin_locks (
+  name TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  plugin_id TEXT NOT NULL,
+  plugin_version TEXT NOT NULL,
+  package_name TEXT NOT NULL,
+  entry TEXT NOT NULL,
+  compatibility TEXT NOT NULL,
+  permissions_json TEXT NOT NULL,
+  package_hash TEXT NOT NULL,
+  manifest_hash TEXT NOT NULL,
+  PRIMARY KEY(name, version, plugin_id),
+  FOREIGN KEY(name, version) REFERENCES preset_model_versions(name, version) ON DELETE CASCADE
+);
 `;
 
 export class SqlitePresetModelRegistry {
   readonly db: DatabaseSync;
   private readonly ownsDatabase: boolean;
   private readonly now: () => string;
+  private readonly catalog: PluginCatalog | undefined;
 
   constructor(
     dbPath: string,
-    options: { database?: DatabaseSync; now?: () => string } = {},
+    options: { database?: DatabaseSync; now?: () => string; catalog?: PluginCatalog } = {},
   ) {
     this.now = options.now ?? (() => new Date().toISOString());
+    this.catalog = options.catalog;
     if (options.database) {
       this.db = options.database;
       this.ownsDatabase = false;
@@ -123,7 +142,7 @@ export class SqlitePresetModelRegistry {
     if (existing) throw new Error("preset_model_version_exists");
 
     const createdAt = this.now();
-    const compiled = compileDefinition(definition, "draft");
+    const compiled = compileDefinition(definition, "draft", this.catalog);
     this.db.prepare(
       "INSERT OR IGNORE INTO preset_models(name, description, created_at, updated_at) VALUES (?, ?, ?, ?)",
     ).run(definition.name, definition.description, createdAt, createdAt);
@@ -143,6 +162,7 @@ export class SqlitePresetModelRegistry {
       compiled.compiledHash,
       createdAt,
     );
+    this.persistPluginLocks(compiled);
     return compiled;
   }
 
@@ -259,6 +279,28 @@ export class SqlitePresetModelRegistry {
     if (this.ownsDatabase && this.db.isOpen) this.db.close();
   }
 
+  private persistPluginLocks(model: CompiledPresetModel): void {
+    for (const lock of model.pluginLocks) {
+      this.db.prepare(`
+        INSERT INTO preset_model_plugin_locks(
+          name, version, plugin_id, plugin_version, package_name, entry,
+          compatibility, permissions_json, package_hash, manifest_hash
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        model.name,
+        model.version,
+        lock.id,
+        lock.version,
+        lock.package,
+        lock.entry,
+        lock.compatibility,
+        JSON.stringify(lock.permissions),
+        lock.packageHash,
+        lock.manifestHash,
+      );
+    }
+  }
+
   private has(ref: string): boolean {
     try {
       this.read(ref, { includeDraft: true });
@@ -286,7 +328,7 @@ export class SqlitePresetModelRegistry {
     if (!row) throw new Error("preset_model_not_found");
     const typed = row as RegistryRow;
     if (typed.status === "draft" && !options.includeDraft) throw new Error("preset_model_not_published");
-    return compiledFromRow(typed);
+    return compiledFromRow(typed, this.catalog);
   }
 }
 
@@ -324,19 +366,32 @@ function validateDefinition(definition: PresetModelDefinition): void {
   if (!validation.valid) throw new Error(`invalid_preset_model_definition:${JSON.stringify(validation.errors)}`);
 }
 
-function compileDefinition(definition: PresetModelDefinition, status: "draft" | "published" | "retired"): CompiledPresetModel {
+function compileDefinition(
+  definition: PresetModelDefinition,
+  status: "draft" | "published" | "retired",
+  catalog?: PluginCatalog,
+): CompiledPresetModel {
   const providerProtocol = definition.provider.tool_protocol ?? "auto";
   const fixedPlugins = [...(definition.plugins?.fixed ?? [])];
+  const graph = catalog?.compile(fixedPlugins);
+  const pluginLocks = graph?.locks ?? [];
+  const toolCatalog = graph?.toolNames ?? [];
   const allowedToolNames = definition.plugins?.allowed_tools ? [...definition.plugins.allowed_tools] : undefined;
+  if (graph && allowedToolNames?.some((name) => !toolCatalog.includes(name))) {
+    const invalid = allowedToolNames.find((name) => !toolCatalog.includes(name));
+    throw new Error(`tool_not_bound:${invalid}`);
+  }
   const bootstrapTools = definition.plugins?.bootstrap_tools as BootstrapToolRequest[] | undefined;
   const promptHash = hash({ profile: definition.prompt?.profile ?? "agent", system: definition.prompt?.system ?? "" });
-  const pluginLockHash = hash(fixedPlugins);
+  const pluginLockHash = graph?.pluginLockHash ?? hash(fixedPlugins);
   const snapshot = {
     provider_model: definition.provider.model,
     tool_protocol: providerProtocol,
     prompt_profile: definition.prompt?.profile ?? "agent",
     system_prompt: definition.prompt?.system ?? "",
     fixed_plugins: fixedPlugins,
+    plugin_locks: pluginLocks,
+    tool_catalog: toolCatalog,
     allowed_tools: allowedToolNames ?? null,
     bootstrap_tools: bootstrapTools ?? null,
     policy: definition.policy ?? {},
@@ -353,6 +408,8 @@ function compileDefinition(definition: PresetModelDefinition, status: "draft" | 
     ...(definition.prompt?.profile ? { promptProfile: definition.prompt.profile } : {}),
     ...(definition.prompt?.system !== undefined ? { systemPrompt: definition.prompt.system } : {}),
     fixedPlugins,
+    pluginLocks,
+    toolCatalog,
     ...(allowedToolNames ? { allowedToolNames } : {}),
     ...(bootstrapTools ? { bootstrapTools } : {}),
     definition: structuredClone(definition),
@@ -362,10 +419,11 @@ function compileDefinition(definition: PresetModelDefinition, status: "draft" | 
   };
 }
 
-function compiledFromRow(row: RegistryRow): CompiledPresetModel {
+function compiledFromRow(row: RegistryRow, catalog?: PluginCatalog): CompiledPresetModel {
   const definition = JSON.parse(row.definition_json) as PresetModelDefinition;
-  const compiled = compileDefinition(definition, row.status);
+  const compiled = compileDefinition(definition, row.status, catalog);
   if (compiled.compiledHash !== row.compiled_hash) throw new Error("preset_model_compiled_hash_mismatch");
+  if (compiled.pluginLockHash !== row.plugin_lock_hash) throw new Error("preset_model_plugin_lock_mismatch");
   return {
     ...compiled,
     promptHash: row.prompt_hash,

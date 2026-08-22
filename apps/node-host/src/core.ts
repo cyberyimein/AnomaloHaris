@@ -99,6 +99,9 @@ export class AgentCore {
       ...(checkpoint?.state.presetModelRef ?? input.presetModelRef
         ? { presetModelRef: checkpoint?.state.presetModelRef ?? input.presetModelRef }
         : {}),
+      ...(checkpoint?.state.compiledHash ?? input.compiledHash
+        ? { compiledHash: checkpoint?.state.compiledHash ?? input.compiledHash }
+        : {}),
       promptProfile: checkpoint?.state.promptProfile ?? input.promptProfile,
       ...(effectiveSystemPrompt === undefined
         ? {}
@@ -132,6 +135,7 @@ export class AgentCore {
       config: {
         model: runInput.model,
         ...(runInput.presetModelRef ? { model_ref: runInput.presetModelRef } : {}),
+        ...(runInput.compiledHash ? { compiled_hash: runInput.compiledHash } : {}),
         ...(runInput.temperature === undefined ? {} : { temperature: runInput.temperature }),
         searchMode: runInput.searchMode,
         promptProfile: runInput.promptProfile,
@@ -252,6 +256,7 @@ export class AgentCore {
           promptProfile: runInput.promptProfile,
           ...(resourceSnapshot ? { resourceSnapshot } : {}),
         });
+        if (runInput.compiledHash) context.diagnostics.compiledHash = runInput.compiledHash;
         const contextHook = await this.dependencies.plugins?.dispatch({
           type: "context",
           context: pluginContext,
@@ -546,6 +551,7 @@ export class AgentCore {
         ...(input.allowedToolNames === undefined ? {} : { allowedToolNames: [...input.allowedToolNames].sort() }),
         model: input.model,
         ...(input.presetModelRef ? { presetModelRef: input.presetModelRef } : {}),
+        ...(input.compiledHash ? { compiledHash: input.compiledHash } : {}),
         ...(input.temperature === undefined ? {} : { temperature: input.temperature }),
         searchMode: input.searchMode,
       },

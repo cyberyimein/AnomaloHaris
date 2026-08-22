@@ -9,6 +9,7 @@ import { OpenAICompatibleAdapter, type ModelAdapter, type ModelStreamEvent } fro
 import { BrowserToolBridge, BrowserToolRuntime } from "./browser.js";
 import { FileResourceLoader } from "./resources.js";
 import { ChildProcessPluginBackend, PiPluginHost, readPluginLoadConfig } from "./plugins.js";
+import { builtinPluginCatalog, createPluginManifest } from "./plugin-catalog.js";
 import { DEFAULT_PRESET_MODEL_REF, SqlitePresetModelRegistry } from "./preset-models.js";
 import { SqliteSessionAdapter } from "./sqlite.js";
 import { RunController } from "./controller.js";
@@ -26,7 +27,25 @@ const apiKey = process.env.OPENROUTER_API_KEY;
 const baseUrl = process.env.OPENAI_BASE_URL ?? "https://openrouter.ai/api/v1";
 const staticDir = process.env.ANOMALO_FRONTEND_DIR ?? join(repoRoot, "agent-backend", "app", "frontend");
 
-const presetModels = new SqlitePresetModelRegistry(presetModelDatabasePath);
+const extensionsEnabled = process.env.ANOMALO_PI_EXTENSIONS_ENABLED === "true";
+const pluginConfig = extensionsEnabled
+  ? readPluginLoadConfig(process.env.ANOMALO_PLUGIN_CONFIG ?? join(repoRoot, "config", "plugins.yaml"))
+  : { plugins: [] };
+const pluginCatalog = builtinPluginCatalog();
+for (const spec of pluginConfig.plugins) {
+  if (pluginCatalog.get(spec.id)) continue;
+  pluginCatalog.register(createPluginManifest({
+    id: spec.id,
+    version: spec.version ?? "0.0.0-local",
+    package: spec.package ?? `@local/${spec.id}`,
+    entry: spec.entry ?? ".",
+    compatibility: spec.compatibility,
+    permissions: spec.permissions ?? [],
+    ...(spec.entry && existsSync(spec.entry) ? { packageRoot: spec.entry } : {}),
+  }));
+}
+
+const presetModels = new SqlitePresetModelRegistry(presetModelDatabasePath, { catalog: pluginCatalog });
 presetModels.ensureBuiltinDefault({
   model: modelName,
   promptProfile: process.env.ANOMALO_AGENT_PROMPT_PROFILE ?? "agent",
@@ -55,13 +74,12 @@ if (process.env.ANOMALO_PYTHON_WORKER_AUTO_START === "true") {
   }
 }
 
-const extensionsEnabled = process.env.ANOMALO_PI_EXTENSIONS_ENABLED === "true";
 const plugins = new PiPluginHost({
   timeoutMs: Number(process.env.ANOMALO_PLUGIN_TIMEOUT_MS ?? "30000"),
+  catalog: pluginCatalog,
   ...(extensionsEnabled ? { backend: new ChildProcessPluginBackend() } : {}),
 });
 if (extensionsEnabled) {
-  const pluginConfig = readPluginLoadConfig(process.env.ANOMALO_PLUGIN_CONFIG ?? join(repoRoot, "config", "plugins.yaml"));
   const report = await plugins.load(pluginConfig);
   if (report.errors.length > 0) console.warn(`[node-host] Plugin load report: ${JSON.stringify(report)}`);
 }
