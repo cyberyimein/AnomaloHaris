@@ -174,7 +174,7 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
     try {
       requireManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
       const models = (options.presetModels?.list({ includeDraft: true, includeRetired: true }) ?? []).map((summary) => {
-        const model = options.presetModels!.resolve(summary.ref, { allowDraft: true });
+        const model = options.presetModels!.resolve(summary.ref, { allowDraft: true, allowRetired: true });
         return serializePresetModel(model, true);
       });
       return reply.send({ preset_models: models });
@@ -208,7 +208,11 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
     try {
       requireManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
       if (!options.presetModels) throw new HostRequestError(503, "preset_model_unavailable", "Preset Model registry is not configured.");
-      return reply.send({ preset_model: serializePresetModel(options.presetModels.retire(`${request.params.name}@${request.params.version}`), true) });
+      const ref = `${request.params.name}@${request.params.version}`;
+      const retired = options.defaultPresetModel
+        ? options.presetModels.retire(ref, { defaultRef: options.defaultPresetModel })
+        : options.presetModels.retire(ref);
+      return reply.send({ preset_model: serializePresetModel(retired, true) });
     } catch (error) {
       return sendHostError(reply, error);
     }
@@ -235,7 +239,19 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
   }
 
   app.get("/api/preset-models", async () => ({
-    preset_models: options.presetModels?.list() ?? [],
+    preset_models: (options.presetModels?.list() ?? []).map((summary) => {
+      try {
+        return serializePresetModel(options.presetModels!.resolve(summary.ref));
+      } catch (error) {
+        return {
+          ...summary,
+          availability: "unavailable",
+          error_code: hostErrorCode(error),
+          tool_catalog: [],
+          allowed_tools: [],
+        };
+      }
+    }),
     default_preset_model: options.defaultPresetModel,
   }));
 
@@ -261,22 +277,47 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
     agents: (options.presetModels?.list() ?? []).map(serializeLegacyAgent),
   }));
 
-  app.get("/api/tools", async (request) => {
+  app.get("/api/tools", async (request, reply) => {
     if (!options.tools) return { tools: [], providers: [] };
-    const query = request.query as { session_id?: string };
+    const query = request.query as { session_id?: string; preset_model?: string; model?: string };
     const sessionId = typeof query.session_id === "string" && query.session_id
       ? query.session_id as SessionId
       : randomIds.sessionId();
     const snapshot = query.session_id ? await options.sessions.open(sessionId) : undefined;
+    const boundRef = typeof snapshot?.metadata.preset_model_ref === "string" ? snapshot.metadata.preset_model_ref : undefined;
+    const requestedRef = query.preset_model ?? query.model ?? boundRef ?? options.defaultPresetModel;
+    let preset: CompiledPresetModel | undefined;
+    if (requestedRef && options.presetModels) {
+      try {
+        preset = boundRef && boundRef === requestedRef
+          ? options.presetModels.resolveForBoundSession(requestedRef)
+          : options.presetModels.resolve(requestedRef);
+      } catch (error) {
+        return sendHostError(reply, error);
+      }
+    }
+    const allowedToolNames = preset?.allowedToolNames
+      ? new Set(preset.allowedToolNames)
+      : preset?.toolCatalog.length
+        ? new Set(preset.toolCatalog)
+        : undefined;
     const context: ToolContext = {
       sessionId,
       runId: randomIds.runId(),
-      searchMode: snapshot?.searchMode ?? "diy",
-      model: options.model,
+      searchMode: preset?.policy.searchMode ?? snapshot?.searchMode ?? "diy",
+      model: preset?.providerModel ?? options.model,
       activeSkills: new Set(snapshot?.activeSkills ?? []),
       activeMcpServers: new Set(snapshot?.activeMcpServers ?? []),
+      ...(preset ? { allowedPluginIds: new Set(preset.fixedPlugins.map((selector) => selector.split("@")[0]!)) } : {}),
+      ...(preset ? { allowedPluginLocks: structuredClone(preset.pluginLocks) } : {}),
     };
-    return { tools: await options.tools.list(context), providers: await options.tools.status(context) };
+    const tools = await options.tools.list(context);
+    return {
+      model_ref: preset?.ref,
+      provider_model: preset?.providerModel ?? options.model,
+      tools: allowedToolNames ? tools.filter((tool) => allowedToolNames.has(tool.name)) : tools,
+      providers: await options.tools.status(context),
+    };
   });
 
   app.get("/api/plugins", async () => ({ plugins: options.plugins?.status() ?? [] }));
@@ -285,6 +326,24 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
     try {
       requireManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
       return reply.send({ plugins: options.plugins?.status() ?? [] });
+    } catch (error) {
+      return sendHostError(reply, error);
+    }
+  });
+
+  app.get("/api/manage/tools", async (request, reply) => {
+    try {
+      requireManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
+      if (!options.tools) return reply.send({ tools: [], providers: [] });
+      const context: ToolContext = {
+        sessionId: randomIds.sessionId(),
+        runId: randomIds.runId(),
+        searchMode: "diy",
+        model: options.model,
+        activeSkills: new Set(),
+        activeMcpServers: new Set(),
+      };
+      return reply.send({ tools: await options.tools.list(context), providers: await options.tools.status(context) });
     } catch (error) {
       return sendHostError(reply, error);
     }
@@ -321,7 +380,7 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
     if (!parsed) return;
     let input: StartRunRequest;
     try {
-      input = toStartRunRequest(parsed, options);
+      input = await toStartRunRequest(parsed, options);
       await bindPresetModel(input, options);
     } catch (error) {
       return sendHostError(reply, error);
@@ -335,7 +394,7 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
     if (!parsed) return;
     let input: StartRunRequest;
     try {
-      input = toStartRunRequest(parsed, options);
+      input = await toStartRunRequest(parsed, options);
       await bindPresetModel(input, options);
     } catch (error) {
       return sendHostError(reply, error);
@@ -360,7 +419,7 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
     if (!parsed) return;
     let input: StartRunRequest;
     try {
-      input = toStartRunRequest(parsed, options);
+      input = await toStartRunRequest(parsed, options);
       await bindPresetModel(input, options);
     } catch (error) {
       return sendHostError(reply, error);
@@ -374,7 +433,7 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
     if (!parsed) return;
     let input: StartRunRequest;
     try {
-      input = toStartRunRequest(parsed, options);
+      input = await toStartRunRequest(parsed, options);
       await bindPresetModel(input, options);
     } catch (error) {
       return sendHostError(reply, error);
@@ -428,12 +487,14 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
         },
       });
     };
-    const start = async (input: StartRunRequest): Promise<void> => {
+    const start = async (inputOrPromise: StartRunRequest | Promise<StartRunRequest>): Promise<void> => {
       if (activeTask) {
         sendError("A run is already active for this session.", "run_already_active");
         return;
       }
+      let input: StartRunRequest;
       try {
+        input = await inputOrPromise;
         await bindPresetModel(input, options);
       } catch (error) {
         sendError(hostErrorMessage(error), hostErrorCode(error));
@@ -503,11 +564,7 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
           await options.controller.stop(sessionId, "user_stop");
           return;
         case "run.resume":
-          try {
-            void start(toStartRunRequest({ ...message, session_id: sessionId, message: null, resume: true }, options));
-          } catch (error) {
-            sendError(hostErrorMessage(error), hostErrorCode(error));
-          }
+          void start(toStartRunRequest({ ...message, session_id: sessionId, message: null, resume: true }, options));
           return;
         case "browser.tool.result": {
           const resultMessage = { ...message, session_id: sessionId };
@@ -522,11 +579,7 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
             sendError("Message content is required.", "message_required");
             return;
           }
-          try {
-            void start(toStartRunRequest({ ...message, session_id: sessionId, message: content }, options));
-          } catch (error) {
-            sendError(hostErrorMessage(error), hostErrorCode(error));
-          }
+          void start(toStartRunRequest({ ...message, session_id: sessionId, message: content }, options));
           return;
         }
         default:
@@ -574,24 +627,38 @@ function parseRunRequest(body: unknown, reply: FastifyReply): RunRequest | undef
   return body as RunRequest;
 }
 
-function toStartRunRequest(
+async function toStartRunRequest(
   request: RunRequest | Record<string, unknown>,
   options: NodeHostOptions,
-): StartRunRequest {
+): Promise<StartRunRequest> {
   const body = request as Record<string, unknown>;
   const sessionId = typeof body.session_id === "string" && body.session_id
     ? body.session_id as SessionId
     : randomIds.sessionId();
-  const requestedRef = typeof body.preset_model === "string" && body.preset_model
+  const explicitRef = typeof body.preset_model === "string" && body.preset_model
     ? body.preset_model
-    : options.defaultPresetModel;
+    : undefined;
+  const existingSession = await options.sessions.open(sessionId);
+  const boundRef = typeof existingSession.metadata.preset_model_ref === "string"
+    ? existingSession.metadata.preset_model_ref
+    : undefined;
+  const requestedRef = explicitRef ?? boundRef ?? options.defaultPresetModel;
   let preset: CompiledPresetModel | undefined;
   if (requestedRef) {
     if (!options.presetModels) throw new HostRequestError(404, "preset_model_unavailable", "Preset Model registry is not configured.");
     try {
-      preset = options.presetModels.resolve(requestedRef);
+      preset = boundRef && requestedRef === boundRef
+        ? options.presetModels.resolveForBoundSession(requestedRef)
+        : options.presetModels.resolve(requestedRef);
     } catch (error) {
       throw new HostRequestError(404, hostErrorCode(error), hostErrorMessage(error));
+    }
+  }
+  if (preset) {
+    for (const key of ["temperature", "response_format", "tools", "tool_choice", "provider", "prompt", "plugins"]) {
+      if (body[key] !== undefined && body[key] !== null) {
+        throw new HostRequestError(400, "preset_model_override_forbidden", `The ${key} field is controlled by the Preset Model.`);
+      }
     }
   }
   const input: StartRunRequest = {
@@ -602,13 +669,18 @@ function toStartRunRequest(
       ? body.prompt_profile
       : preset?.promptProfile ?? options.promptProfile ?? "agent",
     model: preset?.providerModel ?? options.model,
-    searchMode: typeof body.search_mode === "string" && body.search_mode
+    searchMode: !preset && typeof body.search_mode === "string" && body.search_mode
       ? body.search_mode
-      : stringPolicy(preset, "search_mode") ?? options.searchMode ?? "diy",
+    : preset?.policy.searchMode ?? options.searchMode ?? "diy",
+    ...(preset?.toolProtocol ? { toolProtocol: preset.toolProtocol } : {}),
   };
   if (preset) {
     input.presetModelRef = preset.ref;
     input.compiledHash = preset.compiledHash;
+    input.toolProtocol = preset.toolProtocol;
+    input.policy = structuredClone(preset.policy);
+    input.allowedPluginIds = new Set(preset.fixedPlugins.map((selector) => selector.split("@")[0]!));
+    input.allowedPluginLocks = structuredClone(preset.pluginLocks);
     if (preset.systemPrompt !== undefined) input.systemPrompt = preset.systemPrompt;
     if (preset.toolCatalog.length > 0) {
       const fixedTools = new Set(preset.toolCatalog);
@@ -620,10 +692,15 @@ function toStartRunRequest(
     }
     if (preset.bootstrapTools) input.bootstrapTools = structuredClone(preset.bootstrapTools);
   }
-  if (body.response_format && typeof body.response_format === "object") {
+  if (!preset && body.response_format && typeof body.response_format === "object") {
     input.responseFormat = body.response_format as ResponseFormat;
   }
-  if (options.temperature !== undefined) input.temperature = options.temperature;
+  if (preset) {
+    if (preset.policy.temperature !== undefined) input.temperature = preset.policy.temperature;
+    if (preset.policy.responseFormat !== undefined) input.responseFormat = structuredClone(preset.policy.responseFormat);
+  } else if (options.temperature !== undefined) {
+    input.temperature = options.temperature;
+  }
   return input;
 }
 
@@ -643,11 +720,6 @@ async function bindPresetModel(input: StartRunRequest, options: NodeHostOptions)
   if (!bound) await options.sessions.setPresetModel(input.sessionId, input.presetModelRef);
 }
 
-function stringPolicy(preset: CompiledPresetModel | undefined, key: string): string | undefined {
-  const value = preset?.definition.policy?.[key];
-  return typeof value === "string" && value ? value : undefined;
-}
-
 function serializePresetModel(model: CompiledPresetModel, includeDefinition = false): Record<string, unknown> {
   return {
     ref: model.ref,
@@ -662,6 +734,8 @@ function serializePresetModel(model: CompiledPresetModel, includeDefinition = fa
     plugin_locks: model.pluginLocks,
     tool_catalog: model.toolCatalog,
     allowed_tools: model.allowedToolNames,
+    bootstrap_tools: model.bootstrapTools ?? [],
+    policy: structuredClone(model.policy),
     compiled_hash: model.compiledHash,
     ...(includeDefinition ? { definition: structuredClone(model.definition) } : {}),
   };
@@ -695,9 +769,11 @@ function sendHostError(reply: FastifyReply, error: unknown): FastifyReply {
 }
 
 function hostErrorStatus(error: unknown): number {
-  return error instanceof HostRequestError
-    ? error.statusCode
-    : hostErrorCode(error) === "session_model_mismatch" ? 409 : 500;
+  if (error instanceof HostRequestError) return error.statusCode;
+  const code = hostErrorCode(error);
+  if (["session_model_mismatch", "preset_model_default_cannot_retire"].includes(code)) return 409;
+  if (code === "invalid_preset_model_definition") return 400;
+  return 500;
 }
 
 function hostErrorCode(error: unknown): string {
@@ -706,6 +782,10 @@ function hostErrorCode(error: unknown): string {
     if (error.message === "preset_model_not_found" || error.message === "preset_model_not_published") return "preset_model_not_found";
     if (error.message === "invalid_preset_model_ref") return "invalid_request";
     if (error.message === "preset_model_retired") return "preset_model_not_found";
+    if (error.message === "preset_model_default_cannot_retire") return "preset_model_default_cannot_retire";
+    if (error.message === "tool_protocol_none_with_tools" || error.message === "unsupported_tool_execution_policy" || error.message.startsWith("invalid_policy:") || error.message.startsWith("invalid_preset_model_definition:") || error.message.startsWith("tool_not_bound:")) {
+      return "invalid_preset_model_definition";
+    }
   }
   return "model_failed";
 }

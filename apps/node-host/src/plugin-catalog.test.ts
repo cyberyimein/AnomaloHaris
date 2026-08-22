@@ -84,7 +84,7 @@ describe("PluginCatalog", () => {
     });
     registry.publish("locked@1");
     writeFileSync(entry, "export default { changed: true };");
-    expect(() => registry.resolve("locked@1")).toThrow("preset_model_compiled_hash_mismatch");
+    expect(() => registry.resolve("locked@1")).toThrow("plugin_hash_mismatch:locked-plugin");
     registry.close();
   });
 });

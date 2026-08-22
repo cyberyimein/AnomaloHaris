@@ -57,6 +57,25 @@ export class PluginCatalog {
     this.entries.set(manifest.id, structuredClone(manifest));
   }
 
+  refreshRuntimeMetadata(id: string, toolNames: readonly string[], capabilities: readonly string[]): PluginManifest {
+    const current = this.entries.get(id);
+    if (!current) throw new Error(`plugin_not_allowlisted:${id}`);
+    const refreshed = createPluginManifest({
+      id: current.id,
+      version: current.version,
+      package: current.package,
+      entry: current.entry,
+      compatibility: current.compatibility,
+      permissions: current.permissions,
+      toolNames,
+      capabilities,
+      ...(current.required === undefined ? {} : { required: current.required }),
+      ...(current.packageRoot ? { packageRoot: current.packageRoot } : {}),
+    });
+    this.entries.set(id, refreshed);
+    return structuredClone(refreshed);
+  }
+
   get(id: string): PluginManifest | undefined {
     const manifest = this.entries.get(id);
     return manifest ? structuredClone(manifest) : undefined;

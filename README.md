@@ -23,7 +23,7 @@ These goals share one runtime: agent-harness experiments can be tested through t
 - Provides a Vue dashboard for chat, context inspection, Preset Models, and plugin capability status.
 - Loads explicitly allowlisted Pi-like Node plugins in the Host or isolated child processes.
 - Includes OpenAI-compatible and Anomalo-native APIs with usage, idempotency, and management routes.
-- Keeps legacy Python and hardware code as migration/reference material; it is not copied into the Node production image.
+- Keeps hardware protocol notes and optional plugin seams outside the Node production image.
 
 ## Repository layout
 
@@ -31,12 +31,11 @@ These goals share one runtime: agent-harness experiments can be tested through t
 .
 ├── apps/node-host/  Node.js Host, AgentCore, Provider, Session, and PluginHost
 ├── packages/        contracts and shared TypeScript packages
-├── agent-backend/   migration-era resources, Python reference code, and deployment files
-├── buddy-backend/   legacy hardware reference code (not part of Node production)
+├── agent-backend/   runtime resources, deployment files, and the committed frontend bundle
+├── buddy-backend/   optional Buddy plugin reference (not part of Node production)
 ├── frontend/        Vue 3 and Vite source
 ├── .env.example     Shared runtime configuration template
-├── pyproject.toml   Python package metadata and dependency groups
-└── uv.lock          Reproducible Python dependency lockfile
+└── docs/            architecture, migration, and optional-capability design docs
 ```
 
 The production frontend build is committed under `agent-backend/app/frontend/` so the Node Host can serve the application without a separate frontend process. The production Docker image contains only Node artifacts and trusted resource files.
@@ -263,8 +262,8 @@ The development UI can upload an `AGENTS.md` file as local agent memory. It is s
 ### Skills
 
 Node Host skills live under `agent-backend/skills/`. Each skill contains a `SKILL.md` file with
-YAML frontmatter and instructions. Legacy `buddy-backend/skills/` and Python `tools.py` files are
-not loaded by the Node runtime; a capability plugin owns any executable integration.
+YAML frontmatter and instructions. Buddy plugin skills and executable hardware integrations are
+not loaded by the Node runtime; a capability plugin owns them explicitly.
 
 ```text
 agent-backend/skills/calculator/
@@ -293,18 +292,11 @@ remain outside the Node Host core.
 
 ## Retired Python and hardware integrations
 
-The repository keeps the former Python sandbox, audio, vision, and Buddy code as migration or
-protocol reference material. These routes and dependencies are not part of the Node Host, are not
-copied into the production image, and are not started by the deployment scripts. If one of these
-capabilities returns, package it as an explicitly allowlisted Node plugin or an external service
-with its own lifecycle and security boundary.
-
-## Stock analysis
-
-The integrated Anomalo stock-analysis feature is offline and has been replaced by the **Urus agent**.
-The retired implementation is preserved locally in the Git-ignored archive
-`archives/anomalo-stock-analysis-20260806.zip` for reference or recovery; it is not part of the
-application build or runtime.
+The former Python Host, audio, vision, and Codex hook runtime have been removed. Buddy protocol notes
+and an optional Python gateway reference remain under `buddy-backend/`; they are not imported by the
+Node Host, copied into the production image, or started by deployment scripts. If any capability
+returns, package it as an explicitly allowlisted plugin or external service with its own lifecycle
+and security boundary.
 
 ## Apple Container deployment
 
@@ -329,8 +321,9 @@ ENV_FILE=agent-backend/deploy/anomalo.container.env \
 ```
 
 The private deployment environment file is ignored by Git. Review both scripts and adapt the network, storage, SSH, and host-loopback settings to your machine before running them.
+Before deployment, set `ANOMALO_SERVICE_TOKEN` and the separate `ANOMALO_ADMIN_TOKEN` to different long random secrets. The production image listens on `0.0.0.0` only with explicit acknowledgement and refuses to start without both tokens; compute callers send the service token as a Bearer token, while the dashboard sends the admin token only to management routes.
 
-The deployment script mounts `REMOTE_DATA_DIR` from the deployment host to `/data` in the container. Session history and Stop/Resume checkpoints are stored in `/data/sessions.sqlite3`; Preset Models are stored in `/data/preset-models.sqlite3`. Keep this directory on persistent host storage and do not delete it when replacing the container. By default it is `.anomalo/anomalo-data` under the remote user's home; set `REMOTE_STORAGE_ROOT` or `REMOTE_DATA_DIR` to an explicit host path when needed.
+The deployment script mounts `REMOTE_DATA_DIR` from the deployment host to `/data` in the container. Session history and Stop/Resume checkpoints are stored in `/data/sessions.sqlite3`; Preset Models are stored in `/data/preset-models.sqlite3`; usage, idempotency reservations, and Native Run events are stored in `/data/compute.sqlite3`. Keep this directory on persistent host storage and do not delete it when replacing the container. By default it is `.anomalo/anomalo-data` under the remote user's home; set `REMOTE_STORAGE_ROOT` or `REMOTE_DATA_DIR` to an explicit host path when needed.
 
 ## Tests and linting
 

@@ -127,6 +127,17 @@ describe("Node Host", () => {
       payload: { session_id: "bound-session", message: "hello" },
     });
     expect(first.statusCode).toBe(200);
+    const override = await app.inject({
+      method: "POST",
+      url: "/api/chat",
+      payload: {
+        session_id: "override-session",
+        message: "hello",
+        response_format: { type: "json_object" },
+      },
+    });
+    expect(override.statusCode).toBe(400);
+    expect(override.json()).toMatchObject({ error_code: "preset_model_override_forbidden" });
     const compat = await app.inject({
       method: "POST",
       url: "/api/agents/anomalo%401/chat/stream",
@@ -142,6 +153,48 @@ describe("Node Host", () => {
     });
     expect(mismatch.statusCode).toBe(409);
     expect(mismatch.json()).toMatchObject({ error_code: "session_model_mismatch" });
+  });
+
+  it("keeps an existing session on its bound model when the default changes", async () => {
+    const registry = new SqlitePresetModelRegistry(":memory:");
+    registries.push(registry);
+    registry.ensureBuiltinDefault({ model: "default-provider" });
+    registry.publish(registry.createDraft({
+      name: "luna",
+      version: 1,
+      description: "New default",
+      provider: { adapter: "openai-compatible", model: "luna-provider", tool_protocol: "auto" },
+      plugins: { fixed: [] },
+    }).ref);
+    const sessions = new InMemorySessionAdapter();
+    const first = await makeApp(
+      [[{ type: "text.delta", text: "first" }, { type: "done" }]],
+      undefined,
+      registry,
+      undefined,
+      undefined,
+      undefined,
+      sessions,
+      "anomalo@1",
+    );
+    apps.push(first);
+    const initial = await first.inject({ method: "POST", url: "/api/chat", payload: { session_id: "stable-session", message: "first" } });
+    expect(initial.statusCode).toBe(200);
+
+    const second = await makeApp(
+      [[{ type: "text.delta", text: "second" }, { type: "done" }]],
+      undefined,
+      registry,
+      undefined,
+      undefined,
+      undefined,
+      sessions,
+      "luna@1",
+    );
+    apps.push(second);
+    const continued = await second.inject({ method: "POST", url: "/api/chat", payload: { session_id: "stable-session", message: "continue" } });
+    expect(continued.statusCode).toBe(200);
+    expect(continued.json()).toMatchObject({ final_text: "second" });
   });
 
   it("serves resource debug APIs and keeps management/plugin metadata separate", async () => {
@@ -195,16 +248,18 @@ async function makeApp(
   resources?: FileResourceLoader,
   plugins?: PluginHost,
   managementToken?: string,
+  sessionAdapter?: InMemorySessionAdapter,
+  defaultPresetModel = "anomalo@1",
 ) {
   const tools = new DeterministicToolRuntime([]);
   const model = new ReplayModelAdapter(steps);
-  const sessions = new InMemorySessionAdapter();
+  const sessions = sessionAdapter ?? new InMemorySessionAdapter();
   const core = new AgentCore({ model, tools, sessions });
   return buildNodeHost({
     controller: new RunController(core),
     sessions,
     model: "replay-model",
-    ...(presetModels ? { presetModels, defaultPresetModel: "anomalo@1" } : {}),
+    ...(presetModels ? { presetModels, defaultPresetModel } : {}),
     tools,
     ...(staticDir ? { staticDir } : {}),
     ...(resources ? { resources } : {}),

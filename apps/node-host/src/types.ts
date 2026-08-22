@@ -9,6 +9,7 @@ import type {
   ToolDefinition,
   ToolResult,
 } from "@anomalo/contracts";
+import type { PluginLock } from "./plugin-catalog.js";
 
 export type { AgentEvent, EntryId, PresetModelRef, ResponseFormat, RunId, SessionId, ToolCall, ToolDefinition, ToolResult };
 
@@ -40,6 +41,10 @@ export type AgentRunInput = {
   model: string;
   presetModelRef?: PresetModelRef | undefined;
   compiledHash?: string | undefined;
+  toolProtocol?: "openai" | "dsml" | "auto" | "none" | undefined;
+  policy?: AgentPolicy | undefined;
+  allowedPluginIds?: ReadonlySet<string> | undefined;
+  allowedPluginLocks?: readonly PluginLock[] | undefined;
   historyMessages?: ModelMessage[] | undefined;
   temperature?: number | undefined;
   searchMode: SearchMode;
@@ -52,8 +57,12 @@ export type AgentPolicy = {
   maxToolIterations: number;
   runTimeoutMs: number;
   bootstrapToolTimeoutMs: number;
+  toolTimeoutMs: number;
   structuredOutputRetryCount: 1;
   toolExecution: "sequential";
+  temperature?: number | undefined;
+  responseFormat?: ResponseFormat | undefined;
+  searchMode?: SearchMode | undefined;
 };
 
 export type ContextDiagnostics = {
@@ -80,6 +89,8 @@ export type ToolContext = {
   model: string;
   activeSkills: ReadonlySet<string>;
   activeMcpServers: ReadonlySet<string>;
+  allowedPluginIds?: ReadonlySet<string> | undefined;
+  allowedPluginLocks?: readonly PluginLock[] | undefined;
 };
 
 export type NewSessionEntry = {
@@ -113,6 +124,10 @@ export type SessionCheckpoint = {
     model?: string;
     presetModelRef?: PresetModelRef | undefined;
     compiledHash?: string | undefined;
+    toolProtocol?: "openai" | "dsml" | "auto" | "none" | undefined;
+    policy?: AgentPolicy | undefined;
+    allowedPluginIds?: string[] | undefined;
+    allowedPluginLocks?: readonly PluginLock[] | undefined;
     temperature?: number | undefined;
     searchMode: SearchMode;
   };

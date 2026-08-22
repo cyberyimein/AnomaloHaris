@@ -5,6 +5,8 @@ import type { ModelMessage, ResponseFormat, ToolDefinition } from "./types.js";
 
 export type ModelRequest = {
   model: string;
+  presetModelRef?: string | undefined;
+  toolProtocol?: "openai" | "dsml" | "auto" | "none" | undefined;
   temperature?: number | undefined;
   messages: ModelMessage[];
   tools: ToolDefinition[];
@@ -48,6 +50,15 @@ export class ModelProtocolError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "ModelProtocolError";
+  }
+}
+
+export class ProviderUnavailableError extends Error {
+  readonly errorCode = "provider_unavailable";
+
+  constructor(message = "No model provider credential is configured.") {
+    super(message);
+    this.name = "ProviderUnavailableError";
   }
 }
 
@@ -141,7 +152,7 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
         Authorization: `Bearer ${this.apiKey}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ ...requestPayload(request), stream: true }),
+      body: JSON.stringify({ ...requestPayload(request, this.toolProtocol), stream: true }),
       signal,
     });
     if (!response.ok || !response.body) {
@@ -173,7 +184,9 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
               emittedText += parsed.text;
               yield { type: "text.delta", text: parsed.text };
             }
-            const calls = [...parseToolCalls(pendingCalls), ...pendingDsmlCalls, ...parsed.calls];
+            const calls = this.toolProtocol === "none"
+              ? []
+              : [...parseToolCalls(pendingCalls), ...pendingDsmlCalls, ...parsed.calls];
             yield calls.length > 0 ? { type: "tool.calls", calls } : { type: "done" };
             return;
           }
@@ -195,7 +208,7 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
               pendingDsmlCalls.push(...parsed.calls);
             }
           }
-          for (const toolDelta of delta?.tool_calls ?? []) {
+          for (const toolDelta of this.toolProtocol === "none" ? [] : delta?.tool_calls ?? []) {
             const index = Number(toolDelta.index ?? 0);
             const pending = pendingCalls.get(index) ?? { id: "", name: "", arguments: "" };
             pending.id += String(toolDelta.id ?? "");
@@ -211,7 +224,9 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
         emittedText += parsed.text;
         yield { type: "text.delta", text: parsed.text };
       }
-      const calls = [...parseToolCalls(pendingCalls), ...pendingDsmlCalls, ...parsed.calls];
+      const calls = this.toolProtocol === "none"
+        ? []
+        : [...parseToolCalls(pendingCalls), ...pendingDsmlCalls, ...parsed.calls];
       yield calls.length > 0 ? { type: "tool.calls", calls } : { type: "done" };
     } catch (error) {
       if (signal.aborted) throw new ModelInterruptedError(emittedText, parseToolCalls(pendingCalls));
@@ -230,7 +245,7 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
         Authorization: `Bearer ${this.apiKey}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(requestPayload(request)),
+      body: JSON.stringify(requestPayload(request, this.toolProtocol)),
       signal,
     });
     if (!response.ok) throw new Error(`Model request failed (${response.status}).`);
@@ -281,12 +296,12 @@ function finishDsml(parser: DsmlToolCallParser | undefined): { text: string; cal
   return parser?.finish() ?? { text: "", calls: [] };
 }
 
-function requestPayload(request: ModelRequest): Record<string, unknown> {
+function requestPayload(request: ModelRequest, toolProtocol = request.toolProtocol): Record<string, unknown> {
   return {
     model: request.model,
     temperature: request.temperature,
     messages: request.messages.map(toProviderMessage),
-    tools: request.tools.length > 0 ? request.tools.map((tool) => ({
+    tools: request.toolProtocol === "none" ? undefined : request.tools.length > 0 ? request.tools.map((tool) => ({
       type: "function",
       function: {
         name: tool.name,
@@ -294,7 +309,7 @@ function requestPayload(request: ModelRequest): Record<string, unknown> {
         parameters: tool.parameters,
       },
     })) : undefined,
-    tool_choice: request.tools.length > 0 ? "auto" : undefined,
+    tool_choice: request.toolProtocol === "none" || request.tools.length === 0 ? undefined : "auto",
     response_format: request.responseFormat,
   };
 }

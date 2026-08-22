@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -5,17 +6,17 @@ import { fileURLToPath } from "node:url";
 import { AgentCore } from "./core.js";
 import { ResourceContextBuilder } from "./context.js";
 import { buildNodeHost } from "./host.js";
-import { OpenAICompatibleAdapter, type ModelAdapter, type ModelStreamEvent } from "./model.js";
+import { OpenAICompatibleAdapter, ProviderUnavailableError, type ModelAdapter, type ModelCompletion, type ModelRequest, type ModelStreamEvent } from "./model.js";
 import { BrowserToolBridge, BrowserToolRuntime } from "./browser.js";
 import { FileResourceLoader } from "./resources.js";
 import { ChildProcessPluginBackend, PiPluginHost, readPluginLoadConfig } from "./plugins.js";
 import { builtinPluginCatalog, createPluginManifest } from "./plugin-catalog.js";
-import { DEFAULT_PRESET_MODEL_REF, SqlitePresetModelRegistry } from "./preset-models.js";
+import { DEFAULT_PRESET_MODEL_REF, SqlitePresetModelRegistry, type CompiledPresetModel } from "./preset-models.js";
 import { SqliteSessionAdapter } from "./sqlite.js";
 import { RunController } from "./controller.js";
 import { asToolAdapter, CompositeToolRuntime, CoreToolRuntime, PluginToolAdapter } from "./tools.js";
 import { WebToolRuntime } from "./web.js";
-import { ServiceAuth, SqliteComputeStore } from "./compute-api.js";
+import { ServiceAuth, SqliteComputeStore, SqliteNativeRunStore } from "./compute-api.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..", "..");
 const dataDir = resolve(process.env.ANOMALO_DATA_DIR ?? join(repoRoot, "data"));
@@ -28,6 +29,11 @@ const apiKey = process.env.OPENROUTER_API_KEY;
 const managementApiKey = process.env.OPENROUTER_MANAGEMENT_API_KEY;
 const baseUrl = process.env.OPENAI_BASE_URL ?? "https://openrouter.ai/api/v1";
 const staticDir = process.env.ANOMALO_FRONTEND_DIR ?? join(repoRoot, "agent-backend", "app", "frontend");
+const port = Number(process.env.PORT ?? "8000");
+const requestedHost = process.env.HOST ?? "127.0.0.1";
+const isPublicHost = requestedHost !== "127.0.0.1" && requestedHost !== "::1" && requestedHost !== "localhost";
+const host = isPublicHost && process.env.ANOMALO_ACKNOWLEDGE_PUBLIC_HOST !== "true" ? "127.0.0.1" : requestedHost;
+const hasPublicBinding = host === requestedHost && isPublicHost;
 const providerCredits = baseUrl.includes("openrouter.ai")
   ? async (): Promise<Record<string, unknown>> => {
     if (!managementApiKey) {
@@ -87,12 +93,26 @@ for (const spec of pluginConfig.plugins) {
   }));
 }
 
-const presetModels = new SqlitePresetModelRegistry(presetModelDatabasePath, { catalog: pluginCatalog });
+const resources = new FileResourceLoader({
+  projectRoot: repoRoot,
+  skillDirs: [join(repoRoot, "agent-backend", "skills")],
+  mcpConfigPath: join(repoRoot, "agent-backend", "config", "mcp_servers.yaml"),
+});
+const presetModels = new SqlitePresetModelRegistry(presetModelDatabasePath, {
+  catalog: pluginCatalog,
+  resolvePrompt: (profile) => resources.promptText(profile),
+});
 const serviceClients = parseServiceClients(process.env.ANOMALO_SERVICE_TOKENS, process.env.ANOMALO_SERVICE_TOKEN);
+if (hasPublicBinding && serviceClients.length === 0) {
+  throw new Error("Public host binding requires ANOMALO_SERVICE_TOKEN or ANOMALO_SERVICE_TOKENS.");
+}
+if (hasPublicBinding && !process.env.ANOMALO_ADMIN_TOKEN) {
+  throw new Error("Public host binding requires a separate ANOMALO_ADMIN_TOKEN.");
+}
 const computeStore = new SqliteComputeStore(computeDatabasePath);
 const serviceAuth = new ServiceAuth({
   clients: serviceClients,
-  required: process.env.ANOMALO_SERVICE_AUTH_REQUIRED === "true" || serviceClients.length > 0,
+  required: process.env.ANOMALO_SERVICE_AUTH_REQUIRED === "true" || serviceClients.length > 0 || hasPublicBinding,
 });
 presetModels.ensureBuiltinDefault({
   model: modelName,
@@ -112,22 +132,90 @@ if (extensionsEnabled) {
   if (report.errors.length > 0) console.warn(`[node-host] Plugin load report: ${JSON.stringify(report)}`);
 }
 
-class StaticFallbackModel implements ModelAdapter {
-  constructor(readonly model: string) {}
+class PresetModelAdapter implements ModelAdapter {
+  readonly model: string;
+  private readonly adapters = new Map<string, ModelAdapter>();
 
-  async *stream(_request: Parameters<ModelAdapter["stream"]>[0], signal: AbortSignal): AsyncIterable<ModelStreamEvent> {
-    if (signal.aborted) return;
-    yield { type: "text.delta", text: "Node Host is running, but no model API key is configured." };
-    yield { type: "done" };
+  constructor(private readonly options: {
+    registry: SqlitePresetModelRegistry;
+    fallbackModel: string;
+    baseUrl: string;
+    apiKey?: string;
+  }) {
+    this.model = options.fallbackModel;
   }
 
-  async complete(_request: Parameters<ModelAdapter["complete"]>[0], signal: AbortSignal): Promise<string> {
-    if (signal.aborted) return "";
-    return "Node Host is running, but no model API key is configured.";
+  async *stream(request: ModelRequest, signal: AbortSignal): AsyncIterable<ModelStreamEvent> {
+    yield* this.adapterFor(request).stream(request, signal);
+  }
+
+  async complete(request: ModelRequest, signal: AbortSignal): Promise<string | ModelCompletion> {
+    return this.adapterFor(request).complete(request, signal);
+  }
+
+  private adapterFor(request: ModelRequest): ModelAdapter {
+    const compiled = request.presetModelRef
+      ? this.options.registry.resolveForBoundSession(request.presetModelRef)
+      : undefined;
+    const provider = compiled ? providerConfig(compiled, this.options) : {
+      model: request.model,
+      baseUrl: this.options.baseUrl,
+      toolProtocol: "auto" as const,
+      ...(this.options.apiKey ? { apiKey: this.options.apiKey } : {}),
+    };
+    const cacheKey = [
+      compiled?.ref ?? "fallback",
+      provider.model,
+      provider.baseUrl,
+      compiled?.credentialRef ?? "default",
+      provider.toolProtocol,
+      provider.apiKey ? createHash("sha256").update(provider.apiKey).digest("hex") : "missing",
+    ].join("\u0000");
+    const cached = this.adapters.get(cacheKey);
+    if (cached) return cached;
+    if (!provider.apiKey) {
+      throw new ProviderUnavailableError(`No credential is configured for Preset Model ${compiled?.ref ?? provider.model}.`);
+    }
+    const adapter = new OpenAICompatibleAdapter({
+      model: provider.model,
+      baseUrl: provider.baseUrl,
+      apiKey: provider.apiKey,
+      toolProtocol: provider.toolProtocol,
+    });
+    this.adapters.set(cacheKey, adapter);
+    return adapter;
   }
 }
 
-const model = createModel(modelName, baseUrl, apiKey, defaultPresetModel.toolProtocol);
+function providerConfig(
+  model: CompiledPresetModel,
+  options: { baseUrl: string; apiKey?: string },
+): { model: string; baseUrl: string; apiKey?: string; toolProtocol: "openai" | "dsml" | "auto" | "none" } {
+  if (model.definition.provider.adapter !== "openai-compatible") {
+    throw new Error(`provider_adapter_unsupported:${model.definition.provider.adapter}`);
+  }
+  const credentialRef = model.credentialRef;
+  const envPrefix = credentialRef
+    ? `ANOMALO_CREDENTIAL_${credentialRef.replace(/[^a-zA-Z0-9]/g, "_").toUpperCase()}`
+    : undefined;
+  const credentialApiKey = envPrefix ? process.env[`${envPrefix}_API_KEY`] : undefined;
+  const credentialBaseUrl = envPrefix ? process.env[`${envPrefix}_BASE_URL`] : undefined;
+  const apiKey = credentialApiKey ?? (credentialRef === "openrouter-primary" || !credentialRef ? options.apiKey : undefined);
+  const baseUrl = credentialBaseUrl ?? options.baseUrl;
+  return {
+    model: model.providerModel,
+    baseUrl,
+    ...(apiKey ? { apiKey } : {}),
+    toolProtocol: model.toolProtocol,
+  };
+}
+
+const model = new PresetModelAdapter({
+  registry: presetModels,
+  fallbackModel: modelName,
+  baseUrl,
+  ...(apiKey ? { apiKey } : {}),
+});
 const tools = new CompositeToolRuntime([
   asToolAdapter("host-core", 100, new CoreToolRuntime()),
   asToolAdapter("web", 80, new WebToolRuntime({
@@ -139,11 +227,6 @@ const tools = new CompositeToolRuntime([
   new PluginToolAdapter(plugins),
 ]);
 const sessions = new SqliteSessionAdapter(databasePath);
-const resources = new FileResourceLoader({
-  projectRoot: repoRoot,
-  skillDirs: [join(repoRoot, "agent-backend", "skills")],
-  mcpConfigPath: join(repoRoot, "agent-backend", "config", "mcp_servers.yaml"),
-});
 const core = new AgentCore({
   model,
   tools,
@@ -169,18 +252,17 @@ const app = await buildNodeHost({
   plugins,
   ...(providerCredits ? { providerCredits } : {}),
   ...(process.env.ANOMALO_ADMIN_TOKEN ? { managementToken: process.env.ANOMALO_ADMIN_TOKEN } : {}),
-  compute: { auth: serviceAuth, usage: computeStore, idempotency: computeStore },
+  compute: {
+    auth: serviceAuth,
+    usage: computeStore,
+    idempotency: computeStore,
+    nativeRuns: new SqliteNativeRunStore(computeStore.db),
+  },
   logger: process.env.ANOMALO_ENV !== "test",
 });
 
-const port = Number(process.env.PORT ?? "8000");
-const requestedHost = process.env.HOST ?? "127.0.0.1";
-const isPublicHost = requestedHost !== "127.0.0.1" && requestedHost !== "::1" && requestedHost !== "localhost";
-const host = process.env.ANOMALO_ENV === "production" && isPublicHost && process.env.ANOMALO_ACKNOWLEDGE_PUBLIC_HOST !== "true"
-  ? "127.0.0.1"
-  : requestedHost;
 if (host !== requestedHost) {
-  console.warn("[node-host] Refusing public production bind without ANOMALO_ACKNOWLEDGE_PUBLIC_HOST=true.");
+  console.warn("[node-host] Refusing public bind without ANOMALO_ACKNOWLEDGE_PUBLIC_HOST=true.");
 }
 await app.listen({ port, host });
 
@@ -193,13 +275,6 @@ async function shutdown(): Promise<void> {
 
 process.once("SIGINT", () => void shutdown());
 process.once("SIGTERM", () => void shutdown());
-
-function createModel(modelName: string, baseUrl: string, apiKey: string | undefined, toolProtocol: "openai" | "dsml" | "auto" | "none"): ModelAdapter {
-  if (apiKey) {
-    return new OpenAICompatibleAdapter({ model: modelName, baseUrl, apiKey, toolProtocol });
-  }
-  return new StaticFallbackModel(modelName);
-}
 
 function parseServiceClients(raw: string | undefined, fallbackToken: string | undefined): Array<{ id: string; token: string; scopes: string[] }> {
   if (raw) {

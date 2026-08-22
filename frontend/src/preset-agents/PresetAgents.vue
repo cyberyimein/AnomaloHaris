@@ -95,7 +95,7 @@
             <input
               v-model="form.description"
               maxlength="500"
-              placeholder="Summarizes central-bank decisions for the stock workflow"
+              placeholder="Summarizes a focused research brief"
             />
           </label>
           <label class="preset-field preset-field-wide">
@@ -104,7 +104,7 @@
               v-model="form.system_prompt"
               required
               rows="10"
-              placeholder="You are a focused market-news analyst…"
+              placeholder="You are a focused research analyst…"
             ></textarea>
           </label>
           <label class="preset-field preset-field-model">
@@ -211,6 +211,7 @@ import {
   X,
 } from "@lucide/vue";
 import { computed, onMounted, reactive, ref } from "vue";
+import { pluginBindingsForTools } from "./pluginBindings.js";
 
 const props = defineProps({
   management: { type: Object, required: true },
@@ -305,10 +306,7 @@ async function load() {
   try {
     const [modelData, toolResponse] = await Promise.all([
       props.management.requestJson("/api/manage/preset-models"),
-      fetch("/api/tools").then(async (response) => {
-        if (!response.ok) throw new Error("Unable to load tools.");
-        return response.json();
-      }),
+      props.management.requestJson("/api/manage/tools"),
     ]);
     agents.value = (modelData.preset_models || []).map(toAgentForm);
     tools.value = toolResponse.tools || [];
@@ -350,17 +348,6 @@ function splitModelRef(ref) {
   return at > 0 ? { name: value.slice(0, at), version: Number(value.slice(at + 1)) } : null;
 }
 
-function pluginBindingsForTools(toolNames) {
-  const fixed = new Set(["host-core"]);
-  for (const toolName of toolNames) {
-    const source = tools.value.find((tool) => tool.name === toolName)?.source;
-    if (source === "web" || toolName === "web_search" || toolName === "web_fetch") fixed.add("web");
-    else if (source === "browser-bridge" || toolName.startsWith("browser.")) fixed.add("browser-bridge");
-    else if (source && source !== "host-core") fixed.add("pi-plugin-host");
-  }
-  return [...fixed];
-}
-
 async function saveAgent() {
   saving.value = true;
   notice.value = "";
@@ -373,7 +360,7 @@ async function saveAgent() {
     provider: { adapter: "openai-compatible", model: form.model, tool_protocol: "auto" },
     prompt: { profile: form.prompt_profile || "agent", system: form.system_prompt },
     plugins: {
-      fixed: pluginBindingsForTools(toolNames),
+      fixed: pluginBindingsForTools(toolNames, tools.value),
       allowed_tools: toolNames,
       bootstrap_tools: form.bootstrap_tools,
     },

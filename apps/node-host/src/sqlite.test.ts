@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { migrateLegacyDatabase, SqliteSessionAdapter } from "./sqlite.js";
-import type { EntryId, SessionCheckpoint, SessionId, RunId } from "./types.js";
+import type { AgentPolicy, EntryId, SessionCheckpoint, SessionId, RunId } from "./types.js";
 
 const sessionId = "sqlite-session" as SessionId;
 const runId = "sqlite-run" as RunId;
@@ -66,6 +66,18 @@ describe("SqliteSessionAdapter", () => {
         loopMessages: [],
         bootstrapContext: [],
         model: "replay",
+        toolProtocol: "dsml",
+        policy: {
+          maxToolIterations: 8,
+          runTimeoutMs: 20_000,
+          bootstrapToolTimeoutMs: 2_000,
+          toolTimeoutMs: 4_000,
+          structuredOutputRetryCount: 1,
+          toolExecution: "sequential",
+          temperature: 0.2,
+          responseFormat: { type: "json_object" },
+          searchMode: "diy",
+        } satisfies AgentPolicy,
         searchMode: "diy",
       },
       createdAt: clock.now(),
@@ -81,6 +93,13 @@ describe("SqliteSessionAdapter", () => {
     expect(snapshot.activeSkills).toEqual(["zeta"]);
     expect(snapshot.webTraces).toEqual([{ id: "trace-1", run_id: runId, content: "ok", timestamp: clock.now() }]);
     expect((await adapter.resume(sessionId)).checkpoint.state.originalUserContent).toBe("Hello");
+    expect((await adapter.resume(sessionId)).checkpoint.state.toolProtocol).toBe("dsml");
+    expect((await adapter.resume(sessionId)).checkpoint.state.policy).toMatchObject({
+      maxToolIterations: 8,
+      toolTimeoutMs: 4_000,
+      temperature: 0.2,
+      responseFormat: { type: "json_object" },
+    });
     expect((await adapter.list()).at(0)).toMatchObject({ sessionId, title: "Hello", canResume: true });
 
     await adapter.finishRun({ runId, sessionId, lastEntryId: "entry-assistant" as EntryId, endedAt: clock.now() });

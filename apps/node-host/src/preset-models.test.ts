@@ -42,6 +42,34 @@ describe("SqlitePresetModelRegistry", () => {
     restarted.close();
   });
 
+  it("freezes resolved prompt profile content in the published snapshot", () => {
+    const directory = mkdtempSync(join(tmpdir(), "anomalo-preset-prompt-"));
+    directories.push(directory);
+    const databasePath = join(directory, "preset-models.sqlite3");
+    let prompt = "first prompt";
+    const first = new SqlitePresetModelRegistry(databasePath, { resolvePrompt: () => prompt });
+    const published = first.publish(first.createDraft({
+      name: "prompt-model",
+      version: 1,
+      description: "Prompt snapshot test",
+      provider: { adapter: "openai-compatible", model: "provider", tool_protocol: "auto" },
+      prompt: { profile: "agent" },
+      plugins: { fixed: [] },
+    }).ref);
+    expect(published.systemPrompt).toBe("first prompt");
+    const compiledHash = published.compiledHash;
+    first.close();
+
+    prompt = "changed prompt";
+    const restarted = new SqlitePresetModelRegistry(databasePath, { resolvePrompt: () => prompt });
+    expect(restarted.resolve("prompt-model@1")).toMatchObject({
+      systemPrompt: "first prompt",
+      promptHash: published.promptHash,
+      compiledHash,
+    });
+    restarted.close();
+  });
+
   it("seeds the built-in default and provides a dry-run legacy migration", () => {
     const registry = new SqlitePresetModelRegistry(":memory:");
     const builtin = registry.ensureBuiltinDefault({ model: "openai/gpt-4o-mini" });
@@ -58,6 +86,78 @@ describe("SqlitePresetModelRegistry", () => {
     expect(report.skipped).toEqual([{ ref: "anomalo@1", reason: "already_exists" }]);
     expect(report.errors[0]?.name).toBe("");
     expect(registry.list()).toHaveLength(1);
+    registry.close();
+  });
+
+  it("compiles provider and policy behavior into the immutable snapshot", () => {
+    const registry = new SqlitePresetModelRegistry(":memory:");
+    const first = registry.publish(registry.createDraft({
+      name: "policy-model",
+      version: 1,
+      description: "Policy test",
+      provider: {
+        adapter: "openai-compatible",
+        model: "provider-a",
+        credential_ref: "credential-a",
+        tool_protocol: "dsml",
+      },
+      plugins: { fixed: [] },
+      policy: {
+        temperature: 0.2,
+        max_tool_iterations: 8,
+        run_timeout_ms: 20_000,
+        tool_timeout_ms: 4_000,
+        response_format: { type: "json_object" },
+        search_mode: "diy",
+      },
+    }).ref);
+    expect(first.policy).toMatchObject({
+      temperature: 0.2,
+      maxToolIterations: 8,
+      runTimeoutMs: 20_000,
+      toolTimeoutMs: 4_000,
+      responseFormat: { type: "json_object" },
+      searchMode: "diy",
+    });
+
+    const second = registry.publish(registry.createDraft({
+      ...first.definition,
+      version: 2,
+      provider: { ...first.definition.provider, credential_ref: "credential-b" },
+    }).ref);
+    expect(second.compiledHash).not.toBe(first.compiledHash);
+    registry.close();
+  });
+
+  it("keeps retired models available only to bound-session resolution", () => {
+    const registry = new SqlitePresetModelRegistry(":memory:");
+    const model = registry.publish(registry.createDraft({
+      name: "retirable",
+      version: 1,
+      description: "Retire test",
+      provider: { adapter: "openai-compatible", model: "provider", tool_protocol: "auto" },
+      plugins: { fixed: [] },
+    }).ref);
+    registry.retire(model.ref);
+    expect(() => registry.resolve(model.ref)).toThrow("preset_model_not_found");
+    expect(registry.resolveForBoundSession(model.ref).status).toBe("retired");
+
+    registry.ensureBuiltinDefault({ model: "provider" });
+    expect(() => registry.retire(DEFAULT_PRESET_MODEL_REF, { defaultRef: DEFAULT_PRESET_MODEL_REF })).toThrow("preset_model_default_cannot_retire");
+    registry.retire(DEFAULT_PRESET_MODEL_REF);
+    expect(registry.ensureBuiltinDefault({ model: "provider" }).status).toBe("retired");
+    registry.close();
+  });
+
+  it("rejects tool bindings for a text-only provider protocol", () => {
+    const registry = new SqlitePresetModelRegistry(":memory:");
+    expect(() => registry.createDraft({
+      name: "text-only",
+      version: 1,
+      description: "Text-only model",
+      provider: { adapter: "openai-compatible", model: "provider", tool_protocol: "none" },
+      plugins: { fixed: ["host-core"] },
+    })).toThrow("tool_protocol_none_with_tools");
     registry.close();
   });
 });

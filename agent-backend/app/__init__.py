@@ -1,2 +1,0 @@
-"""Anomalo FastAPI agent host."""
-

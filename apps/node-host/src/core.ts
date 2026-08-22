@@ -4,8 +4,8 @@ import { systemClock, type Clock } from "./clock.js";
 import { ReplayContextBuilder, type ContextBuilder } from "./context.js";
 import { finalizerInstruction, StructuredOutputValidationError, validateFinalOutput } from "./finalizer.js";
 import { randomIds, type IdFactory } from "./ids.js";
-import { ModelInterruptedError, ModelProtocolError, type ModelAdapter, type ModelRequest, type ModelUsage } from "./model.js";
-import type { PluginContext, PluginHost } from "./plugins.js";
+import { ModelInterruptedError, ModelProtocolError, ProviderUnavailableError, type ModelAdapter, type ModelRequest, type ModelUsage } from "./model.js";
+import type { PluginContext, PluginEvent, PluginHost } from "./plugins.js";
 import type { SessionRepository } from "./session.js";
 import type { ToolRuntime } from "./tools.js";
 import type {
@@ -37,9 +37,8 @@ export class AgentCore {
   async *execute(input: AgentRunInput, signal: AbortSignal): AsyncIterable<AgentEvent> {
     const ids = this.dependencies.ids ?? randomIds;
     const clock = this.dependencies.clock ?? systemClock;
-    const policy = this.dependencies.policy ?? defaultPolicy;
+    const fallbackPolicy = this.dependencies.policy ?? defaultPolicy;
     const contextBuilder: ContextBuilder = this.dependencies.context ?? new ReplayContextBuilder(this.dependencies.tools);
-    const runSignal = AbortSignal.any([signal, AbortSignal.timeout(policy.runTimeoutMs)]);
     const session = await this.dependencies.sessions.open(input.sessionId);
     const initialActiveSkills = new Set(session.activeSkills);
     const initialActiveMcpServers = new Set(session.activeMcpServers);
@@ -89,11 +88,16 @@ export class AgentCore {
         return;
       }
     }
-    const effectiveResponseFormat = checkpoint ? checkpoint.state.responseFormat : input.responseFormat;
-    const effectiveTemperature = checkpoint?.state.temperature ?? input.temperature;
+    const effectiveResponseFormat = checkpoint?.state.responseFormat ?? input.responseFormat ?? input.policy?.responseFormat;
+    const effectiveTemperature = checkpoint?.state.temperature ?? input.temperature ?? input.policy?.temperature;
     const effectiveAllowedToolNames = checkpoint?.state.allowedToolNames !== undefined
       ? new Set(checkpoint.state.allowedToolNames)
       : input.allowedToolNames;
+    const effectiveAllowedPluginIds = checkpoint?.state.allowedPluginIds !== undefined
+      ? new Set(checkpoint.state.allowedPluginIds)
+      : input.allowedPluginIds;
+    const effectiveAllowedPluginLocks = checkpoint?.state.allowedPluginLocks ?? input.allowedPluginLocks;
+    const effectivePolicy = checkpoint?.state.policy ?? input.policy ?? fallbackPolicy;
     const effectiveSystemPrompt = checkpoint?.state.systemPrompt ?? input.systemPrompt;
     const runInput: AgentRunInput = {
       ...input,
@@ -105,15 +109,23 @@ export class AgentCore {
       ...(checkpoint?.state.compiledHash ?? input.compiledHash
         ? { compiledHash: checkpoint?.state.compiledHash ?? input.compiledHash }
         : {}),
+      ...(checkpoint?.state.toolProtocol ?? input.toolProtocol
+        ? { toolProtocol: checkpoint?.state.toolProtocol ?? input.toolProtocol }
+        : {}),
       promptProfile: checkpoint?.state.promptProfile ?? input.promptProfile,
       ...(effectiveSystemPrompt === undefined
         ? {}
         : { systemPrompt: effectiveSystemPrompt }),
       searchMode: checkpoint?.state.searchMode ?? input.searchMode,
+      policy: structuredClone(effectivePolicy),
       ...(effectiveTemperature === undefined ? {} : { temperature: effectiveTemperature }),
       ...(effectiveResponseFormat ? { responseFormat: effectiveResponseFormat } : {}),
       ...(effectiveAllowedToolNames === undefined ? {} : { allowedToolNames: effectiveAllowedToolNames }),
+      ...(effectiveAllowedPluginIds === undefined ? {} : { allowedPluginIds: effectiveAllowedPluginIds }),
+      ...(effectiveAllowedPluginLocks === undefined ? {} : { allowedPluginLocks: structuredClone(effectiveAllowedPluginLocks) }),
     };
+    const policy = runInput.policy ?? fallbackPolicy;
+    const runSignal = AbortSignal.any([signal, AbortSignal.timeout(policy.runTimeoutMs)]);
     const originalUserContent = checkpoint?.state.originalUserContent ?? input.message ?? "";
     const currentUserMessage: ModelMessage = checkpoint?.state.currentUserMessage ?? {
       role: "user",
@@ -141,6 +153,8 @@ export class AgentCore {
         ...(runInput.presetModelRef ? { model_ref: runInput.presetModelRef } : {}),
         ...(runInput.compiledHash ? { compiled_hash: runInput.compiledHash } : {}),
         ...(runInput.temperature === undefined ? {} : { temperature: runInput.temperature }),
+        policy: policyForRecord(policy),
+        ...(runInput.allowedPluginIds ? { plugin_ids: [...runInput.allowedPluginIds].sort() } : {}),
         searchMode: runInput.searchMode,
         promptProfile: runInput.promptProfile,
       },
@@ -169,13 +183,22 @@ export class AgentCore {
       ...(runInput.presetModelRef ? { model_ref: runInput.presetModelRef } : {}),
     });
     const pluginContext = makePluginContext(runInput);
+    const pluginScope = runInput.allowedPluginIds
+      ? {
+        modelRef: runInput.presetModelRef,
+        compiledHash: runInput.compiledHash,
+        pluginIds: runInput.allowedPluginIds,
+        ...(runInput.allowedPluginLocks ? { locks: runInput.allowedPluginLocks } : {}),
+      }
+      : undefined;
+    const dispatchPlugin = (event: PluginEvent) => this.dependencies.plugins?.dispatch(event, pluginScope);
     const notifyAgentEnd = async (eventType: "run.finished" | "run.stopped" | "run.error"): Promise<void> => {
-      await this.dependencies.plugins?.dispatch({ type: "agent_end", context: pluginContext, eventType });
+      await dispatchPlugin({ type: "agent_end", context: pluginContext, eventType });
     };
     if (session.messages.length === 0 && !session.checkpoint) {
-      await this.dependencies.plugins?.dispatch({ type: "session_start", context: pluginContext });
+      await dispatchPlugin({ type: "session_start", context: pluginContext });
     }
-    const beforeAgentStart = await this.dependencies.plugins?.dispatch({
+    const beforeAgentStart = await dispatchPlugin({
       type: "before_agent_start",
       context: pluginContext,
       messages: [...contextSessionMessages, ...bootstrapMessages(bootstrapContext), currentUserMessage],
@@ -261,7 +284,7 @@ export class AgentCore {
           ...(resourceSnapshot ? { resourceSnapshot } : {}),
         });
         if (runInput.compiledHash) context.diagnostics.compiledHash = runInput.compiledHash;
-        const contextHook = await this.dependencies.plugins?.dispatch({
+        const contextHook = await dispatchPlugin({
           type: "context",
           context: pluginContext,
           messages: context.messages,
@@ -269,6 +292,7 @@ export class AgentCore {
         });
         if (contextHook?.messages) context.messages = contextHook.messages;
         if (contextHook?.tools) context.tools = contextHook.tools;
+        if (runInput.toolProtocol === "none") context.tools = [];
         const request = toModelRequest(runInput, context);
         yield makeEvent("llm.request", runInput, clock, {
           ...llmRequestEventData(runInput, context.diagnostics, iteration, "agent", context.messages.length, context.tools.length),
@@ -334,6 +358,8 @@ export class AgentCore {
               try {
                 const finalizerRequest: ModelRequest = {
                   model: runInput.model,
+                  ...(runInput.presetModelRef ? { presetModelRef: runInput.presetModelRef } : {}),
+                  ...(runInput.toolProtocol ? { toolProtocol: runInput.toolProtocol } : {}),
                   messages: finalizerMessages,
                   tools: [],
                   ...(runInput.temperature === undefined ? {} : { temperature: runInput.temperature }),
@@ -428,7 +454,7 @@ export class AgentCore {
         loopMessages.push({ role: "assistant", content: currentAssistantText, tool_calls: toolCalls });
         for (const call of toolCalls) {
           const contextForTool = toolContext(runInput, call.id, activeSkills, activeMcpServers);
-          const toolHook = await this.dependencies.plugins?.dispatch({ type: "tool_call", context: pluginContext, call });
+          const toolHook = await dispatchPlugin({ type: "tool_call", context: pluginContext, call });
           const effectiveCall = toolHook?.call ?? call;
           yield makeEvent("tool.started", runInput, clock, { tool_call_id: effectiveCall.id, tool: effectiveCall.name, arguments: effectiveCall.arguments });
           let result: ToolResult;
@@ -443,12 +469,13 @@ export class AgentCore {
             };
           } else {
             try {
-              result = await this.dependencies.tools.call(effectiveCall, contextForTool, runSignal);
+              const toolSignal = AbortSignal.any([runSignal, AbortSignal.timeout(policy.toolTimeoutMs)]);
+              result = await this.dependencies.tools.call(effectiveCall, contextForTool, toolSignal);
             } catch (error) {
               result = { name: effectiveCall.name, ok: false, content: error instanceof Error ? error.message : String(error), data: { error_type: "ToolError" } };
             }
           }
-          const resultHook = await this.dependencies.plugins?.dispatch({ type: "tool_result", context: pluginContext, call: effectiveCall, result });
+          const resultHook = await dispatchPlugin({ type: "tool_result", context: pluginContext, call: effectiveCall, result });
           if (resultHook?.result) result = resultHook.result;
           await applyResourceAction(this.dependencies.sessions, input.sessionId, result);
           loopMessages.push({ role: "tool", tool_call_id: effectiveCall.id, name: effectiveCall.name, content: result.content });
@@ -463,7 +490,7 @@ export class AgentCore {
             return;
           }
         }
-        await this.dependencies.plugins?.dispatch({ type: "turn_end", context: pluginContext, iteration });
+        await dispatchPlugin({ type: "turn_end", context: pluginContext, iteration });
         currentAssistantText = "";
       }
 
@@ -481,7 +508,9 @@ export class AgentCore {
           : makeEvent("run.stopped", runInput, clock, { reason: runSignal.reason === "disconnect" ? "disconnect" : "user_stop", checkpointed: true, can_resume: true });
         return;
       }
-      const errorCode = error instanceof ModelProtocolError ? error.errorCode : "model_failed";
+      const errorCode = error instanceof ModelProtocolError || error instanceof ProviderUnavailableError
+        ? error.errorCode
+        : "model_failed";
       await this.saveCheckpoint(runInput, currentUserMessage, originalUserContent, currentAssistantText, [], loopMessages, bootstrapContext, iteration, clock, errorCode);
       await this.dependencies.sessions.failRun({ runId: runInput.runId, sessionId: runInput.sessionId, errorCode, ...(lastEntryId ? { lastEntryId } : {}), endedAt: clock.now() });
       await notifyAgentEnd("run.error");
@@ -569,6 +598,10 @@ export class AgentCore {
         model: input.model,
         ...(input.presetModelRef ? { presetModelRef: input.presetModelRef } : {}),
         ...(input.compiledHash ? { compiledHash: input.compiledHash } : {}),
+        ...(input.toolProtocol ? { toolProtocol: input.toolProtocol } : {}),
+        ...(input.policy ? { policy: structuredClone(input.policy) } : {}),
+        ...(input.allowedPluginIds ? { allowedPluginIds: [...input.allowedPluginIds].sort() } : {}),
+        ...(input.allowedPluginLocks ? { allowedPluginLocks: structuredClone(input.allowedPluginLocks) } : {}),
         ...(input.temperature === undefined ? {} : { temperature: input.temperature }),
         searchMode: input.searchMode,
       },
@@ -582,6 +615,7 @@ export const defaultPolicy: AgentPolicy = {
   maxToolIterations: 50,
   runTimeoutMs: 600_000,
   bootstrapToolTimeoutMs: 2_000,
+  toolTimeoutMs: 30_000,
   structuredOutputRetryCount: 1,
   toolExecution: "sequential",
 };
@@ -600,6 +634,21 @@ function toolContext(
     model: input.model,
     activeSkills,
     activeMcpServers,
+    ...(input.allowedPluginIds ? { allowedPluginIds: input.allowedPluginIds } : {}),
+    ...(input.allowedPluginLocks ? { allowedPluginLocks: input.allowedPluginLocks } : {}),
+  };
+}
+
+function policyForRecord(policy: AgentPolicy): Record<string, unknown> {
+  return {
+    max_tool_iterations: policy.maxToolIterations,
+    run_timeout_ms: policy.runTimeoutMs,
+    bootstrap_tool_timeout_ms: policy.bootstrapToolTimeoutMs,
+    tool_timeout_ms: policy.toolTimeoutMs,
+    tool_execution: policy.toolExecution,
+    ...(policy.temperature === undefined ? {} : { temperature: policy.temperature }),
+    ...(policy.responseFormat === undefined ? {} : { response_format: policy.responseFormat }),
+    ...(policy.searchMode === undefined ? {} : { search_mode: policy.searchMode }),
   };
 }
 
@@ -644,8 +693,10 @@ async function applyResourceAction(
 function toModelRequest(input: AgentRunInput, context: BuiltContext): ModelRequest {
   return {
     model: input.model,
+    ...(input.presetModelRef ? { presetModelRef: input.presetModelRef } : {}),
+    ...(input.toolProtocol ? { toolProtocol: input.toolProtocol } : {}),
     messages: context.messages,
-    tools: context.tools,
+    tools: input.toolProtocol === "none" ? [] : context.tools,
     ...(input.temperature === undefined ? {} : { temperature: input.temperature }),
     ...(input.responseFormat === undefined ? {} : { responseFormat: input.responseFormat }),
   };

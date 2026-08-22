@@ -1,5 +1,9 @@
 # MystackChan Project Handoff
 
+> Historical firmware handoff. Anomalo's Node Host no longer embeds the Python
+> Buddy host, Codex hook relay, audio bridge, or vision service. Restore any of
+> those capabilities only as an explicit, separately tested plugin.
+
 This document captures the working context from the StackChan firmware discussion
 so the project can continue from `/path/to/MyStackChan` without
 depending on the old `StackChan-BSP` workspace or chat history.

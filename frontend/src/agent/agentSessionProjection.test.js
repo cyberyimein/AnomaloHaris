@@ -129,6 +129,17 @@ describe("AgentSessionProjection", () => {
     expect(projection.state.contextStats.value.at(-1)).toEqual({ label: "Tools", value: 4 });
   });
 
+  it("makes missing LLM identity and counts visible instead of showing false zeroes", () => {
+    const projection = createProjection();
+
+    projection.handle(event("llm.request", { request: {}, context: {}, iteration: 1 }));
+
+    expect(projection.state.stateDetail.value).toContain("Unavailable prompt parts · Unavailable tools · model unavailable");
+    expect(projection.state.stateDetail.value).not.toContain("unknown model");
+    expect(projection.state.contextStats.value[0]).toEqual({ label: "Prompt Parts", value: "Unavailable" });
+    expect(projection.state.contextStats.value.at(-1)).toEqual({ label: "Tools", value: "Unavailable" });
+  });
+
   it("keeps partial output and exposes a resumable paused state", () => {
     const projection = createProjection();
 

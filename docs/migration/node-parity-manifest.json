@@ -4,7 +4,7 @@
   "default_preset_model": "anomalo@1",
   "status": "partial",
   "source": {
-    "python_host": "agent-backend/app",
+    "legacy_python_host": "removed",
     "node_host": "apps/node-host/src",
     "frontend": "frontend/src"
   },

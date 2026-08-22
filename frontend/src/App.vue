@@ -1382,7 +1382,13 @@ async function loadPresetAgents() {
           description: model.description,
           ghost: "👻",
           model: model.provider_model,
-          tool_names: [],
+          tool_names: Array.isArray(model.allowed_tools) && model.allowed_tools.length
+            ? [...model.allowed_tools]
+            : Array.isArray(model.tool_catalog)
+              ? [...model.tool_catalog]
+              : [],
+          bootstrap_tools: Array.isArray(model.bootstrap_tools) ? [...model.bootstrap_tools] : [],
+          search_mode: model.policy?.searchMode || model.policy?.search_mode || null,
         }))
         : [];
       if (
@@ -1407,7 +1413,11 @@ async function loadPresetAgents() {
 async function loadTools() {
   const currentSessionId = sessionId.value;
   try {
-    const response = await fetch(`/api/tools?session_id=${encodeURIComponent(currentSessionId)}`);
+    const query = new URLSearchParams({ session_id: currentSessionId });
+    if (presetMode.value && selectedPresetAgentId.value) {
+      query.set("preset_model", selectedPresetAgentId.value);
+    }
+    const response = await fetch(`/api/tools?${query.toString()}`);
     const data = await response.json();
     if (sessionId.value !== currentSessionId) {
       return;

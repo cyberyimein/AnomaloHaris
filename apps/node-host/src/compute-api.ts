@@ -133,25 +133,50 @@ export type IdempotencyRecord = {
   createdAt: string;
 };
 
+export type IdempotencyReservation =
+  | { status: "acquired" }
+  | { status: "completed"; record: IdempotencyRecord }
+  | { status: "pending" }
+  | { status: "conflict" };
+
 export interface IdempotencyRepository {
   get(clientId: string, key: string): Promise<IdempotencyRecord | undefined>;
+  reserve(clientId: string, key: string, requestHash: string, createdAt: string): Promise<IdempotencyReservation>;
   put(record: IdempotencyRecord): Promise<IdempotencyRecord>;
+  release(clientId: string, key: string, requestHash: string): Promise<void>;
 }
 
 export class InMemoryIdempotencyRepository implements IdempotencyRepository {
-  private readonly records = new Map<string, IdempotencyRecord>();
+  private readonly records = new Map<string, { requestHash: string; record?: IdempotencyRecord }>();
 
   async get(clientId: string, key: string): Promise<IdempotencyRecord | undefined> {
-    const record = this.records.get(`${clientId}:${key}`);
-    return record ? structuredClone(record) : undefined;
+    const entry = this.records.get(`${clientId}:${key}`);
+    return entry?.record ? structuredClone(entry.record) : undefined;
+  }
+
+  async reserve(clientId: string, key: string, requestHash: string, _createdAt: string): Promise<IdempotencyReservation> {
+    const mapKey = `${clientId}:${key}`;
+    const existing = this.records.get(mapKey);
+    if (existing) {
+      if (existing.requestHash !== requestHash) return { status: "conflict" };
+      return existing.record ? { status: "completed", record: structuredClone(existing.record) } : { status: "pending" };
+    }
+    this.records.set(mapKey, { requestHash });
+    return { status: "acquired" };
   }
 
   async put(record: IdempotencyRecord): Promise<IdempotencyRecord> {
     const mapKey = `${record.clientId}:${record.key}`;
     const existing = this.records.get(mapKey);
-    if (existing) return structuredClone(existing);
-    this.records.set(mapKey, structuredClone(record));
+    if (existing?.record) return structuredClone(existing.record);
+    this.records.set(mapKey, { requestHash: record.requestHash, record: structuredClone(record) });
     return structuredClone(record);
+  }
+
+  async release(clientId: string, key: string, requestHash: string): Promise<void> {
+    const mapKey = `${clientId}:${key}`;
+    const existing = this.records.get(mapKey);
+    if (existing?.requestHash === requestHash && !existing.record) this.records.delete(mapKey);
   }
 }
 
@@ -171,6 +196,7 @@ export class SqliteComputeStore implements UsageRepository, IdempotencyRepositor
     }
     this.db.exec(`
       PRAGMA busy_timeout = 5000;
+      PRAGMA foreign_keys = ON;
       CREATE TABLE IF NOT EXISTS usage_records (
         request_id TEXT PRIMARY KEY,
         run_id TEXT NOT NULL,
@@ -196,10 +222,41 @@ export class SqliteComputeStore implements UsageRepository, IdempotencyRepositor
         idempotency_key TEXT NOT NULL,
         request_hash TEXT NOT NULL,
         response_json TEXT NOT NULL,
+        state TEXT NOT NULL DEFAULT 'completed',
         created_at TEXT NOT NULL,
         PRIMARY KEY(client_id, idempotency_key)
       );
+      CREATE TABLE IF NOT EXISTS native_runs (
+        run_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        model_ref TEXT NOT NULL,
+        client_id TEXT NOT NULL,
+        active INTEGER NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS native_run_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id TEXT NOT NULL REFERENCES native_runs(run_id) ON DELETE CASCADE,
+        event_json TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_native_run_events_run ON native_run_events(run_id, id);
     `);
+    ensureSqliteColumn(this.db, "idempotency_records", "state", "TEXT NOT NULL DEFAULT 'completed'");
+    // This store is owned by a single local Host process. A pending row at
+    // construction time can only belong to a process that no longer exists.
+    this.db.prepare("DELETE FROM idempotency_records WHERE state = 'pending'").run();
+    const interruptedRuns = this.db.prepare("SELECT run_id, session_id FROM native_runs WHERE active = 1").all() as Array<Record<string, unknown>>;
+    const appendInterrupted = this.db.prepare("INSERT INTO native_run_events(run_id, event_json) VALUES (?, ?)");
+    for (const run of interruptedRuns) {
+      appendInterrupted.run(String(run.run_id), JSON.stringify({
+        type: "run.error",
+        session_id: String(run.session_id),
+        run_id: String(run.run_id),
+        data: { error_code: "host_restarted", error: "The Node Host restarted before this run completed." },
+        timestamp: new Date().toISOString(),
+      }));
+    }
+    this.db.prepare("UPDATE native_runs SET active = 0 WHERE active = 1").run();
   }
 
   async begin(record: UsageRecord): Promise<void> {
@@ -226,7 +283,7 @@ export class SqliteComputeStore implements UsageRepository, IdempotencyRepositor
 
   async get(clientId: string, key: string): Promise<IdempotencyRecord | undefined> {
     const row = this.db.prepare(
-      "SELECT client_id, idempotency_key, request_hash, response_json, created_at FROM idempotency_records WHERE client_id = ? AND idempotency_key = ?",
+      "SELECT client_id, idempotency_key, request_hash, response_json, created_at FROM idempotency_records WHERE client_id = ? AND idempotency_key = ? AND state = 'completed'",
     ).get(clientId, key) as Record<string, unknown> | undefined;
     if (!row) return undefined;
     return {
@@ -238,12 +295,47 @@ export class SqliteComputeStore implements UsageRepository, IdempotencyRepositor
     };
   }
 
+  async reserve(clientId: string, key: string, requestHash: string, createdAt: string): Promise<IdempotencyReservation> {
+    const result = this.db.prepare(`
+      INSERT OR IGNORE INTO idempotency_records(client_id, idempotency_key, request_hash, response_json, state, created_at)
+      VALUES (?, ?, ?, '{}', 'pending', ?)
+    `).run(clientId, key, requestHash, createdAt);
+    if (result.changes === 1) return { status: "acquired" };
+    const row = this.db.prepare(`
+      SELECT request_hash, response_json, state, created_at
+      FROM idempotency_records WHERE client_id = ? AND idempotency_key = ?
+    `).get(clientId, key) as Record<string, unknown> | undefined;
+    if (!row || String(row.request_hash) !== requestHash) return { status: "conflict" };
+    if (row.state !== "completed") return { status: "pending" };
+    return {
+      status: "completed",
+      record: {
+        clientId,
+        key,
+        requestHash,
+        response: JSON.parse(String(row.response_json)) as Record<string, unknown>,
+        createdAt: String(row.created_at),
+      },
+    };
+  }
+
   async put(record: IdempotencyRecord): Promise<IdempotencyRecord> {
     this.db.prepare(`
-      INSERT OR IGNORE INTO idempotency_records(client_id, idempotency_key, request_hash, response_json, created_at)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO idempotency_records(client_id, idempotency_key, request_hash, response_json, state, created_at)
+      VALUES (?, ?, ?, ?, 'completed', ?)
+      ON CONFLICT(client_id, idempotency_key) DO UPDATE SET
+        response_json = excluded.response_json,
+        state = 'completed'
+      WHERE idempotency_records.request_hash = excluded.request_hash
     `).run(record.clientId, record.key, record.requestHash, JSON.stringify(record.response), record.createdAt);
     return (await this.get(record.clientId, record.key)) ?? record;
+  }
+
+  async release(clientId: string, key: string, requestHash: string): Promise<void> {
+    this.db.prepare(`
+      DELETE FROM idempotency_records
+      WHERE client_id = ? AND idempotency_key = ? AND request_hash = ? AND state = 'pending'
+    `).run(clientId, key, requestHash);
   }
 
   close(): void {
@@ -296,11 +388,27 @@ export class SqliteComputeStore implements UsageRepository, IdempotencyRepositor
   }
 }
 
-export class NativeRunStore {
-  private readonly runs = new Map<string, { runId: string; sessionId: string; modelRef: string; events: AgentEvent[]; active: boolean }>();
+export type NativeRunRecord = {
+  runId: string;
+  sessionId: string;
+  modelRef: string;
+  clientId: string;
+  events: AgentEvent[];
+  active: boolean;
+};
 
-  start(runId: string, sessionId: string, modelRef: string): void {
-    this.runs.set(runId, { runId, sessionId, modelRef, events: [], active: true });
+export interface NativeRunRepository {
+  start(runId: string, sessionId: string, modelRef: string, clientId: string): void;
+  append(runId: string, event: AgentEvent): void;
+  finish(runId: string, events: AgentEvent[]): void;
+  get(runId: string): NativeRunRecord | undefined;
+}
+
+export class NativeRunStore implements NativeRunRepository {
+  private readonly runs = new Map<string, NativeRunRecord>();
+
+  start(runId: string, sessionId: string, modelRef: string, clientId: string): void {
+    this.runs.set(runId, { runId, sessionId, modelRef, clientId, events: [], active: true });
   }
 
   append(runId: string, event: AgentEvent): void {
@@ -316,9 +424,70 @@ export class NativeRunStore {
     }
   }
 
-  get(runId: string): { runId: string; sessionId: string; modelRef: string; events: AgentEvent[]; active: boolean } | undefined {
+  get(runId: string): NativeRunRecord | undefined {
     const run = this.runs.get(runId);
     return run ? structuredClone(run) : undefined;
+  }
+}
+
+export class SqliteNativeRunStore implements NativeRunRepository {
+  constructor(private readonly db: DatabaseSync) {}
+
+  start(runId: string, sessionId: string, modelRef: string, clientId: string): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare(`
+        INSERT INTO native_runs(run_id, session_id, model_ref, client_id, active, updated_at)
+        VALUES (?, ?, ?, ?, 1, ?)
+        ON CONFLICT(run_id) DO UPDATE SET
+          session_id = excluded.session_id,
+          model_ref = excluded.model_ref,
+          client_id = excluded.client_id,
+          active = 1,
+          updated_at = excluded.updated_at
+      `).run(runId, sessionId, modelRef, clientId, new Date().toISOString());
+      this.db.prepare("DELETE FROM native_run_events WHERE run_id = ?").run(runId);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  append(runId: string, event: AgentEvent): void {
+    this.db.prepare("INSERT INTO native_run_events(run_id, event_json) VALUES (?, ?)").run(runId, JSON.stringify(event));
+  }
+
+  finish(runId: string, events: AgentEvent[]): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare("DELETE FROM native_run_events WHERE run_id = ?").run(runId);
+      const insert = this.db.prepare("INSERT INTO native_run_events(run_id, event_json) VALUES (?, ?)");
+      for (const event of events) insert.run(runId, JSON.stringify(event));
+      this.db.prepare("UPDATE native_runs SET active = 0, updated_at = ? WHERE run_id = ?").run(new Date().toISOString(), runId);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  get(runId: string): NativeRunRecord | undefined {
+    const row = this.db.prepare(`
+      SELECT run_id, session_id, model_ref, client_id, active FROM native_runs WHERE run_id = ?
+    `).get(runId) as Record<string, unknown> | undefined;
+    if (!row) return undefined;
+    const events = this.db.prepare(`
+      SELECT event_json FROM native_run_events WHERE run_id = ? ORDER BY id ASC
+    `).all(runId) as Array<Record<string, unknown>>;
+    return {
+      runId: String(row.run_id),
+      sessionId: String(row.session_id),
+      modelRef: String(row.model_ref),
+      clientId: String(row.client_id),
+      active: Number(row.active) === 1,
+      events: events.map((event) => JSON.parse(String(event.event_json)) as AgentEvent),
+    };
   }
 }
 
@@ -329,7 +498,7 @@ export type ComputeApiOptions = {
   auth?: ServiceAuth;
   usage?: UsageRepository;
   idempotency?: IdempotencyRepository;
-  nativeRuns?: NativeRunStore;
+  nativeRuns?: NativeRunRepository;
 };
 
 export function registerComputeRoutes(app: FastifyInstance, options: ComputeApiOptions): void {
@@ -399,14 +568,20 @@ export function registerComputeRoutes(app: FastifyInstance, options: ComputeApiO
     try {
       const client = auth.authenticate(request.headers as Record<string, unknown>, "compute:invoke");
       const ref = `${request.params.name}@${request.params.version}`;
-      const model = resolvePublishedModel(options.registry, ref);
+      const model = await resolveModelForSession(options.registry, ref, options.sessions, readSessionIdFromBody(request.body));
       const input = nativeRunInput(request.body, model);
       await bindSessionModel(options.sessions, input.sessionId, model.ref);
-      nativeRuns.start(input.runId!, input.sessionId, model.ref);
+      nativeRuns.start(input.runId!, input.sessionId, model.ref, client.id);
       const events: AgentEvent[] = [];
-      for await (const event of options.controller.start(input)) {
-        events.push(event);
-        nativeRuns.append(input.runId!, event);
+      try {
+        for await (const event of options.controller.start(input)) {
+          events.push(event);
+          nativeRuns.append(input.runId!, event);
+        }
+      } catch (error) {
+        events.push(nativeRunFailure(input, error));
+        nativeRuns.finish(input.runId!, events);
+        throw error;
       }
       nativeRuns.finish(input.runId!, events);
       return reply.send({ run_id: input.runId, session_id: input.sessionId, model: model.ref, client_id: client.id, events });
@@ -419,12 +594,12 @@ export function registerComputeRoutes(app: FastifyInstance, options: ComputeApiO
     let input: StartRunRequest;
     let model: CompiledPresetModel;
     try {
-      auth.authenticate(request.headers as Record<string, unknown>, "compute:invoke");
+      const client = auth.authenticate(request.headers as Record<string, unknown>, "compute:invoke");
       const ref = `${request.params.name}@${request.params.version}`;
-      model = resolvePublishedModel(options.registry, ref);
+      model = await resolveModelForSession(options.registry, ref, options.sessions, readSessionIdFromBody(request.body));
       input = nativeRunInput(request.body, model);
       await bindSessionModel(options.sessions, input.sessionId, model.ref);
-      nativeRuns.start(input.runId!, input.sessionId, model.ref);
+      nativeRuns.start(input.runId!, input.sessionId, model.ref, client.id);
     } catch (error) {
       return sendComputeError(reply, error);
     }
@@ -444,8 +619,10 @@ export function registerComputeRoutes(app: FastifyInstance, options: ComputeApiO
       }
       nativeRuns.finish(input.runId!, events);
     } catch (error) {
+      const failure = nativeRunFailure(input, error);
+      events.push(failure);
       nativeRuns.finish(input.runId!, events);
-      reply.raw.write(`${JSON.stringify({ error: computeErrorPayload(error) })}\n`);
+      reply.raw.write(`${JSON.stringify(failure)}\n`);
     } finally {
       if (!reply.raw.writableEnded) reply.raw.end();
     }
@@ -454,9 +631,9 @@ export function registerComputeRoutes(app: FastifyInstance, options: ComputeApiO
 
   app.get<{ Params: { runId: string } }>("/api/runs/:runId", async (request, reply) => {
     try {
-      auth.authenticate(request.headers as Record<string, unknown>, "compute:read");
+      const client = auth.authenticate(request.headers as Record<string, unknown>, "compute:read");
       const run = nativeRuns.get(request.params.runId);
-      if (!run) throw new ComputeRequestError(404, "run_not_found", "Run not found.");
+      assertNativeRunOwner(run, client.id);
       return reply.send({ run_id: run.runId, session_id: run.sessionId, model: run.modelRef, events: run.events, status: run.active ? "active" : nativeRunStatus(run.events) });
     } catch (error) {
       return sendComputeError(reply, error);
@@ -465,9 +642,9 @@ export function registerComputeRoutes(app: FastifyInstance, options: ComputeApiO
 
   app.get<{ Params: { runId: string } }>("/api/runs/:runId/events", async (request, reply) => {
     try {
-      auth.authenticate(request.headers as Record<string, unknown>, "compute:read");
+      const client = auth.authenticate(request.headers as Record<string, unknown>, "compute:read");
       const run = nativeRuns.get(request.params.runId);
-      if (!run) throw new ComputeRequestError(404, "run_not_found", "Run not found.");
+      assertNativeRunOwner(run, client.id);
       return reply.send({ run_id: run.runId, events: run.events });
     } catch (error) {
       return sendComputeError(reply, error);
@@ -476,9 +653,9 @@ export function registerComputeRoutes(app: FastifyInstance, options: ComputeApiO
 
   app.post<{ Params: { runId: string } }>("/api/runs/:runId/stop", async (request, reply) => {
     try {
-      auth.authenticate(request.headers as Record<string, unknown>, "compute:invoke");
+      const client = auth.authenticate(request.headers as Record<string, unknown>, "compute:invoke");
       const run = nativeRuns.get(request.params.runId);
-      if (!run) throw new ComputeRequestError(404, "run_not_found", "Run not found.");
+      assertNativeRunOwner(run, client.id);
       return reply.send(await options.controller.stop(run.sessionId as SessionId, "user_stop"));
     } catch (error) {
       return sendComputeError(reply, error);
@@ -489,16 +666,22 @@ export function registerComputeRoutes(app: FastifyInstance, options: ComputeApiO
     try {
       const client = auth.authenticate(request.headers as Record<string, unknown>, "compute:invoke");
       const previous = nativeRuns.get(request.params.runId);
-      if (!previous) throw new ComputeRequestError(404, "run_not_found", "Run not found.");
-      const model = resolvePublishedModel(options.registry, previous.modelRef);
+      assertNativeRunOwner(previous, client.id);
+      const model = await resolveModelForSession(options.registry, previous.modelRef, options.sessions, previous.sessionId as SessionId);
       const input = nativeRunInput({ session_id: previous.sessionId, resume: true }, model);
       input.runId = previous.runId as NonNullable<StartRunRequest["runId"]>;
       await bindSessionModel(options.sessions, input.sessionId, model.ref);
-      nativeRuns.start(input.runId!, input.sessionId, model.ref);
+      nativeRuns.start(input.runId!, input.sessionId, model.ref, client.id);
       const events: AgentEvent[] = [];
-      for await (const event of options.controller.start(input)) {
-        events.push(event);
-        nativeRuns.append(input.runId!, event);
+      try {
+        for await (const event of options.controller.start(input)) {
+          events.push(event);
+          nativeRuns.append(input.runId!, event);
+        }
+      } catch (error) {
+        events.push(nativeRunFailure(input, error));
+        nativeRuns.finish(input.runId!, events);
+        throw error;
       }
       nativeRuns.finish(input.runId!, events);
       return reply.send({ run_id: input.runId, session_id: input.sessionId, model: model.ref, client_id: client.id, events });
@@ -509,13 +692,10 @@ export function registerComputeRoutes(app: FastifyInstance, options: ComputeApiO
 
   app.get<{ Params: { runId: string } }>("/ws/runs/:runId", { websocket: true }, (socket, request) => {
     try {
-      auth.authenticate(request.headers as Record<string, unknown>, "compute:read");
+      const client = auth.authenticate(request.headers as Record<string, unknown>, "compute:read");
       const run = nativeRuns.get(request.params.runId);
-      if (!run) {
-        socket.send(JSON.stringify({ type: "run.error", data: { error_code: "run_not_found", error: "Run not found." } }));
-      } else {
-        for (const event of run.events) socket.send(JSON.stringify(event));
-      }
+      assertNativeRunOwner(run, client.id);
+      for (const event of run.events) socket.send(JSON.stringify(event));
     } catch (error) {
       socket.send(JSON.stringify(computeErrorPayload(error)));
     } finally {
@@ -549,6 +729,7 @@ type PreparedChat = {
   input: StartRunRequest;
   messages: OpenAIChatMessage[];
   startedAt: string;
+  idempotencyReserved?: boolean | undefined;
   existingResponse?: Record<string, unknown> | undefined;
 };
 
@@ -563,8 +744,8 @@ async function prepareChat(
   if (!validation.valid) throw new ComputeRequestError(400, "invalid_request", "Invalid OpenAI chat completion request.");
   const request = body as OpenAIChatCompletionRequest;
   const bodyRecord = body as Record<string, unknown>;
-  for (const key of ["tools", "tool_choice", "provider", "prompt", "plugins"]) {
-    if (bodyRecord[key] !== undefined) throw new ComputeRequestError(400, "invalid_request", `The ${key} field is controlled by the Preset Model.`);
+  for (const key of ["tools", "tool_choice", "provider", "prompt", "plugins", "temperature", "response_format"]) {
+    if (bodyRecord[key] !== undefined) throw new ComputeRequestError(400, "preset_model_override_forbidden", `The ${key} field is controlled by the Preset Model.`);
   }
   for (const message of request.messages) {
     const candidate = message as Record<string, unknown>;
@@ -574,8 +755,8 @@ async function prepareChat(
   const current = request.messages.at(-1)!;
   if (typeof current.content !== "string" || !current.content.trim()) throw new ComputeRequestError(400, "message_required", "The last user message must contain text.");
 
-  const model = resolvePublishedModel(options.registry, request.model);
   const sessionId = readSessionId(request.metadata) ?? randomIds.sessionId();
+  const model = await resolveModelForSession(options.registry, request.model, options.sessions, sessionId);
   if (options.controller.hasActiveRun(sessionId)) throw new ComputeRequestError(409, "run_already_active", "A run is already active for this session.", true);
   await bindSessionModel(options.sessions, sessionId, model.ref);
   const requestId = `chatcmpl_${randomUUID().replaceAll("-", "")}`;
@@ -583,10 +764,13 @@ async function prepareChat(
   const requestHash = hash({ clientId, model: model.ref, request });
   if (idempotencyKey) {
     if (idempotencyKey.length > 255) throw new ComputeRequestError(400, "invalid_request", "Idempotency-Key is too long.");
-    const existing = await idempotency.get(clientId, idempotencyKey);
-    if (existing) {
-      if (existing.requestHash !== requestHash) throw new ComputeRequestError(409, "idempotency_key_reused", "The Idempotency-Key was already used with a different request.");
-      return { request, clientId, requestId: String(existing.response.id ?? requestId), requestHash, idempotencyKey, model, input: {} as StartRunRequest, messages: request.messages, startedAt: new Date().toISOString(), existingResponse: existing.response };
+    const createdAt = new Date().toISOString();
+    const reservation = await idempotency.reserve(clientId, idempotencyKey, requestHash, createdAt);
+    if (reservation.status === "conflict") throw new ComputeRequestError(409, "idempotency_key_reused", "The Idempotency-Key was already used with a different request.");
+    if (reservation.status === "pending") throw new ComputeRequestError(409, "idempotency_request_in_progress", "A request with this Idempotency-Key is still running.", true);
+    if (reservation.status === "completed") {
+      const existing = reservation.record;
+      return { request, clientId, requestId: String(existing.response.id ?? requestId), requestHash, idempotencyKey, model, input: {} as StartRunRequest, messages: request.messages, startedAt: createdAt, existingResponse: existing.response };
     }
   }
   const messages = request.messages.map(toModelMessage);
@@ -603,15 +787,29 @@ async function prepareChat(
     model: model.providerModel,
     presetModelRef: model.ref,
     compiledHash: model.compiledHash,
-    searchMode: policyString(model, "search_mode") ?? "diy",
+    toolProtocol: model.toolProtocol,
+    policy: structuredClone(model.policy),
+    allowedPluginIds: new Set(model.fixedPlugins.map((selector) => selector.split("@")[0]!)),
+    allowedPluginLocks: structuredClone(model.pluginLocks),
+    searchMode: model.policy.searchMode ?? "diy",
     ...(model.systemPrompt === undefined ? {} : { systemPrompt: model.systemPrompt }),
     ...(allowedToolNames ? { allowedToolNames: new Set(allowedToolNames) } : {}),
     ...(model.bootstrapTools ? { bootstrapTools: structuredClone(model.bootstrapTools) } : {}),
-    ...(request.temperature === undefined ? {} : { temperature: request.temperature }),
-    ...(request.response_format === undefined ? {} : { responseFormat: request.response_format }),
+    ...(model.policy.temperature === undefined ? {} : { temperature: model.policy.temperature }),
+    ...(model.policy.responseFormat === undefined ? {} : { responseFormat: structuredClone(model.policy.responseFormat) }),
     ...(historyMessages.length ? { historyMessages } : {}),
   };
-  return { request, clientId, requestId, requestHash, ...(idempotencyKey ? { idempotencyKey } : {}), model, input, messages: request.messages, startedAt: new Date().toISOString() };
+  return {
+    request,
+    clientId,
+    requestId,
+    requestHash,
+    ...(idempotencyKey ? { idempotencyKey, idempotencyReserved: true } : {}),
+    model,
+    input,
+    messages: request.messages,
+    startedAt: new Date().toISOString(),
+  };
 }
 
 async function executeNonStream(
@@ -620,10 +818,15 @@ async function executeNonStream(
   usage: UsageRepository,
   idempotency: IdempotencyRepository,
 ): Promise<Record<string, unknown>> {
-  const events = await executeWithUsage(prepared, options, usage);
-  const response = completionResponse(prepared, events);
-  await saveIdempotent(prepared, response, idempotency);
-  return response;
+  try {
+    const events = await executeWithUsage(prepared, options, usage);
+    const response = completionResponse(prepared, events);
+    await saveIdempotent(prepared, response, idempotency);
+    return response;
+  } catch (error) {
+    await releaseIdempotent(prepared, idempotency);
+    throw error;
+  }
 }
 
 async function executeStream(
@@ -633,24 +836,29 @@ async function executeStream(
   usage: UsageRepository,
   idempotency: IdempotencyRepository,
 ): Promise<void> {
-  const responseId = prepared.requestId;
-  const created = Math.floor(Date.now() / 1_000);
-  writeSse(raw, { id: responseId, object: "chat.completion.chunk", created, model: prepared.model.ref, choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }] });
-  const events = await executeWithUsage(prepared, options, usage, async (event) => {
-    if (event.type !== "message.delta") return;
-    const content = typeof event.data.content === "string" ? event.data.content : "";
-    if (content) writeSse(raw, { id: responseId, object: "chat.completion.chunk", created, model: prepared.model.ref, choices: [{ index: 0, delta: { content }, finish_reason: null }] });
-  });
-  const response = completionResponse(prepared, events);
-  const firstChoice = (response.choices as Array<Record<string, unknown>>)[0];
-  const message = firstChoice?.message as Record<string, unknown> | undefined;
-  const text = String(message?.content ?? "");
-  if (!events.some((event) => event.type === "message.delta") && text) {
-    writeSse(raw, { id: responseId, object: "chat.completion.chunk", created, model: prepared.model.ref, choices: [{ index: 0, delta: { content: text }, finish_reason: null }] });
+  try {
+    const responseId = prepared.requestId;
+    const created = Math.floor(Date.now() / 1_000);
+    writeSse(raw, { id: responseId, object: "chat.completion.chunk", created, model: prepared.model.ref, choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }] });
+    const events = await executeWithUsage(prepared, options, usage, async (event) => {
+      if (event.type !== "message.delta") return;
+      const content = typeof event.data.content === "string" ? event.data.content : "";
+      if (content) writeSse(raw, { id: responseId, object: "chat.completion.chunk", created, model: prepared.model.ref, choices: [{ index: 0, delta: { content }, finish_reason: null }] });
+    });
+    const response = completionResponse(prepared, events);
+    const firstChoice = (response.choices as Array<Record<string, unknown>>)[0];
+    const message = firstChoice?.message as Record<string, unknown> | undefined;
+    const text = String(message?.content ?? "");
+    if (!events.some((event) => event.type === "message.delta") && text) {
+      writeSse(raw, { id: responseId, object: "chat.completion.chunk", created, model: prepared.model.ref, choices: [{ index: 0, delta: { content: text }, finish_reason: null }] });
+    }
+    writeSse(raw, { id: responseId, object: "chat.completion.chunk", created, model: prepared.model.ref, choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: response.usage });
+    writeSseLine(raw, "[DONE]");
+    await saveIdempotent(prepared, response, idempotency);
+  } catch (error) {
+    await releaseIdempotent(prepared, idempotency);
+    throw error;
   }
-  writeSse(raw, { id: responseId, object: "chat.completion.chunk", created, model: prepared.model.ref, choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: response.usage });
-  writeSseLine(raw, "[DONE]");
-  await saveIdempotent(prepared, response, idempotency);
 }
 
 async function executeWithUsage(
@@ -738,6 +946,11 @@ async function saveIdempotent(prepared: PreparedChat, response: Record<string, u
   await idempotency.put({ clientId: prepared.clientId, key: prepared.idempotencyKey, requestHash: prepared.requestHash, response, createdAt: new Date().toISOString() });
 }
 
+async function releaseIdempotent(prepared: PreparedChat, idempotency: IdempotencyRepository): Promise<void> {
+  if (!prepared.idempotencyKey || !prepared.idempotencyReserved) return;
+  await idempotency.release(prepared.clientId, prepared.idempotencyKey, prepared.requestHash);
+}
+
 function sendReplayStream(reply: FastifyReply, response: Record<string, unknown>): FastifyReply {
   reply.hijack();
   reply.raw.statusCode = 200;
@@ -773,10 +986,16 @@ function nativeRunInput(body: unknown, model: CompiledPresetModel): StartRunRequ
     model: model.providerModel,
     presetModelRef: model.ref,
     compiledHash: model.compiledHash,
-    searchMode: policyString(model, "search_mode") ?? "diy",
+    toolProtocol: model.toolProtocol,
+    policy: structuredClone(model.policy),
+    allowedPluginIds: new Set(model.fixedPlugins.map((selector) => selector.split("@")[0]!)),
+    allowedPluginLocks: structuredClone(model.pluginLocks),
+    searchMode: model.policy.searchMode ?? "diy",
     ...(model.systemPrompt === undefined ? {} : { systemPrompt: model.systemPrompt }),
     ...(allowedToolNames ? { allowedToolNames: new Set(allowedToolNames) } : {}),
     ...(model.bootstrapTools ? { bootstrapTools: structuredClone(model.bootstrapTools) } : {}),
+    ...(model.policy.temperature === undefined ? {} : { temperature: model.policy.temperature }),
+    ...(model.policy.responseFormat === undefined ? {} : { responseFormat: structuredClone(model.policy.responseFormat) }),
   };
 }
 
@@ -798,6 +1017,42 @@ function resolvePublishedModel(registry: SqlitePresetModelRegistry, ref: string)
     }
     throw new ComputeRequestError(404, "preset_model_not_found", "The requested Preset Model was not found.");
   }
+}
+
+async function resolveModelForSession(
+  registry: SqlitePresetModelRegistry,
+  ref: string,
+  sessions: SessionRepository,
+  sessionId: SessionId | undefined,
+): Promise<CompiledPresetModel> {
+  if (sessionId) {
+    const snapshot = await sessions.open(sessionId);
+    const bound = typeof snapshot.metadata.preset_model_ref === "string"
+      ? snapshot.metadata.preset_model_ref
+      : undefined;
+    if (bound === ref) {
+      try {
+        return registry.resolveForBoundSession(ref);
+      } catch (error) {
+        throw presetModelError(error);
+      }
+    }
+  }
+  return resolvePublishedModel(registry, ref);
+}
+
+function readSessionIdFromBody(body: unknown): SessionId | undefined {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return undefined;
+  const value = (body as Record<string, unknown>).session_id;
+  return typeof value === "string" && value ? value as SessionId : undefined;
+}
+
+function presetModelError(error: unknown): ComputeRequestError {
+  const message = error instanceof Error ? error.message : String(error);
+  if (["preset_model_compiled_hash_mismatch", "preset_model_plugin_lock_mismatch", "plugin_not_installed", "plugin_hash_mismatch"].includes(message)) {
+    return new ComputeRequestError(503, "preset_model_unavailable", "The requested Preset Model is unavailable.", true);
+  }
+  return new ComputeRequestError(404, "preset_model_not_found", "The requested Preset Model was not found.");
 }
 
 function toModelMessage(message: OpenAIChatMessage): ModelMessage {
@@ -845,14 +1100,32 @@ function estimateTokens(value: string): number {
   return value.trim() ? Math.max(1, Math.ceil(value.length / 4)) : 0;
 }
 
-function policyString(model: CompiledPresetModel, key: string): string | undefined {
-  const value = model.definition.policy?.[key];
-  return typeof value === "string" && value ? value : undefined;
-}
-
 function nativeRunStatus(events: AgentEvent[]): string {
   const terminal = [...events].reverse().find((event) => event.type.startsWith("run."));
   return terminal?.type.replace("run.", "") ?? "active";
+}
+
+function nativeRunFailure(input: StartRunRequest, error: unknown): AgentEvent {
+  const payload = computeErrorPayload(error).error as Record<string, unknown>;
+  return {
+    type: "run.error",
+    session_id: input.sessionId,
+    run_id: input.runId!,
+    data: {
+      error_code: typeof payload.code === "string" ? payload.code : "model_failed",
+      error: typeof payload.message === "string" ? payload.message : "The run failed.",
+    },
+    timestamp: new Date().toISOString(),
+  };
+}
+
+function assertNativeRunOwner(run: NativeRunRecord | undefined, clientId: string): asserts run is NativeRunRecord {
+  if (!run || run.clientId !== clientId) throw new ComputeRequestError(404, "run_not_found", "Run not found.");
+}
+
+function ensureSqliteColumn(db: DatabaseSync, table: string, column: string, definition: string): void {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<Record<string, unknown>>;
+  if (!columns.some((candidate) => candidate.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
 
 function tokenHash(token: string): Buffer {

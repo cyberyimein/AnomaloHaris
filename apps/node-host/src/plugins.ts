@@ -57,6 +57,13 @@ export type PluginContext = {
   signal?: AbortSignal;
 };
 
+export type PluginExecutionScope = Readonly<{
+  modelRef?: string | undefined;
+  compiledHash?: string | undefined;
+  pluginIds: ReadonlySet<string>;
+  locks?: readonly PluginLock[] | undefined;
+}>;
+
 export type PluginEvent =
   | { type: "session_start"; context: PluginContext }
   | { type: "before_agent_start"; context: PluginContext; messages: ModelMessage[] }
@@ -129,10 +136,10 @@ export type PluginLoadReport = {
 export interface PluginHost {
   load(config: PluginLoadConfig): Promise<PluginLoadReport>;
   unload(pluginId: string): Promise<void>;
-  tools(context: PluginContext): Promise<ToolDefinition[]>;
-  callTool(call: ToolCall, context: ToolContext, signal: AbortSignal): Promise<ToolResult>;
-  dispatch(event: PluginEvent): Promise<PluginEventResult>;
-  status(): PluginStatus[];
+  tools(context: PluginContext, scope?: PluginExecutionScope): Promise<ToolDefinition[]>;
+  callTool(call: ToolCall, context: ToolContext, signal: AbortSignal, scope?: PluginExecutionScope): Promise<ToolResult>;
+  dispatch(event: PluginEvent, scope?: PluginExecutionScope): Promise<PluginEventResult>;
+  status(scope?: PluginExecutionScope): PluginStatus[];
 }
 
 export interface PluginBackend {
@@ -179,7 +186,16 @@ export class PiPluginHost implements PluginHost {
   async load(config: PluginLoadConfig): Promise<PluginLoadReport> {
     this.catalog?.assertSpecs(config.plugins, config.locks);
     const report: PluginLoadReport = { plugins: [], errors: [], unsupported: [] };
-    for (const spec of config.plugins) {
+    for (const rawSpec of config.plugins) {
+      const manifest = this.catalog?.get(rawSpec.id);
+      const spec: PluginSpec = {
+        ...rawSpec,
+        ...(manifest?.version && !rawSpec.version ? { version: manifest.version } : {}),
+        ...(manifest?.package && !rawSpec.package ? { package: manifest.package } : {}),
+        ...(manifest?.entry && !rawSpec.entry ? { entry: manifest.entry } : {}),
+        ...(manifest?.packageHash && !rawSpec.packageHash ? { packageHash: manifest.packageHash } : {}),
+        ...(manifest?.manifestHash && !rawSpec.manifestHash ? { manifestHash: manifest.manifestHash } : {}),
+      };
       const status: PluginStatus = {
         id: spec.id,
         ...(spec.version ? { version: spec.version } : {}),
@@ -227,6 +243,13 @@ export class PiPluginHost implements PluginHost {
           ...status.capabilities,
           ...capabilities.map((capability) => capability.id),
         ])].sort();
+        if (this.catalog) {
+          const refreshed = this.catalog.refreshRuntimeMetadata(spec.id, status.tools, status.capabilities);
+          spec.packageHash = refreshed.packageHash;
+          spec.manifestHash = refreshed.manifestHash;
+          status.packageHash = refreshed.packageHash;
+          status.manifestHash = refreshed.manifestHash;
+        }
         this.loaded.set(spec.id, { status, spec, handle });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -246,9 +269,10 @@ export class PiPluginHost implements PluginHost {
     this.loaded.delete(pluginId);
   }
 
-  async tools(context: PluginContext): Promise<ToolDefinition[]> {
+  async tools(context: PluginContext, scope?: PluginExecutionScope): Promise<ToolDefinition[]> {
     const all: Array<{ definition: ToolDefinition; priority: number; pluginId: string }> = [];
     for (const plugin of this.loaded.values()) {
+      if (!pluginInScope(plugin, scope)) continue;
       if (!plugin.handle || !plugin.status.loaded || plugin.status.circuitOpen) continue;
       let definitions: ToolDefinition[];
       try {
@@ -266,11 +290,15 @@ export class PiPluginHost implements PluginHost {
       const existing = selected.get(item.definition.name);
       if (!existing || item.priority > existing.priority) selected.set(item.definition.name, item);
     }
-    return [...selected.values()].map((item) => structuredClone(item.definition));
+    return [...selected.values()].map((item) => ({
+      ...structuredClone(item.definition),
+      source: item.pluginId,
+    }));
   }
 
-  async callTool(call: ToolCall, context: ToolContext, signal: AbortSignal): Promise<ToolResult> {
+  async callTool(call: ToolCall, context: ToolContext, signal: AbortSignal, scope?: PluginExecutionScope): Promise<ToolResult> {
     const candidates = [...this.loaded.values()]
+      .filter((plugin) => pluginInScope(plugin, scope))
       .filter((plugin) => plugin.handle && plugin.status.loaded && !plugin.status.circuitOpen)
       .sort((a, b) => (b.spec.priority ?? 20) - (a.spec.priority ?? 20));
     for (const plugin of candidates) {
@@ -307,9 +335,10 @@ export class PiPluginHost implements PluginHost {
     return { name: call.name, ok: false, content: `Plugin tool not found: ${call.name}`, data: { error_code: "tool_not_found" } };
   }
 
-  async dispatch(event: PluginEvent): Promise<PluginEventResult> {
+  async dispatch(event: PluginEvent, scope?: PluginExecutionScope): Promise<PluginEventResult> {
     let result: PluginEventResult = {};
     for (const plugin of this.loaded.values()) {
+      if (!pluginInScope(plugin, scope)) continue;
       if (!plugin.handle || !plugin.status.loaded || plugin.status.circuitOpen) continue;
       try {
         const response = await withTimeout(
@@ -335,12 +364,14 @@ export class PiPluginHost implements PluginHost {
     return result;
   }
 
-  status(): PluginStatus[] {
-    return [...this.loaded.values()].map(({ status }) => ({
+  status(scope?: PluginExecutionScope): PluginStatus[] {
+    return [...this.loaded.values()]
+      .filter((plugin) => pluginInScope(plugin, scope))
+      .map(({ status }) => ({
       ...status,
       tools: [...status.tools],
       capabilities: [...status.capabilities],
-    }));
+      }));
   }
 
   private recordFailure(plugin: LoadedPlugin, error: unknown): void {
@@ -362,6 +393,16 @@ export class PiPluginHost implements PluginHost {
       }
     }
   }
+}
+
+function pluginInScope(plugin: LoadedPlugin, scope: PluginExecutionScope | undefined): boolean {
+  if (!scope) return true;
+  if (!scope.pluginIds.has(plugin.spec.id)) return false;
+  const lock = scope.locks?.find((candidate) => candidate.id === plugin.spec.id);
+  if (!lock) return scope.locks === undefined;
+  return plugin.spec.version === lock.version
+    && plugin.spec.packageHash === lock.packageHash
+    && plugin.spec.manifestHash === lock.manifestHash;
 }
 
 export class InProcessPluginBackend implements PluginBackend {

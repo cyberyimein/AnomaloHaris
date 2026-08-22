@@ -25,6 +25,7 @@ FROM node:22-bookworm-slim AS runtime
 ENV NODE_ENV=production \
     ANOMALO_ENV=production \
     ANOMALO_ACKNOWLEDGE_PUBLIC_HOST=true \
+    ANOMALO_SERVICE_AUTH_REQUIRED=true \
     ANOMALO_DATA_DIR=/data \
     HOST=0.0.0.0 \
     PORT=8000

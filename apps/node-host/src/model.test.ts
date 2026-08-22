@@ -49,6 +49,34 @@ describe("OpenAICompatibleAdapter", () => {
     ]);
   });
 
+  it("does not expose or parse tools for the none protocol", async () => {
+    let body: Record<string, unknown> | undefined;
+    const events = await collect(
+      new OpenAICompatibleAdapter({
+        model: "text-only-model",
+        baseUrl: "https://example.test/v1",
+        apiKey: "test-key",
+        toolProtocol: "none",
+        fetchImpl: async (_url, init) => {
+          body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          return sseResponse([
+            { choices: [{ delta: { content: "answer" } }] },
+            { choices: [{ delta: { tool_calls: [{ index: 0, id: "ignored", function: { name: "time_now", arguments: "{}" } }] } }] },
+            "[DONE]",
+          ]);
+        },
+      }).stream({
+        model: "text-only-model",
+        toolProtocol: "none",
+        messages: [],
+        tools: [{ name: "time_now", description: "Read time", parameters: {}, source: "test" }],
+      }, new AbortController().signal),
+    );
+
+    expect(body?.tools).toBeUndefined();
+    expect(events).toEqual([{ type: "text.delta", text: "answer" }, { type: "done" }]);
+  });
+
   it("serializes tool definitions and loop messages using the OpenAI wire shape", async () => {
     let body: Record<string, unknown> | undefined;
     const adapter = new OpenAICompatibleAdapter({

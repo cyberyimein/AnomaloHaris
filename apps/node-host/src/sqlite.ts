@@ -8,6 +8,7 @@ import type { EntryId, RunId, SessionId } from "@anomalo/contracts";
 import { systemClock, type Clock } from "./clock.js";
 import { randomIds, type IdFactory } from "./ids.js";
 import type {
+  AgentPolicy,
   FailedRunRecord,
   FinishedRunRecord,
   ModelMessage,
@@ -22,6 +23,7 @@ import type {
   ToolCall,
 } from "./types.js";
 import type { SessionRepository } from "./session.js";
+import type { PluginLock } from "./plugin-catalog.js";
 
 export const SESSION_V2_SCHEMA_VERSION = 2;
 
@@ -670,6 +672,10 @@ function checkpointFromRow(row: Row): SessionCheckpoint {
   const systemPrompt = stringValue(raw.systemPrompt ?? raw.system_prompt);
   const presetModelRef = stringValue(raw.presetModelRef ?? raw.preset_model_ref);
   const allowedToolNames = parseStringArray(raw.allowedToolNames ?? raw.allowed_tool_names);
+  const allowedPluginIds = parseStringArray(raw.allowedPluginIds ?? raw.allowed_plugin_ids);
+  const allowedPluginLocks = parsePluginLocks(raw.allowedPluginLocks ?? raw.allowed_plugin_locks);
+  const policy = parseAgentPolicy(raw.policy);
+  const toolProtocol = stringValue(raw.toolProtocol ?? raw.tool_protocol);
   return {
     runId: row.run_id as RunId,
     sessionId: row.session_id as SessionId,
@@ -693,6 +699,12 @@ function checkpointFromRow(row: Row): SessionCheckpoint {
         : { allowedToolNames }),
       ...(model === undefined ? {} : { model }),
       ...(presetModelRef === undefined ? {} : { presetModelRef: presetModelRef as SessionCheckpoint["state"]["presetModelRef"] }),
+      ...(toolProtocol === undefined ? {} : { toolProtocol: toolProtocol as SessionCheckpoint["state"]["toolProtocol"] }),
+      ...(policy === undefined ? {} : { policy }),
+      ...(allowedPluginIds.length === 0 && raw.allowedPluginIds === undefined && raw.allowed_plugin_ids === undefined
+        ? {}
+        : { allowedPluginIds }),
+      ...(allowedPluginLocks.length === 0 ? {} : { allowedPluginLocks }),
       ...(typeof raw.temperature === "number" ? { temperature: raw.temperature } : {}),
       searchMode: stringValue(raw.searchMode ?? raw.search_mode) ?? "diy",
     },
@@ -743,6 +755,62 @@ function parseRecordArray(value: unknown): Record<string, unknown>[] {
 
 function parseResponseFormat(value: unknown): ResponseFormat | undefined {
   return isRecord(value) && typeof value.type === "string" ? value as ResponseFormat : undefined;
+}
+
+function parseAgentPolicy(value: unknown): AgentPolicy | undefined {
+  if (!isRecord(value)) return undefined;
+  const maxToolIterations = policyInteger(value, ["maxToolIterations", "max_tool_iterations"], 1, 1_000);
+  const runTimeoutMs = policyInteger(value, ["runTimeoutMs", "run_timeout_ms"], 1_000, 3_600_000);
+  const bootstrapToolTimeoutMs = policyInteger(value, ["bootstrapToolTimeoutMs", "bootstrap_tool_timeout_ms"], 1, 120_000);
+  const toolTimeoutMs = policyInteger(value, ["toolTimeoutMs", "tool_timeout_ms"], 1, 600_000);
+  const toolExecution = value.toolExecution ?? value.tool_execution ?? "sequential";
+  if (maxToolIterations === undefined || runTimeoutMs === undefined || bootstrapToolTimeoutMs === undefined || toolTimeoutMs === undefined) return undefined;
+  if (toolExecution !== "sequential") return undefined;
+  const temperature = typeof value.temperature === "number" && Number.isFinite(value.temperature) ? value.temperature : undefined;
+  const responseFormat = parseResponseFormat(value.responseFormat ?? value.response_format);
+  const searchMode = typeof (value.searchMode ?? value.search_mode) === "string"
+    ? value.searchMode ?? value.search_mode
+    : undefined;
+  return {
+    maxToolIterations,
+    runTimeoutMs,
+    bootstrapToolTimeoutMs,
+    toolTimeoutMs,
+    structuredOutputRetryCount: 1,
+    toolExecution: "sequential",
+    ...(temperature === undefined ? {} : { temperature }),
+    ...(responseFormat === undefined ? {} : { responseFormat }),
+    ...(searchMode === undefined ? {} : { searchMode: searchMode as AgentPolicy["searchMode"] }),
+  };
+}
+
+function policyInteger(value: Record<string, unknown>, keys: string[], minimum: number, maximum: number): number | undefined {
+  const candidate = keys.map((key) => value[key]).find((item) => item !== undefined);
+  return typeof candidate === "number" && Number.isInteger(candidate) && candidate >= minimum && candidate <= maximum
+    ? candidate
+    : undefined;
+}
+
+function parsePluginLocks(value: unknown): PluginLock[] {
+  return parseArray(value).flatMap((item) => {
+    if (!isRecord(item)) return [];
+    if (typeof item.id !== "string" || typeof item.version !== "string" || typeof item.package !== "string" || typeof item.entry !== "string") return [];
+    if (typeof item.compatibility !== "string" || typeof item.packageHash !== "string" || typeof item.manifestHash !== "string") return [];
+    const permissions = Array.isArray(item.permissions)
+      ? item.permissions.filter((permission): permission is PluginLock["permissions"][number] => typeof permission === "string")
+      : [];
+    return [{
+      id: item.id,
+      version: item.version,
+      package: item.package,
+      entry: item.entry,
+      compatibility: item.compatibility as PluginLock["compatibility"],
+      permissions,
+      ...(Array.isArray(item.capabilities) ? { capabilities: item.capabilities.filter((capability): capability is string => typeof capability === "string") } : {}),
+      packageHash: item.packageHash,
+      manifestHash: item.manifestHash,
+    }];
+  });
 }
 
 function isRecord(value: unknown): value is Record<string, any> {

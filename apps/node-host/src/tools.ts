@@ -1,6 +1,6 @@
 import type { ToolCall, ToolDefinition, ToolResult } from "@anomalo/contracts";
 
-import type { PluginHost } from "./plugins.js";
+import type { PluginExecutionScope, PluginHost } from "./plugins.js";
 import type { ToolContext } from "./types.js";
 
 export interface ToolRuntime {
@@ -109,12 +109,15 @@ export class CompositeToolRuntime implements ToolRuntime {
   }
 
   async status(context: ToolContext): Promise<Record<string, unknown>[]> {
-    return Promise.all(this.adapters.map((adapter) => adapter.status(context)));
+    return Promise.all(this.adapters
+      .filter((adapter) => !context.allowedPluginIds || context.allowedPluginIds.has(adapter.id))
+      .map((adapter) => adapter.status(context)));
   }
 
   private async resolve(context: ToolContext): Promise<Map<string, { definition: ToolDefinition; adapter: ToolAdapter }>> {
     const selected = new Map<string, { definition: ToolDefinition; adapter: ToolAdapter }>();
     for (const adapter of this.adapters) {
+      if (context.allowedPluginIds && !context.allowedPluginIds.has(adapter.id)) continue;
       for (const definition of await adapter.list(context)) {
         const existing = selected.get(definition.name);
         if (existing && existing.adapter.priority === adapter.priority) {
@@ -162,15 +165,27 @@ export class PluginToolAdapter implements ToolAdapter {
       sessionId: context.sessionId,
       runId: context.runId,
       ...(context.toolCallId ? { toolCallId: context.toolCallId } : {}),
-    });
+    }, context.allowedPluginIds
+      ? { pluginIds: context.allowedPluginIds, ...(context.allowedPluginLocks ? { locks: context.allowedPluginLocks } : {}) }
+      : undefined);
   }
 
   async call(call: ToolCall, context: ToolContext, signal: AbortSignal): Promise<ToolResult> {
-    return this.plugins.callTool(call, context, signal);
+    return this.plugins.callTool(
+      call,
+      context,
+      signal,
+      context.allowedPluginIds
+        ? { pluginIds: context.allowedPluginIds, ...(context.allowedPluginLocks ? { locks: context.allowedPluginLocks } : {}) }
+        : undefined,
+    );
   }
 
   async status(_context: ToolContext): Promise<Record<string, unknown>> {
-    return { provider: this.id, plugins: this.plugins.status() };
+    const scope: PluginExecutionScope | undefined = _context.allowedPluginIds
+      ? { pluginIds: _context.allowedPluginIds, ...(_context.allowedPluginLocks ? { locks: _context.allowedPluginLocks } : {}) }
+      : undefined;
+    return { provider: this.id, plugins: this.plugins.status(scope) };
   }
 }
 

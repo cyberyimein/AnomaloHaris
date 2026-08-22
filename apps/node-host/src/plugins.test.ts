@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { InProcessPluginBackend, PiPluginHost, readPluginLoadConfig, resolvePluginModuleSpecifier } from "./plugins.js";
+import { createPluginManifest, PluginCatalog } from "./plugin-catalog.js";
 import type { ToolContext } from "./types.js";
 
 const tempDirectories: string[] = [];
@@ -44,7 +45,10 @@ describe("PiPluginHost", () => {
 
     expect(report.errors).toEqual([]);
     expect(report.plugins[0]).toMatchObject({ id: "fixture", loaded: true, tools: ["pi_echo"] });
-    expect((await host.tools({ pluginId: "host" })).map((tool) => tool.name)).toEqual(["pi_echo", "pi_status"]);
+    expect((await host.tools({ pluginId: "host" })).map((tool) => [tool.name, tool.source])).toEqual([
+      ["pi_echo", "fixture"],
+      ["pi_status", "fixture-second"],
+    ]);
     expect((await host.callTool({ id: "call-1", name: "pi_echo", arguments: { value: "ok" } }, context, new AbortController().signal)).content).toBe("ok");
     expect((await host.dispatch({ type: "tool_call", context: { pluginId: "fixture" }, call: { id: "call-2", name: "pi_echo", arguments: { block: true } } })).allow).toBe(false);
   });
@@ -63,6 +67,58 @@ describe("PiPluginHost", () => {
 
     expect(report.plugins[0]).toMatchObject({ loaded: true, tools: ["pi_registered"] });
     expect((await host.callTool({ id: "call-registered", name: "pi_registered", arguments: {} }, context, new AbortController().signal)).content).toBe("registered");
+  });
+
+  it("publishes discovered tool ownership into the compiled plugin catalog", async () => {
+    const entry = writeFixture(`
+      export default {
+        tools: [{ name: "pi_catalogued", description: "Catalogued", parameters: { type: "object" }, source: "untrusted-source" }],
+        callTool(call) { return { name: call.name, ok: true, content: "ok", data: {} }; }
+      };
+    `);
+    const catalog = new PluginCatalog([createPluginManifest({
+      id: "catalogued-plugin",
+      version: "1.0.0",
+      package: "@local/catalogued-plugin",
+      entry,
+      compatibility: "L2",
+    })]);
+    const host = new PiPluginHost({ backend: new InProcessPluginBackend(), catalog });
+    await host.load({ plugins: [{ id: "catalogued-plugin", entry, compatibility: "L2" }] });
+    const graph = catalog.compile(["catalogued-plugin"]);
+
+    expect(graph.toolNames).toEqual(["pi_catalogued"]);
+    await expect(host.tools({ pluginId: "host" }, {
+      pluginIds: new Set(["catalogued-plugin"]),
+      locks: graph.locks,
+    })).resolves.toEqual([expect.objectContaining({ name: "pi_catalogued", source: "catalogued-plugin" })]);
+  });
+
+  it("does not expose or execute plugins outside the compiled run scope", async () => {
+    const firstEntry = writeFixture(`
+      export default {
+        tools: [{ name: "pi_scoped_first", description: "First", parameters: { type: "object" }, source: "first" }],
+        callTool(call) { return { name: call.name, ok: true, content: "first", data: {} }; },
+        hooks: { session_start() { return { metadata: { first: true } }; } }
+      };
+    `);
+    const secondEntry = writeFixture(`
+      export default {
+        tools: [{ name: "pi_scoped_second", description: "Second", parameters: { type: "object" }, source: "second" }],
+        callTool(call) { return { name: call.name, ok: true, content: "second", data: {} }; },
+        hooks: { session_start() { return { metadata: { second: true } }; } }
+      };
+    `);
+    const host = new PiPluginHost({ backend: new InProcessPluginBackend() });
+    await host.load({ plugins: [
+      { id: "scoped-first", entry: firstEntry, compatibility: "L2" },
+      { id: "scoped-second", entry: secondEntry, compatibility: "L2" },
+    ] });
+    const scope = { pluginIds: new Set(["scoped-first"]) };
+
+    expect((await host.tools({ pluginId: "host" }, scope)).map((tool) => tool.name)).toEqual(["pi_scoped_first"]);
+    expect((await host.callTool({ id: "call-scoped", name: "pi_scoped_second", arguments: {} }, context, new AbortController().signal, scope).then((result) => result.data.error_code))).toBe("tool_not_found");
+    expect((await host.dispatch({ type: "session_start", context: { pluginId: "host" } }, scope)).metadata).toEqual({ first: true });
   });
 
   it("keeps optional hardware and media capabilities inside the plugin boundary", async () => {

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { AgentCore } from "./core.js";
-import { InMemoryIdempotencyRepository, InMemoryUsageRepository, ServiceAuth, SqliteComputeStore } from "./compute-api.js";
+import { InMemoryIdempotencyRepository, InMemoryUsageRepository, ServiceAuth, SqliteComputeStore, SqliteNativeRunStore } from "./compute-api.js";
 import { RunController } from "./controller.js";
 import { ReplayModelAdapter, type ReplayStep } from "./model.js";
 import { SqlitePresetModelRegistry } from "./preset-models.js";
@@ -58,7 +58,7 @@ describe("OpenAI-compatible compute API", () => {
       payload: { model: "luna@1", messages: [{ role: "user", content: "hello" }], tools: [] },
     });
     expect(invalid.statusCode).toBe(400);
-    expect(invalid.json()).toMatchObject({ error: { code: "invalid_request" } });
+    expect(invalid.json()).toMatchObject({ error: { code: "preset_model_override_forbidden" } });
 
     const stream = await app.inject({
       method: "POST",
@@ -92,6 +92,28 @@ describe("OpenAI-compatible compute API", () => {
     });
     expect(reused.statusCode).toBe(409);
     expect(reused.json()).toMatchObject({ error: { code: "idempotency_key_reused" } });
+  });
+
+  it("rejects caller-owned temperature and response format overrides", async () => {
+    const app = await makeApp([[{ type: "text.delta", text: "unused" }, { type: "done" }]]);
+    apps.push(app);
+    const temperature = await app.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      headers: { authorization: "Bearer luna-token" },
+      payload: { model: "luna@1", temperature: 0.1, messages: [{ role: "user", content: "hello" }] },
+    });
+    expect(temperature.statusCode).toBe(400);
+    expect(temperature.json()).toMatchObject({ error: { code: "preset_model_override_forbidden" } });
+
+    const responseFormat = await app.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      headers: { authorization: "Bearer luna-token" },
+      payload: { model: "luna@1", response_format: { type: "json_object" }, messages: [{ role: "user", content: "hello" }] },
+    });
+    expect(responseFormat.statusCode).toBe(400);
+    expect(responseFormat.json()).toMatchObject({ error: { code: "preset_model_override_forbidden" } });
   });
 
   it("supports native preset-model runs and protects routes with scopes", async () => {
@@ -159,6 +181,45 @@ describe("OpenAI-compatible compute API", () => {
     await store.put({ clientId: "client-1", key: "key-1", requestHash: "hash-1", response: { id: "chatcmpl-1" }, createdAt: "2026-08-22T00:00:00.000Z" });
     expect(await store.list()).toEqual([expect.objectContaining({ status: "completed", totalTokens: 3, latencyMs: 10 })]);
     await expect(store.get("client-1", "key-1")).resolves.toMatchObject({ requestHash: "hash-1", response: { id: "chatcmpl-1" } });
+    store.close();
+  });
+
+  it("atomically reserves idempotency keys before provider execution", async () => {
+    const store = new SqliteComputeStore(":memory:");
+    await expect(store.reserve("client-1", "same-key", "hash-1", "2026-08-22T00:00:00.000Z"))
+      .resolves.toEqual({ status: "acquired" });
+    await expect(store.reserve("client-1", "same-key", "hash-1", "2026-08-22T00:00:00.001Z"))
+      .resolves.toEqual({ status: "pending" });
+    await expect(store.reserve("client-1", "same-key", "hash-2", "2026-08-22T00:00:00.001Z"))
+      .resolves.toEqual({ status: "conflict" });
+    await store.put({ clientId: "client-1", key: "same-key", requestHash: "hash-1", response: { id: "chatcmpl-1" }, createdAt: "2026-08-22T00:00:00.000Z" });
+    await expect(store.reserve("client-1", "same-key", "hash-1", "2026-08-22T00:00:00.002Z"))
+      .resolves.toMatchObject({ status: "completed", record: { response: { id: "chatcmpl-1" } } });
+    store.close();
+  });
+
+  it("persists native run ownership and events across repository recreation", () => {
+    const store = new SqliteComputeStore(":memory:");
+    const first = new SqliteNativeRunStore(store.db);
+    first.start("run-1", "session-1", "luna@1", "client-1");
+    const event = {
+      type: "run.finished" as const,
+      session_id: "session-1",
+      run_id: "run-1",
+      data: { final_text: "done" },
+      timestamp: "2026-08-22T00:00:00.000Z",
+    };
+    first.finish("run-1", [event]);
+
+    const restarted = new SqliteNativeRunStore(store.db);
+    expect(restarted.get("run-1")).toMatchObject({
+      runId: "run-1",
+      sessionId: "session-1",
+      modelRef: "luna@1",
+      clientId: "client-1",
+      active: false,
+      events: [event],
+    });
     store.close();
   });
 });

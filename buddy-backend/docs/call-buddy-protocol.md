@@ -1,9 +1,15 @@
 # Call Buddy Firmware Protocol
 
-This document is the host-agent integration contract for the MyStackChan CoreS3
-firmware. It is intentionally small: the host agent owns STT, TTS, LLM/tool
-calls, and policy decisions. The firmware owns display state, touch input, LEDs,
-servo posture, and simple command/event transport.
+This document is the low-level Call Buddy firmware protocol reference for the
+MyStackChan CoreS3. It is intentionally device-oriented: the firmware owns
+display state, touch input, LEDs, servo posture, and simple command/event
+transport. Anomalo's Node Host does not own this transport, STT/TTS, audio,
+vision, or Codex hooks. A future Buddy plugin may consume this protocol after a
+separate capability decision.
+
+> Audio and camera sections below describe historical firmware capabilities only.
+> They are not active Anomalo Host APIs or a promise that the optional plugin
+> will restore those features.
 
 ## Current Firmware
 

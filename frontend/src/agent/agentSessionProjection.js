@@ -493,8 +493,8 @@ export function createAgentSessionProjection({
       messages.length > 0
         ? messages
         : {
-            message_count: safeRequest.message_count ?? 0,
-            tool_count: safeRequest.tool_count ?? 0,
+            message_count: safeRequest.message_count ?? "Unavailable",
+            tool_count: safeRequest.tool_count ?? "Unavailable",
             response_format: safeRequest.response_format || "text",
           },
       null,
@@ -686,13 +686,15 @@ function refreshTargets(data) {
 }
 
 function summarizeLlmRequest(request) {
-  const messageCount = Number.isFinite(request?.message_count)
-    ? request.message_count
-    : request?.messages?.length || 0;
-  const toolCount = Number.isFinite(request?.tool_count)
-    ? request.tool_count
-    : request?.tools?.length || 0;
-  const model = request?.model || request?.provider_model || request?.model_ref || "unknown model";
+  const messageCount = displayCount(
+    request?.message_count,
+    Array.isArray(request?.messages) ? request.messages : undefined,
+  );
+  const toolCount = displayCount(
+    request?.tool_count,
+    Array.isArray(request?.tools) ? request.tools : undefined,
+  );
+  const model = request?.model || request?.provider_model || request?.model_ref || "model unavailable";
   return `${messageCount} prompt parts · ${toolCount} tools · ${model}`;
 }
 
@@ -716,21 +718,34 @@ function truncateInline(value, maxLength) {
 }
 
 function contextStatRows(request, context, messages) {
-  const messageCount = Number.isFinite(request?.message_count)
-    ? request.message_count
-    : messages.length;
-  const toolCount = Number.isFinite(request?.tool_count)
-    ? request.tool_count
-    : request?.tools?.length || 0;
+  const messageCount = displayCount(
+    request?.message_count,
+    Array.isArray(request?.messages) ? messages : undefined,
+  );
+  const toolCount = displayCount(
+    request?.tool_count,
+    Array.isArray(request?.tools) ? request.tools : undefined,
+  );
+  const segments = context?.segment_counts || {};
   return [
     { label: "Prompt Parts", value: messageCount },
-    { label: "Prompt", value: context?.prompt_message_count ?? 0 },
-    { label: "Memory", value: context?.memory_message_count ?? 0 },
-    { label: "Skills", value: context?.active_skill_count ?? 0 },
-    { label: "MCP", value: context?.active_mcp_server_count ?? 0 },
-    { label: "History", value: context?.history_message_count ?? 0 },
+    { label: "Prompt", value: context?.prompt_message_count ?? segments.prompt ?? "Unavailable" },
+    { label: "Memory", value: context?.memory_message_count ?? segments.memory ?? "Unavailable" },
+    { label: "Skills", value: context?.active_skill_count ?? segments.skills ?? "Unavailable" },
+    { label: "MCP", value: context?.active_mcp_server_count ?? segments.mcp ?? "Unavailable" },
+    { label: "History", value: context?.history_message_count ?? segments.history ?? "Unavailable" },
     { label: "Tools", value: context?.tool_count ?? toolCount },
   ];
+}
+
+function displayCount(explicit, collection) {
+  if (Number.isFinite(explicit)) {
+    return explicit;
+  }
+  if (Array.isArray(collection)) {
+    return collection.length;
+  }
+  return "Unavailable";
 }
 
 function sourceForIndex(index, context) {

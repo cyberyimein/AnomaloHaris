@@ -37,29 +37,6 @@ class BuddyEvent:
         return asdict(self)
 
 
-@dataclass(frozen=True)
-class BuddyAudioTurn:
-    audio_bytes: bytes
-    sample_rate_hz: int
-    channels: int
-    sample_width_bytes: int
-    frame_count: int
-    started_at: str | None = None
-    finished_at: str | None = None
-
-    def as_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-
-@dataclass(frozen=True)
-class _BuddyBinaryFrame:
-    frame_type: int
-    codec: int
-    stream_seq: int
-    timestamp_ms: int
-    payload: bytes
-
-
 class BuddyGateway:
     def __init__(
         self,
@@ -89,12 +66,6 @@ class BuddyGateway:
         self._tcp_host: str | None = None
         self._tcp_port: int | None = None
         self._tcp_client_ip: str | None = None
-        self._audio_input_active = False
-        self._audio_input_started_at: str | None = None
-        self._audio_input_buffer = bytearray()
-        self._audio_input_frame_count = 0
-        self._audio_turns: deque[BuddyAudioTurn] = deque(maxlen=8)
-
     def connect(
         self,
         *,
@@ -135,11 +106,6 @@ class BuddyGateway:
             self._tcp_port = None
             self._tcp_client_ip = None
             self._baud_rate = None
-            self._audio_input_active = False
-            self._audio_input_started_at = None
-            self._audio_input_buffer.clear()
-            self._audio_input_frame_count = 0
-            self._audio_turns.clear()
             self._stop_event.set()
 
         if stream is not None:
@@ -178,8 +144,6 @@ class BuddyGateway:
                 "tcp_client_ip": self._tcp_client_ip,
                 "client_address": self._client_address,
                 "host_name": self._host_name(),
-                "audio_input_active": self._audio_input_active,
-                "queued_audio_turns": len(self._audio_turns),
                 "recent_event_count": len(self._events),
                 "last_event": last_event,
                 "available_ports": self._available_ports(),
@@ -296,68 +260,6 @@ class BuddyGateway:
                 if remaining <= 0:
                     return None
                 self._condition.wait(timeout=remaining)
-
-    def wait_for_audio_turn(self, *, timeout_seconds: float) -> BuddyAudioTurn | None:
-        deadline = time.monotonic() + timeout_seconds
-        with self._condition:
-            while True:
-                if self._audio_turns:
-                    return self._audio_turns.popleft()
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    return None
-                self._condition.wait(timeout=remaining)
-
-    def send_audio_output(
-        self,
-        audio_bytes: bytes,
-        *,
-        sample_rate_hz: int = 24000,
-        chunk_bytes: int = 960,
-    ) -> dict[str, Any]:
-        if not audio_bytes:
-            raise BuddyConfigurationError("Buddy output audio must not be empty.")
-        if chunk_bytes <= 0 or chunk_bytes > 2048:
-            raise BuddyConfigurationError("Buddy output chunk_bytes must be between 1 and 2048.")
-
-        with self._lock:
-            stream = self._stream
-            transport = self._transport
-        if stream is None:
-            raise BuddyConnectionError("Buddy is not connected.")
-        if transport != "tcp" or not isinstance(stream, _SocketLineEndpoint):
-            raise BuddyConfigurationError("Buddy audio output requires an active TCP transport.")
-
-        try:
-            self._write_line(stream, f"AUDIO OUT START {sample_rate_hz} {chunk_bytes}")
-            for index, chunk in enumerate(_chunk_audio(audio_bytes, chunk_bytes), start=1):
-                padded = (
-                    chunk
-                    if len(chunk) == chunk_bytes
-                    else chunk + b"\x00" * (chunk_bytes - len(chunk))
-                )
-                header = (
-                    bytes([0x21, 0x02])
-                    + index.to_bytes(4, "big")
-                    + _timestamp_ms().to_bytes(8, "big")
-                )
-                stream.write(header + padded)
-            self._write_line(stream, "AUDIO OUT STOP")
-            stream.flush()
-        except Exception as exc:  # noqa: BLE001
-            raise BuddyConnectionError(f"Failed to stream Buddy audio output: {exc}") from exc
-
-        self._append_event(
-            type_name="audio.output.sent",
-            payload={
-                "sample_rate_hz": sample_rate_hz,
-                "chunk_bytes": chunk_bytes,
-                "size_bytes": len(audio_bytes),
-            },
-            raw="audio-output",
-            source="tcp",
-        )
-        return self.status()
 
     def _connect_serial(self, *, port: str | None, baud_rate: int | None) -> dict[str, Any]:
         selected_port = port or self.settings.buddy_serial_port or self._auto_detect_port()
@@ -490,11 +392,7 @@ class BuddyGateway:
                 continue
 
             try:
-                raw = (
-                    stream.read_message()
-                    if isinstance(stream, _SocketLineEndpoint)
-                    else stream.readline()
-                )
+                raw = stream.readline()
             except Exception as exc:  # noqa: BLE001
                 self._append_event(
                     type_name="buddy.connection.error",
@@ -506,9 +404,6 @@ class BuddyGateway:
                 continue
 
             if not raw:
-                continue
-            if isinstance(raw, _BuddyBinaryFrame):
-                self._append_audio_input_frame(raw)
                 continue
             line = raw.decode("utf-8", errors="replace").strip()
             if line:
@@ -535,11 +430,6 @@ class BuddyGateway:
         if not isinstance(event_payload, dict):
             event_payload = {}
         self._append_event(type_name=type_name, payload=event_payload, raw=line, source="json")
-        if type_name == "audio.input.start":
-            self._begin_audio_input_turn()
-        elif type_name in {"audio.input.stop", "touch.listen_cancel", "touch.listen_timeout"}:
-            self._finish_audio_input_turn()
-
     def _append_event(
         self,
         *,
@@ -625,84 +515,10 @@ class BuddyGateway:
                 return
             self._stream = None
             self._client_address = None
-            self._audio_input_active = False
-            self._audio_input_started_at = None
-            self._audio_input_buffer.clear()
-            self._audio_input_frame_count = 0
         try:
             current.close()
         except Exception:
             pass
-
-    def _begin_audio_input_turn(self) -> None:
-        with self._condition:
-            if self._audio_input_active:
-                logger.warning(
-                    "Buddy audio input start received while a turn is already active; "
-                    "preserving buffered audio: frames=%s bytes=%s",
-                    self._audio_input_frame_count,
-                    len(self._audio_input_buffer),
-                )
-                self._condition.notify_all()
-                return
-            self._audio_input_active = True
-            self._audio_input_started_at = datetime.now(UTC).isoformat()
-            self._audio_input_buffer.clear()
-            self._audio_input_frame_count = 0
-            logger.info("Buddy audio input started.")
-            self._condition.notify_all()
-
-    def _append_audio_input_frame(self, frame: _BuddyBinaryFrame) -> None:
-        if frame.frame_type != 0x20 or frame.codec != 0x02:
-            self._append_event(
-                type_name="audio.frame.ignored",
-                payload={"frame_type": frame.frame_type, "codec": frame.codec},
-                raw="binary-frame",
-                source="tcp",
-            )
-            return
-        with self._condition:
-            if not self._audio_input_active:
-                self._audio_input_active = True
-                self._audio_input_started_at = datetime.now(UTC).isoformat()
-                self._audio_input_buffer.clear()
-                self._audio_input_frame_count = 0
-            self._audio_input_buffer.extend(frame.payload)
-            self._audio_input_frame_count += 1
-            self._condition.notify_all()
-
-    def _finish_audio_input_turn(self) -> None:
-        with self._condition:
-            if not self._audio_input_active:
-                return
-            audio_bytes = bytes(self._audio_input_buffer)
-            started_at = self._audio_input_started_at
-            frame_count = self._audio_input_frame_count
-            self._audio_input_active = False
-            self._audio_input_started_at = None
-            self._audio_input_buffer.clear()
-            self._audio_input_frame_count = 0
-            if audio_bytes:
-                logger.info(
-                    "Buddy audio input finished: frames=%s bytes=%s",
-                    frame_count,
-                    len(audio_bytes),
-                )
-                self._audio_turns.append(
-                    BuddyAudioTurn(
-                        audio_bytes=audio_bytes,
-                        sample_rate_hz=16000,
-                        channels=1,
-                        sample_width_bytes=2,
-                        frame_count=frame_count,
-                        started_at=started_at,
-                        finished_at=datetime.now(UTC).isoformat(),
-                    )
-                )
-            else:
-                logger.info("Buddy audio input finished with no PCM payload.")
-            self._condition.notify_all()
-
 
 class _LineEndpoint:
     def readline(self) -> bytes:
@@ -757,28 +573,6 @@ class _SocketLineEndpoint(_LineEndpoint):
                 raise BuddyConnectionError("Buddy TCP client disconnected.")
             self._buffer.extend(chunk)
 
-    def read_message(self) -> bytes | _BuddyBinaryFrame:
-        while True:
-            binary_size = _binary_frame_size(self._buffer)
-            if binary_size is not None and len(self._buffer) >= binary_size:
-                frame = bytes(self._buffer[:binary_size])
-                del self._buffer[:binary_size]
-                return _parse_binary_frame(frame)
-
-            newline_index = self._buffer.find(b"\n")
-            if newline_index != -1:
-                line = bytes(self._buffer[: newline_index + 1])
-                del self._buffer[: newline_index + 1]
-                return line
-
-            try:
-                chunk = self.conn.recv(4096)
-            except TimeoutError:
-                return b""
-            if not chunk:
-                raise BuddyConnectionError("Buddy TCP client disconnected.")
-            self._buffer.extend(chunk)
-
     def write(self, data: bytes) -> int:
         self.conn.sendall(data)
         return len(data)
@@ -788,36 +582,3 @@ class _SocketLineEndpoint(_LineEndpoint):
 
     def close(self) -> None:
         self.conn.close()
-
-
-def _binary_frame_size(buffer: bytearray) -> int | None:
-    if len(buffer) < 2:
-        return None
-    frame_type = buffer[0]
-    codec = buffer[1]
-    if frame_type == 0x20 and codec == 0x02:
-        return 14 + 640
-    if frame_type == 0x21 and codec == 0x02:
-        return 14 + 960
-    return None
-
-
-def _parse_binary_frame(frame: bytes) -> _BuddyBinaryFrame:
-    return _BuddyBinaryFrame(
-        frame_type=frame[0],
-        codec=frame[1],
-        stream_seq=int.from_bytes(frame[2:6], "big"),
-        timestamp_ms=int.from_bytes(frame[6:14], "big"),
-        payload=frame[14:],
-    )
-
-
-def _timestamp_ms() -> int:
-    return int(time.time() * 1000)
-
-
-def _chunk_audio(audio_bytes: bytes, chunk_bytes: int) -> list[bytes]:
-    return [
-        audio_bytes[index : index + chunk_bytes]
-        for index in range(0, len(audio_bytes), chunk_bytes)
-    ]

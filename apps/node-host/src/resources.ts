@@ -83,13 +83,18 @@ export class FileResourceLoader implements ResourceLoader {
   }
 
   prompt(profile: string): Record<string, unknown> {
-    const content = this.readPromptProfile(profile);
+    const content = this.promptText(profile);
     return {
       version: 1,
       profile,
       messages: content ? [{ role: "system", content }] : [],
       config_path: this.promptConfigPath,
     };
+  }
+
+  /** Resolve a prompt profile for immutable Preset Model compilation. */
+  promptText(profile: string): string {
+    return this.readPromptProfile(profile) ?? "";
   }
 
   memory(): Record<string, unknown> {
@@ -128,10 +133,11 @@ export class FileResourceLoader implements ResourceLoader {
   }
 
   async snapshot(request: ResourceSnapshotRequest): Promise<ResourceSnapshot> {
-    const promptMessages: ModelMessage[] = request.systemPrompt
-      ? [{ role: "system", content: request.systemPrompt }]
+    const hasCompiledPrompt = request.systemPrompt !== undefined;
+    const promptMessages: ModelMessage[] = hasCompiledPrompt
+      ? [{ role: "system", content: request.systemPrompt ?? "" }]
       : [];
-    const prompt = request.systemPrompt ? undefined : this.readPromptProfile(request.promptProfile);
+    const prompt = hasCompiledPrompt ? undefined : this.readPromptProfile(request.promptProfile);
     if (prompt) promptMessages.push({ role: "system", content: prompt });
     const searchMessages: ModelMessage[] = [{
       role: "system",
