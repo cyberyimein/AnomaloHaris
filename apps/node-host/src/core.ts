@@ -4,7 +4,7 @@ import { systemClock, type Clock } from "./clock.js";
 import { ReplayContextBuilder, type ContextBuilder } from "./context.js";
 import { finalizerInstruction, StructuredOutputValidationError, validateFinalOutput } from "./finalizer.js";
 import { randomIds, type IdFactory } from "./ids.js";
-import { ModelInterruptedError, ModelProtocolError, type ModelAdapter, type ModelRequest } from "./model.js";
+import { ModelInterruptedError, ModelProtocolError, type ModelAdapter, type ModelRequest, type ModelUsage } from "./model.js";
 import type { PluginContext, PluginHost } from "./plugins.js";
 import type { SessionRepository } from "./session.js";
 import type { ToolRuntime } from "./tools.js";
@@ -43,6 +43,9 @@ export class AgentCore {
     const session = await this.dependencies.sessions.open(input.sessionId);
     const initialActiveSkills = new Set(session.activeSkills);
     const initialActiveMcpServers = new Set(session.activeMcpServers);
+    const contextSessionMessages = session.messages.length > 0
+      ? session.messages
+      : (input.historyMessages ?? []);
     let checkpoint: SessionCheckpoint | undefined;
     let resumedRunId: AgentRunInput["runId"] | undefined;
 
@@ -124,6 +127,7 @@ export class AgentCore {
     );
     const bootstrapContext = structuredClone(checkpoint?.state.bootstrapContext ?? []);
     let currentAssistantText = checkpoint?.state.assistantText ?? "";
+    let runUsage: ModelUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
     let iteration = checkpoint?.iteration ?? 0;
     let lastEntryId = session.activeLeafEntryId;
 
@@ -174,7 +178,7 @@ export class AgentCore {
     const beforeAgentStart = await this.dependencies.plugins?.dispatch({
       type: "before_agent_start",
       context: pluginContext,
-      messages: [...session.messages, ...bootstrapMessages(bootstrapContext), currentUserMessage],
+      messages: [...contextSessionMessages, ...bootstrapMessages(bootstrapContext), currentUserMessage],
     });
     const resourceSnapshot = contextBuilder.prepare
       ? await contextBuilder.prepare({
@@ -246,7 +250,7 @@ export class AgentCore {
             ? {}
             : {
               bootstrapMessages: bootstrapMessages(bootstrapContext),
-              sessionMessages: session.messages,
+              sessionMessages: contextSessionMessages,
               currentUserMessage,
             }),
           loopMessages,
@@ -282,6 +286,8 @@ export class AgentCore {
             } else if (modelEvent.type === "tool.calls") {
               toolCalls.push(...modelEvent.calls);
               break;
+            } else if (modelEvent.type === "usage") {
+              runUsage = addUsage(runUsage, modelEvent.usage);
             } else if (modelEvent.type === "done") {
               completed = true;
               break;
@@ -333,7 +339,13 @@ export class AgentCore {
                   ...(runInput.temperature === undefined ? {} : { temperature: runInput.temperature }),
                   responseFormat: runInput.responseFormat,
                 };
-                finalText = await this.dependencies.model.complete(finalizerRequest, runSignal);
+                const completion = await this.dependencies.model.complete(finalizerRequest, runSignal);
+                if (typeof completion === "string") {
+                  finalText = completion;
+                } else {
+                  finalText = completion.text;
+                  if (completion.usage) runUsage = addUsage(runUsage, completion.usage);
+                }
                 if (runSignal.aborted) {
                   validationError = "Finalizer was interrupted.";
                   break;
@@ -404,7 +416,12 @@ export class AgentCore {
           if (isStructured(runInput)) yield makeEvent("message.delta", runInput, clock, { content: finalText });
           yield makeEvent("message.done", runInput, clock, {});
           await notifyAgentEnd("run.finished");
-          yield makeEvent("run.finished", runInput, clock, { final_text: finalText, output: finalOutput, output_format: outputFormat });
+          yield makeEvent("run.finished", runInput, clock, {
+            final_text: finalText,
+            output: finalOutput,
+            output_format: outputFormat,
+            usage: runUsage,
+          });
           return;
         }
 
@@ -758,4 +775,16 @@ function runSignalTimeout(signal: AbortSignal): boolean {
     reason instanceof DOMException &&
     reason.name === "TimeoutError"
   );
+}
+
+function addUsage(current: ModelUsage, next: ModelUsage): ModelUsage {
+  return {
+    promptTokens: current.promptTokens + next.promptTokens,
+    completionTokens: current.completionTokens + next.completionTokens,
+    totalTokens: current.totalTokens + next.totalTokens,
+    ...(current.cachedTokens !== undefined || next.cachedTokens !== undefined
+      ? { cachedTokens: (current.cachedTokens ?? 0) + (next.cachedTokens ?? 0) }
+      : {}),
+    ...(next.providerRequestId ? { providerRequestId: next.providerRequestId } : current.providerRequestId ? { providerRequestId: current.providerRequestId } : {}),
+  };
 }

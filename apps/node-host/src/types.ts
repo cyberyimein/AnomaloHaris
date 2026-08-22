@@ -40,6 +40,7 @@ export type AgentRunInput = {
   model: string;
   presetModelRef?: PresetModelRef | undefined;
   compiledHash?: string | undefined;
+  historyMessages?: ModelMessage[] | undefined;
   temperature?: number | undefined;
   searchMode: SearchMode;
   allowedToolNames?: ReadonlySet<string> | undefined;

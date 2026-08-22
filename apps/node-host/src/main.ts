@@ -16,11 +16,13 @@ import { RunController } from "./controller.js";
 import { asToolAdapter, CompositeToolRuntime, CoreToolRuntime, PluginToolAdapter } from "./tools.js";
 import { PythonWorkerProcess, PythonWorkerToolRuntime, workerClientFromEnvironment, workerCommandFromEnvironment } from "./worker.js";
 import { WebToolRuntime } from "./web.js";
+import { ServiceAuth, SqliteComputeStore } from "./compute-api.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..", "..");
 const dataDir = resolve(process.env.ANOMALO_DATA_DIR ?? join(repoRoot, "data"));
 const databasePath = process.env.ANOMALO_SESSION_DB_PATH || join(dataDir, "sessions.sqlite3");
 const presetModelDatabasePath = process.env.ANOMALO_PRESET_MODEL_DB_PATH || join(dataDir, "preset-models.sqlite3");
+const computeDatabasePath = process.env.ANOMALO_COMPUTE_DB_PATH || join(dataDir, "compute.sqlite3");
 const modelName = process.env.OPENROUTER_MODEL ?? "openai/gpt-4o-mini";
 const defaultPresetModelRef = process.env.ANOMALO_DEFAULT_PRESET_MODEL || DEFAULT_PRESET_MODEL_REF;
 const apiKey = process.env.OPENROUTER_API_KEY;
@@ -46,6 +48,12 @@ for (const spec of pluginConfig.plugins) {
 }
 
 const presetModels = new SqlitePresetModelRegistry(presetModelDatabasePath, { catalog: pluginCatalog });
+const serviceClients = parseServiceClients(process.env.ANOMALO_SERVICE_TOKENS, process.env.ANOMALO_SERVICE_TOKEN);
+const computeStore = new SqliteComputeStore(computeDatabasePath);
+const serviceAuth = new ServiceAuth({
+  clients: serviceClients,
+  required: process.env.ANOMALO_SERVICE_AUTH_REQUIRED === "true" || serviceClients.length > 0,
+});
 presetModels.ensureBuiltinDefault({
   model: modelName,
   promptProfile: process.env.ANOMALO_AGENT_PROMPT_PROFILE ?? "agent",
@@ -138,6 +146,7 @@ const app = await buildNodeHost({
   browserBridge,
   tools,
   ...(existsSync(join(staticDir, "index.html")) ? { staticDir } : {}),
+  compute: { auth: serviceAuth, usage: computeStore, idempotency: computeStore },
   logger: process.env.ANOMALO_ENV !== "test",
 });
 
@@ -156,6 +165,7 @@ async function shutdown(): Promise<void> {
   await workerProcess?.stop();
   sessions.close();
   presetModels.close();
+  computeStore.close();
   await app.close();
 }
 
@@ -167,4 +177,21 @@ function createModel(modelName: string, baseUrl: string, apiKey: string | undefi
     return new OpenAICompatibleAdapter({ model: modelName, baseUrl, apiKey, toolProtocol });
   }
   return new StaticFallbackModel(modelName);
+}
+
+function parseServiceClients(raw: string | undefined, fallbackToken: string | undefined): Array<{ id: string; token: string; scopes: string[] }> {
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (Array.isArray(parsed)) {
+        return parsed.filter((item): item is { id: string; token: string; scopes?: string[] } => (
+          Boolean(item) && typeof item === "object" && typeof (item as Record<string, unknown>).id === "string"
+          && typeof (item as Record<string, unknown>).token === "string"
+        )).map((item) => ({ id: item.id, token: item.token, scopes: item.scopes ?? ["compute:models", "compute:invoke", "compute:read"] }));
+      }
+    } catch (error) {
+      console.warn(`[node-host] Ignoring invalid ANOMALO_SERVICE_TOKENS JSON: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return fallbackToken ? [{ id: "default", token: fallbackToken, scopes: ["compute:models", "compute:invoke", "compute:read"] }] : [];
 }

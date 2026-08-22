@@ -1,0 +1,106 @@
+{
+  "type": "object",
+  "required": [
+    "id",
+    "object",
+    "created",
+    "model",
+    "choices",
+    "usage"
+  ],
+  "properties": {
+    "id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "object": {
+      "const": "chat.completion",
+      "type": "string"
+    },
+    "created": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "model": {
+      "pattern": "^[a-z][a-z0-9._-]{0,63}@[1-9][0-9]{0,8}$",
+      "minLength": 3,
+      "type": "string"
+    },
+    "choices": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "index",
+          "message",
+          "finish_reason"
+        ],
+        "properties": {
+          "index": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "message": {
+            "type": "object",
+            "required": [
+              "role",
+              "content"
+            ],
+            "properties": {
+              "role": {
+                "const": "assistant",
+                "type": "string"
+              },
+              "content": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          },
+          "finish_reason": {
+            "anyOf": [
+              {
+                "const": "stop",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "usage": {
+      "additionalProperties": true,
+      "$id": "https://anomalo.dev/schemas/openai-usage.schema.json",
+      "type": "object",
+      "required": [
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens"
+      ],
+      "properties": {
+        "prompt_tokens": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "completion_tokens": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "total_tokens": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      }
+    }
+  }
+}

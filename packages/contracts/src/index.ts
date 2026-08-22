@@ -18,6 +18,15 @@ export {
   WebSocketServerControlMessageTypeSchema,
   WebSocketMessageSchema,
 } from "./schemas.js";
+export {
+  OpenAIChatCompletionRequestSchema,
+  OpenAIChatCompletionChunkSchema,
+  OpenAIChatCompletionResponseSchema,
+  OpenAIChatMessageSchema,
+  OpenAIModelListSchema,
+  OpenAIModelSchema,
+  OpenAIUsageSchema,
+} from "./openai.js";
 export type {
   AgentEvent,
   AgentEventType,
@@ -43,6 +52,15 @@ export type {
   WebSocketServerControlMessageType,
   WebSocketMessage,
 } from "./types.js";
+export type {
+  OpenAIChatCompletionRequest,
+  OpenAIChatCompletionChunk,
+  OpenAIChatCompletionResponse,
+  OpenAIChatMessage,
+  OpenAIModel,
+  OpenAIModelList,
+  OpenAIUsage,
+} from "./openai.js";
 export {
   assertValidContract,
   normalizeAgentEvent,

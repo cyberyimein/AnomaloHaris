@@ -10,6 +10,7 @@ import {
   ToolResultSchema,
   WebSocketMessageSchema,
 } from "./schemas.js";
+import { OpenAIChatCompletionRequestSchema } from "./openai.js";
 import type {
   AgentEvent,
   ConnectionMessage,
@@ -27,6 +28,7 @@ const validators = {
   agentEvent: ajv.compile<RunEventEnvelope>(RunEventEnvelopeSchema),
   connectionMessage: connectionMessageValidator,
   llmRequestEventData: ajv.compile(LlmRequestEventDataSchema),
+  openaiChatCompletionRequest: ajv.compile(OpenAIChatCompletionRequestSchema),
   presetModelDefinition: ajv.compile(PresetModelDefinitionSchema),
   runRequest: ajv.compile<RunRequest>(RunRequestSchema),
   toolDefinition: ajv.compile<ToolDefinition>(ToolDefinitionSchema),

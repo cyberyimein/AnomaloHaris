@@ -1,0 +1,149 @@
+{
+  "additionalProperties": true,
+  "$id": "https://anomalo.dev/schemas/openai-chat-completion-request.schema.json",
+  "type": "object",
+  "required": [
+    "model",
+    "messages"
+  ],
+  "properties": {
+    "model": {
+      "pattern": "^[a-z][a-z0-9._-]{0,63}@[1-9][0-9]{0,8}$",
+      "minLength": 3,
+      "type": "string"
+    },
+    "messages": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "role",
+          "content"
+        ],
+        "properties": {
+          "role": {
+            "anyOf": [
+              {
+                "const": "user",
+                "type": "string"
+              },
+              {
+                "const": "assistant",
+                "type": "string"
+              },
+              {
+                "const": "tool",
+                "type": "string"
+              }
+            ]
+          },
+          "content": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "tool_call_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        }
+      }
+    },
+    "stream": {
+      "type": "boolean"
+    },
+    "response_format": {
+      "anyOf": [
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "const": "text",
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "const": "json_object",
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "json_schema"
+          ],
+          "properties": {
+            "type": {
+              "const": "json_schema",
+              "type": "string"
+            },
+            "json_schema": {
+              "type": "object",
+              "required": [
+                "name",
+                "schema"
+              ],
+              "properties": {
+                "name": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "strict": {
+                  "type": "boolean"
+                },
+                "schema": {
+                  "type": "object",
+                  "patternProperties": {
+                    "^(.*)$": {}
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "temperature": {
+      "minimum": 0,
+      "maximum": 2,
+      "type": "number"
+    },
+    "metadata": {
+      "type": "object",
+      "patternProperties": {
+        "^(.*)$": {}
+      }
+    },
+    "tools": {
+      "type": "array",
+      "items": {}
+    },
+    "tool_choice": {},
+    "provider": {},
+    "prompt": {},
+    "plugins": {}
+  }
+}

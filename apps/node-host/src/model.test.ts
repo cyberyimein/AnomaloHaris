@@ -49,6 +49,27 @@ describe("OpenAICompatibleAdapter", () => {
     ]);
   });
 
+  it("captures usage sent after the finish chunk", async () => {
+    const adapter = new OpenAICompatibleAdapter({
+      model: "usage-model",
+      baseUrl: "https://example.test/v1",
+      apiKey: "test-key",
+      fetchImpl: async () => sseResponse([
+        { id: "provider-request-1", choices: [{ delta: { content: "answer" }, finish_reason: null }] },
+        { id: "provider-request-1", choices: [{ delta: {}, finish_reason: "stop" }] },
+        { id: "provider-request-1", choices: [], usage: { prompt_tokens: 7, completion_tokens: 3, total_tokens: 10 } },
+        "[DONE]",
+      ]),
+    });
+    const events = await collect(adapter.stream({ model: "usage-model", messages: [], tools: [] }, new AbortController().signal));
+    expect(events).toEqual([
+      { type: "text.delta", text: "answer" },
+      { type: "usage", usage: { promptTokens: 7, completionTokens: 3, totalTokens: 10, providerRequestId: "provider-request-1" } },
+      { type: "done" },
+    ]);
+    expect(adapter.lastUsage).toMatchObject({ promptTokens: 7, totalTokens: 10 });
+  });
+
   it("turns incomplete provider markup into a protocol error", async () => {
     const stream = new OpenAICompatibleAdapter({
       model: "broken-model",

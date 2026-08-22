@@ -14,6 +14,7 @@ import {
 
 import { RunController, type StartRunRequest } from "./controller.js";
 import { type BrowserRegistration, BrowserToolBridge } from "./browser.js";
+import { registerComputeRoutes, type ComputeApiOptions } from "./compute-api.js";
 import { randomIds } from "./ids.js";
 import type { CompiledPresetModel, SqlitePresetModelRegistry } from "./preset-models.js";
 import type { SessionRepository } from "./session.js";
@@ -35,6 +36,7 @@ export type NodeHostOptions = {
   logger?: boolean;
   browserBridge?: BrowserToolBridge;
   tools?: ToolRuntime;
+  compute?: Omit<ComputeApiOptions, "registry" | "controller" | "sessions">;
 };
 
 export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyInstance> {
@@ -54,6 +56,15 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
     default_preset_model: options.defaultPresetModel,
   }));
 
+  if (options.compute && options.presetModels) {
+    registerComputeRoutes(app, {
+      ...options.compute,
+      registry: options.presetModels,
+      controller: options.controller,
+      sessions: options.sessions,
+    });
+  }
+
   app.get("/api/preset-models", async () => ({
     preset_models: options.presetModels?.list() ?? [],
     default_preset_model: options.defaultPresetModel,
@@ -63,6 +74,15 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
     if (!options.presetModels) return reply.code(404).send({ error: "Preset Model registry is not configured." });
     try {
       return reply.send(serializePresetModel(options.presetModels.resolve(request.params.modelRef)));
+    } catch (error) {
+      return sendHostError(reply, error);
+    }
+  });
+
+  app.get<{ Params: { name: string; version: string } }>("/api/preset-models/:name/versions/:version", async (request, reply) => {
+    if (!options.presetModels) return reply.code(404).send({ error: "Preset Model registry is not configured." });
+    try {
+      return reply.send(serializePresetModel(options.presetModels.resolve(`${request.params.name}@${request.params.version}`)));
     } catch (error) {
       return sendHostError(reply, error);
     }

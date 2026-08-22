@@ -11,9 +11,23 @@ export type ModelRequest = {
   responseFormat?: ResponseFormat | undefined;
 };
 
+export type ModelUsage = {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  cachedTokens?: number | undefined;
+  providerRequestId?: string | undefined;
+};
+
+export type ModelCompletion = {
+  text: string;
+  usage?: ModelUsage | undefined;
+};
+
 export type ModelStreamEvent =
   | { type: "text.delta"; text: string }
   | { type: "tool.calls"; calls: ToolCall[] }
+  | { type: "usage"; usage: ModelUsage }
   | { type: "done" };
 
 export class ModelInterruptedError extends Error {
@@ -39,8 +53,9 @@ export class ModelProtocolError extends Error {
 
 export interface ModelAdapter {
   readonly model: string;
+  readonly lastUsage?: ModelUsage | undefined;
   stream(request: ModelRequest, signal: AbortSignal): AsyncIterable<ModelStreamEvent>;
-  complete(request: ModelRequest, signal: AbortSignal): Promise<string>;
+  complete(request: ModelRequest, signal: AbortSignal): Promise<string | ModelCompletion>;
 }
 
 export type ReplayStep = readonly ModelStreamEvent[];
@@ -85,7 +100,7 @@ export class ReplayModelAdapter implements ModelAdapter {
     }
   }
 
-  async complete(request: ModelRequest, signal: AbortSignal): Promise<string> {
+  async complete(request: ModelRequest, signal: AbortSignal): Promise<string | ModelCompletion> {
     this.completeCalls.push(cloneRequest(request));
     if (signal.aborted) throw new ModelInterruptedError("", []);
     const completion = this.completions.shift();
@@ -98,6 +113,7 @@ export class ReplayModelAdapter implements ModelAdapter {
 
 export class OpenAICompatibleAdapter implements ModelAdapter {
   readonly model: string;
+  lastUsage: ModelUsage | undefined;
   private readonly baseUrl: string;
   private readonly apiKey: string;
   private readonly fetchImpl: typeof fetch;
@@ -118,6 +134,7 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
   }
 
   async *stream(request: ModelRequest, signal: AbortSignal): AsyncIterable<ModelStreamEvent> {
+    this.lastUsage = undefined;
     const response = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
@@ -139,6 +156,8 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
       ? undefined
       : new DsmlToolCallParser();
     let emittedText = "";
+    let emittedUsage = false;
+    const pendingDsmlCalls: ToolCall[] = [];
     try {
       while (true) {
         const chunk = await reader.read();
@@ -154,11 +173,17 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
               emittedText += parsed.text;
               yield { type: "text.delta", text: parsed.text };
             }
-            const calls = [...parseToolCalls(pendingCalls), ...parsed.calls];
+            const calls = [...parseToolCalls(pendingCalls), ...pendingDsmlCalls, ...parsed.calls];
             yield calls.length > 0 ? { type: "tool.calls", calls } : { type: "done" };
             return;
           }
           const payload = JSON.parse(data) as Record<string, any>;
+          const usage = normalizeUsage(payload.usage, payload.id);
+          if (usage && !emittedUsage) {
+            emittedUsage = true;
+            this.lastUsage = usage;
+            yield { type: "usage", usage };
+          }
           const delta = payload.choices?.[0]?.delta;
           if (typeof delta?.content === "string") {
             const parsed = dsmlParser?.feed(delta.content) ?? { text: delta.content, calls: [] };
@@ -167,11 +192,7 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
               yield { type: "text.delta", text: parsed.text };
             }
             if (parsed.calls.length > 0) {
-              yield {
-                type: "tool.calls",
-                calls: [...parseToolCalls(pendingCalls), ...parsed.calls],
-              };
-              return;
+              pendingDsmlCalls.push(...parsed.calls);
             }
           }
           for (const toolDelta of delta?.tool_calls ?? []) {
@@ -182,16 +203,6 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
             pending.arguments += String(toolDelta.function?.arguments ?? "");
             pendingCalls.set(index, pending);
           }
-          if (["stop", "length", "content_filter"].includes(payload.choices?.[0]?.finish_reason)) {
-            const parsed = finishDsml(dsmlParser);
-            if (parsed.text) {
-              emittedText += parsed.text;
-              yield { type: "text.delta", text: parsed.text };
-            }
-            const calls = [...parseToolCalls(pendingCalls), ...parsed.calls];
-            yield calls.length > 0 ? { type: "tool.calls", calls } : { type: "done" };
-            return;
-          }
         }
         if (chunk.done) break;
       }
@@ -200,7 +211,7 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
         emittedText += parsed.text;
         yield { type: "text.delta", text: parsed.text };
       }
-      const calls = [...parseToolCalls(pendingCalls), ...parsed.calls];
+      const calls = [...parseToolCalls(pendingCalls), ...pendingDsmlCalls, ...parsed.calls];
       yield calls.length > 0 ? { type: "tool.calls", calls } : { type: "done" };
     } catch (error) {
       if (signal.aborted) throw new ModelInterruptedError(emittedText, parseToolCalls(pendingCalls));
@@ -211,7 +222,8 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
     }
   }
 
-  async complete(request: ModelRequest, signal: AbortSignal): Promise<string> {
+  async complete(request: ModelRequest, signal: AbortSignal): Promise<string | ModelCompletion> {
+    this.lastUsage = undefined;
     const response = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
@@ -223,21 +235,46 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
     });
     if (!response.ok) throw new Error(`Model request failed (${response.status}).`);
     const payload = (await response.json()) as Record<string, any>;
+    const usage = normalizeUsage(payload.usage, payload.id);
+    this.lastUsage = usage;
     const content = String(payload.choices?.[0]?.message?.content ?? "");
-    if (this.toolProtocol === "openai" || this.toolProtocol === "none") return content;
+    if (this.toolProtocol === "openai" || this.toolProtocol === "none") {
+      return { text: content, ...(usage ? { usage } : {}) };
+    }
     try {
       const parsed = new DsmlToolCallParser();
       const first = parsed.feed(content);
       const last = parsed.finish();
       const calls = [...first.calls, ...last.calls];
       if (calls.length > 0) throw new ModelProtocolError("Non-streaming provider response contained tool calls.");
-      return first.text + last.text;
+      return { text: first.text + last.text, ...(usage ? { usage } : {}) };
     } catch (error) {
       if (error instanceof ModelProtocolError) throw error;
       if (error instanceof DsmlProtocolError) throw new ModelProtocolError(error.message);
       throw error;
     }
   }
+}
+
+function normalizeUsage(value: unknown, requestId: unknown): ModelUsage | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const usage = value as Record<string, unknown>;
+  const promptTokens = integerValue(usage.prompt_tokens);
+  const completionTokens = integerValue(usage.completion_tokens);
+  const totalTokens = integerValue(usage.total_tokens);
+  if (promptTokens === undefined || completionTokens === undefined || totalTokens === undefined) return undefined;
+  const cachedTokens = integerValue(usage.cached_tokens);
+  return {
+    promptTokens,
+    completionTokens,
+    totalTokens,
+    ...(cachedTokens === undefined ? {} : { cachedTokens }),
+    ...(typeof requestId === "string" && requestId ? { providerRequestId: requestId } : {}),
+  };
+}
+
+function integerValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
 }
 
 function finishDsml(parser: DsmlToolCallParser | undefined): { text: string; calls: ToolCall[] } {
