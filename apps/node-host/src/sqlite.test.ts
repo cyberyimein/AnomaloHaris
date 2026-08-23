@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { DatabaseSync } from "node:sqlite";
 
 import { SqliteSessionAdapter } from "./sqlite.js";
 import type { AgentPolicy, EntryId, SessionCheckpoint, SessionId, RunId } from "./types.js";
@@ -8,6 +9,32 @@ const runId = "sqlite-run" as RunId;
 const clock = { now: () => "2026-08-22T00:00:00.000Z" };
 
 describe("SqliteSessionAdapter", () => {
+  it("repairs a v2 database created before retrieval modes were added", async () => {
+    const database = new DatabaseSync(":memory:");
+    database.exec(`
+      CREATE TABLE agent_sessions (
+        session_id TEXT PRIMARY KEY,
+        schema_version INTEGER NOT NULL DEFAULT 2,
+        title TEXT NOT NULL DEFAULT 'Untitled conversation',
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        active_leaf_entry_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `);
+
+    const adapter = new SqliteSessionAdapter(":memory:", { database, clock });
+    expect((await adapter.open("old-session" as SessionId)).searchMode).toBe("diy");
+    await adapter.setSearchMode("old-session" as SessionId, "native");
+    expect((await adapter.open("old-session" as SessionId)).searchMode).toBe("native");
+    expect(database.prepare("PRAGMA table_info(agent_sessions)").all()).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: "search_mode" })]),
+    );
+
+    adapter.close();
+    database.close();
+  });
+
   it("persists entry chains, resources, traces, and resumable checkpoints", async () => {
     const adapter = new SqliteSessionAdapter(":memory:", { clock });
     await adapter.open(sessionId);
@@ -101,6 +128,14 @@ describe("SqliteSessionAdapter", () => {
 
     await adapter.finishRun({ runId, sessionId, lastEntryId: "entry-assistant" as EntryId, endedAt: clock.now() });
     expect((await adapter.getCheckpoint(sessionId))).toBeUndefined();
+    adapter.close();
+  });
+
+  it("uses the configured retrieval mode for newly created sessions", async () => {
+    const adapter = new SqliteSessionAdapter(":memory:", { clock, defaultSearchMode: "subagent" });
+
+    expect((await adapter.open("configured-mode" as SessionId)).searchMode).toBe("subagent");
+
     adapter.close();
   });
 });

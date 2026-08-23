@@ -270,6 +270,11 @@ function beginCreate() {
 }
 
 function editAgent(agent) {
+  if (!agent.editable) {
+    props.management.state.accessRequired.value = true;
+    showNotice("Enter the admin token to edit this published model.", true);
+    return;
+  }
   replaceForm(agent);
   editing.value = true;
   notice.value = "";
@@ -304,11 +309,21 @@ async function load() {
   loading.value = true;
   notice.value = "";
   try {
-    const [modelData, toolResponse] = await Promise.all([
-      props.management.requestJson("/api/manage/preset-models"),
-      props.management.requestJson("/api/manage/tools"),
+    const [publicModelData, toolResponse] = await Promise.all([
+      props.management.requestJson("/api/preset-models"),
+      props.management.requestJson("/api/tools"),
     ]);
-    agents.value = (modelData.preset_models || []).map(toAgentForm);
+    let modelRecords = publicModelData.preset_models || [];
+    if (props.management.state.token.value) {
+      try {
+        const managedModelData = await props.management.requestJson("/api/manage/preset-models");
+        modelRecords = managedModelData.preset_models || modelRecords;
+      } catch (error) {
+        props.management.markError(error);
+        showNotice(error.message || String(error), true);
+      }
+    }
+    agents.value = modelRecords.map(toAgentForm);
     tools.value = toolResponse.tools || [];
   } catch (error) {
     props.management.markError(error);
@@ -326,6 +341,7 @@ function toAgentForm(model) {
   return {
     id: model.ref,
     ref: model.ref,
+    editable: Boolean(model?.definition),
     version: Number(model.version || 1),
     name: model.name,
     description: model.description || "",
@@ -334,9 +350,9 @@ function toAgentForm(model) {
     prompt_profile: definition.prompt?.profile || "agent",
     model: provider.model || model.provider_model || defaults.model,
     temperature: Number(policy.temperature ?? defaults.temperature),
-    tool_names: [...(plugins.allowed_tools || model.tool_catalog || [])],
-    search_mode: policy.search_mode || "diy",
-    bootstrap_tools: [...(plugins.bootstrap_tools || [])],
+    tool_names: [...(plugins.allowed_tools || model.allowed_tools || model.tool_catalog || [])],
+    search_mode: policy.search_mode || policy.searchMode || model.policy?.search_mode || model.policy?.searchMode || "diy",
+    bootstrap_tools: [...(plugins.bootstrap_tools || model.bootstrap_tools || [])],
     fixed_plugins: [...(plugins.fixed || model.fixed_plugins || ["host-core"])],
     status: model.status,
   };

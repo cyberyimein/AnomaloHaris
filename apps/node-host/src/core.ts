@@ -632,6 +632,7 @@ function toolContext(
     ...(toolCallId ? { toolCallId } : {}),
     searchMode: input.searchMode,
     model: input.model,
+    ...(input.presetModelRef ? { presetModelRef: input.presetModelRef } : {}),
     activeSkills,
     activeMcpServers,
     ...(input.allowedPluginIds ? { allowedPluginIds: input.allowedPluginIds } : {}),

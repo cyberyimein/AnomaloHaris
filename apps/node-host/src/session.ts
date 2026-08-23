@@ -14,6 +14,7 @@ import type {
   SessionSummary,
 } from "./types.js";
 import { systemClock } from "./clock.js";
+import { DEFAULT_SEARCH_MODE, isSearchMode } from "./search-mode.js";
 
 export interface SessionRepository {
   open(sessionId: SessionId): Promise<SessionSnapshot>;
@@ -42,6 +43,7 @@ export class InMemorySessionAdapter implements SessionRepository {
   constructor(
     private readonly clock: Clock = systemClock,
     private readonly ids: IdFactory = randomIds,
+    private readonly defaultSearchMode: string = DEFAULT_SEARCH_MODE,
   ) {}
 
   async open(sessionId: SessionId): Promise<SessionSnapshot> {
@@ -51,7 +53,7 @@ export class InMemorySessionAdapter implements SessionRepository {
       sessionId,
       schemaVersion: 2,
       title: "Untitled conversation",
-      searchMode: "diy",
+      searchMode: isSearchMode(this.defaultSearchMode) ? this.defaultSearchMode : DEFAULT_SEARCH_MODE,
       metadata: {},
       messages: [],
       activeSkills: [],

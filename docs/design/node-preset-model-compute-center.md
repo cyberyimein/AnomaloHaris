@@ -107,7 +107,7 @@ AnomaloHaris 对外负责：
 - 一个 Node Host 是唯一公开服务进程。
 - AgentCore、ProviderGateway、PluginHost、Session 和管理面均为 TypeScript。
 - 生产镜像不安装 Python，不复制 Python virtualenv，不启动 Python child process。
-- Buddy 不由 Node Host 直接连接；若产品继续保留，由独立的 Node 插件声明并实现 serial/TCP 或外部服务协议。
+- Buddy 硬件不由 Node Host 直接连接；UI 只允许通过 admin-gated `/api/buddy/*` 控制面代理访问独立 Buddy 服务，Agent 工具仍必须由显式绑定的独立 Node 插件声明并实现 serial/TCP 或外部服务协议。
 - Web、MCP、Browser bridge、artifact、管理和数据迁移由 Node 实现。
 - STT/TTS/Vision 默认不属于核心产品面；若产品重新启用，只能由独立 Node 插件或外部服务适配，禁止把重型媒体栈和硬件依赖塞进 Node Host，也不得通过内嵌 Python Worker 实现。
 - Python Host 只在迁移分支或历史发布中用于回滚，最终发布后删除其启动路径。
@@ -1089,12 +1089,14 @@ type ParityEntry = {
 | `temperature` | `spec.provider.parameters.temperature` |
 | `tool_names` | 对应固定 plugin bindings + tool policy |
 | `bootstrap_tools` | plugin bootstrap declarations |
-| `search_mode` | Web plugin config |
+| `search_mode` | Web retrieval policy; `subagent` runs an isolated child AgentCore with only `web_search` |
 | response format | model policy |
 
 迁移 CLI 必须支持 dry-run、hash、逐行错误、幂等和备份。迁移后旧 preset agent 表只读一个发布周期。
 
 现有默认 AnomaloHaris Agent 的 prompt profile、默认 Provider Model、Core/Web 工具和运行 policy 必须先生成内建 `anomalo@1`。旧 `/api/chat` 的行为契约以该版本作为迁移基线，而不是继续保留一个 Registry 之外的特殊默认 runtime。
+
+`subagent` 是 Web retrieval Module 的嵌套 AgentCore Implementation：它使用固定 Provider Model、临时 Session 和独立的工具轮次，但只绑定 `web_search`。它不接收父 Agent 的 PluginHost、Session history、Python、Browser、MCP、Buddy 或其他 Host 工具；父 Agent 只接收研究结果、引用和子 run metadata。
 
 ### 18.2 动态 Skill/MCP 迁移
 

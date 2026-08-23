@@ -23,8 +23,10 @@ import type {
 } from "./types.js";
 import type { SessionRepository } from "./session.js";
 import type { PluginLock } from "./plugin-catalog.js";
+import { DEFAULT_SEARCH_MODE, isSearchMode } from "./retrieval.js";
 
 export const SESSION_V2_SCHEMA_VERSION = 2;
+const SESSION_DATABASE_MIGRATION_VERSION = 3;
 
 const SESSION_V2_SCHEMA = `
 PRAGMA foreign_keys = ON;
@@ -105,20 +107,37 @@ type Row = Record<string, unknown>;
 
 export function initializeSessionV2Database(db: DatabaseSync, clock: Clock = systemClock): void {
   db.exec(SESSION_V2_SCHEMA);
+  migrateSessionDatabase(db);
   db.prepare(
     "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
   ).run(SESSION_V2_SCHEMA_VERSION, clock.now());
+  db.prepare(
+    "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+  ).run(SESSION_DATABASE_MIGRATION_VERSION, clock.now());
+}
+
+/**
+ * `CREATE TABLE IF NOT EXISTS` does not add columns to databases created by
+ * an earlier build. Retrieval mode was introduced after the first v2 session
+ * database, so repair that schema in place before any session is opened.
+ */
+function migrateSessionDatabase(db: DatabaseSync): void {
+  const columns = db.prepare("PRAGMA table_info(agent_sessions)").all() as Array<{ name?: unknown }>;
+  if (!columns.some((column) => column.name === "search_mode")) {
+    db.exec("ALTER TABLE agent_sessions ADD COLUMN search_mode TEXT NOT NULL DEFAULT 'diy'");
+  }
 }
 
 export class SqliteSessionAdapter implements SessionRepository {
   readonly db: DatabaseSync;
   private readonly clock: Clock;
   private readonly ids: IdFactory;
+  private readonly defaultSearchMode: string;
   private readonly ownsDatabase: boolean;
 
   constructor(
     dbPath: string,
-    options: { clock?: Clock; ids?: IdFactory; database?: DatabaseSync } = {},
+    options: { clock?: Clock; ids?: IdFactory; database?: DatabaseSync; defaultSearchMode?: string } = {},
   ) {
     if (options.database) {
       this.db = options.database;
@@ -130,6 +149,7 @@ export class SqliteSessionAdapter implements SessionRepository {
     }
     this.clock = options.clock ?? systemClock;
     this.ids = options.ids ?? randomIds;
+    this.defaultSearchMode = isSearchMode(options.defaultSearchMode) ? options.defaultSearchMode : DEFAULT_SEARCH_MODE;
     this.db.exec("PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;");
     if (dbPath !== ":memory:") this.db.exec("PRAGMA journal_mode = DELETE;");
     initializeSessionV2Database(this.db, this.clock);
@@ -394,8 +414,8 @@ export class SqliteSessionAdapter implements SessionRepository {
     }
     const now = this.clock.now();
     this.db.prepare(`
-      INSERT INTO agent_sessions(session_id, schema_version, created_at, updated_at) VALUES (?, ?, ?, ?)
-    `).run(sessionId, SESSION_V2_SCHEMA_VERSION, now, now);
+      INSERT INTO agent_sessions(session_id, schema_version, search_mode, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
+    `).run(sessionId, SESSION_V2_SCHEMA_VERSION, this.defaultSearchMode, now, now);
   }
 
   private ensureResources(sessionId: SessionId): void {

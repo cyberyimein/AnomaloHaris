@@ -28,8 +28,10 @@ describe("ManagementAccess", () => {
     });
 
     await management.requestJson("/api/manage/model");
+    await management.requestJson("/api/buddy/status");
 
     expect(fetchImpl.mock.calls[0][1].headers.get("X-Anomalo-Admin-Token")).toBe("secret");
+    expect(fetchImpl.mock.calls[1][1].headers.get("X-Anomalo-Admin-Token")).toBe("secret");
   });
 
   it("persists and clears browser-local credentials", () => {
@@ -85,5 +87,21 @@ describe("ManagementAccess", () => {
     await expect(management.requestJson("/api/manage/model")).rejects.toThrow(
       "Invalid JSON from /api/manage/model",
     );
+  });
+
+  it("uses the backend error field when reporting non-management API failures", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      response(
+        { error: "Search mode persistence failed.", error_code: "sqlite_error" },
+        { ok: false, status: 500, statusText: "Internal Server Error" },
+      ),
+    );
+    const management = createManagementAccess({ fetchImpl, storage: storageWith() });
+
+    await expect(management.requestJson("/api/sessions/session/search-mode")).rejects.toMatchObject({
+      status: 500,
+      detail: "Search mode persistence failed.",
+      code: "sqlite_error",
+    });
   });
 });

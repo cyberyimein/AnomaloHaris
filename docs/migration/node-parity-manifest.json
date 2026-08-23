@@ -52,10 +52,10 @@
     {
       "id": "buddy_media_artifacts",
       "legacy_routes": ["/api/buddy/*", "/api/audio/*", "/api/vision/*", "/api/copilot/*", "/api/artifacts/*"],
-      "node_routes": ["GET /api/plugins", "GET /api/manage/plugins"],
+      "node_routes": ["GET /api/plugins", "GET /api/manage/plugins", "GET/POST /api/buddy/* (admin-gated external-service proxy)"],
       "status": "optional-plugin",
       "disposition": "Buddy/audio/vision are not Node Host core; they require an explicitly installed plugin or remain deprecated.",
-      "gaps": ["No built-in Buddy/media/artifact routes by design", "External capability plugin packages and their own gates are separate deliverables"],
+      "gaps": ["No built-in Buddy device/media/artifact runtime; /api/buddy/* is only an admin-gated proxy", "External capability plugin packages and their own gates are separate deliverables"],
       "tests": ["apps/node-host/src/plugins.test.ts"]
     },
     {

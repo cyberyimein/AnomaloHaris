@@ -20,7 +20,7 @@ These goals share one runtime: agent-harness experiments can be tested through t
 - Streams agent lifecycle, message, and tool events over WebSocket or REST.
 - Uses an OpenAI SDK-compatible client with OpenRouter defaults and a local mock mode.
 - Loads prompt profiles, `AGENTS.md` memory, skills, and MCP catalogs at runtime.
-- Provides a Vue dashboard for chat, context inspection, Preset Models, and plugin capability status.
+- Provides a Vue dashboard for chat, context inspection, Preset Models, plugin capability status, and an admin-only Buddy control tab.
 - Loads explicitly allowlisted Pi-like Node plugins in the Host or isolated child processes.
 - Includes OpenAI-compatible and AnomaloHaris-native APIs with usage, idempotency, and management routes.
 - Keeps hardware protocol notes and optional plugin seams outside the Node production image.
@@ -119,6 +119,13 @@ All runtime configuration comes from the root `.env`. The most commonly used var
 | `ANOMALO_SEARCH_MODE` | Default retrieval mode for new sessions: `native`, `subagent`, or `diy` | `diy` |
 | `WEB_RESEARCH_SUBAGENT_MODEL` | Fixed model used by the retrieval subagent | `deepseek/deepseek-v4-flash-0731` |
 | `SEARCH_MODE_TIMEOUT_SECONDS` | Timeout for Responses API retrieval calls | `90` |
+| `PYTHON_SANDBOX_ENABLED` | Enables the external FruitSpy Python tool | `true` |
+| `PYTHON_SANDBOX_TIMEOUT_SECONDS` | Default timeout for one FruitSpy execution | `10` |
+| `FRUITSPY_PYTHON_TOOL_BASE_URL` | Base URL of the external FruitSpy Python service | unset |
+| `FRUITSPY_PYTHON_TOOL_API_PATH` | FruitSpy Python API path | `/api/v1/tools/python` |
+| `FRUITSPY_PYTHON_TOOL_TOKEN` | Bearer token for FruitSpy | unset |
+| `FRUITSPY_PYTHON_TOOL_STATUS_TIMEOUT_SECONDS` | FruitSpy readiness-check timeout | `2` |
+| `ANOMALO_ARTIFACT_SECRET` | Stable secret for signed browser-readable artifact URLs | unset (ephemeral) |
 | `MAX_TOOL_ITERATIONS` | Maximum model/tool loop iterations per run | `50` |
 | `AGENT_RUN_TIMEOUT_SECONDS` | Maximum wall-clock duration for one resumable run | `600` |
 | `ANOMALO_ADMIN_TOKEN` | Authorizes remote management requests | unset |
@@ -126,8 +133,8 @@ All runtime configuration comes from the root `.env`. The most commonly used var
 | `ANOMALO_PI_EXTENSIONS_ENABLED` | Enable the configured trusted Pi extensions | `false` |
 | `ANOMALO_PLUGIN_CONFIG` | Explicit plugin allowlist | `./runtime-bundle/config/plugins.yaml` |
 | `ANOMALO_PLUGIN_TIMEOUT_MS` | Plugin hook/tool timeout | `30000` |
-| `ANOMALO_BUDDY_SERVICE_URL` | Optional Buddy backend URL used by `buddy-bridge` | `http://127.0.0.1:8765` |
-| `ANOMALO_BUDDY_SERVICE_TOKEN` | Token forwarded only to the allowlisted Buddy child plugin | unset |
+| `ANOMALO_BUDDY_SERVICE_URL` | Optional Buddy backend URL used by the Buddy dashboard proxy and `buddy-bridge` | `http://127.0.0.1:8765` |
+| `ANOMALO_BUDDY_SERVICE_TOKEN` | Token forwarded to the independent Buddy service by the dashboard proxy and allowlisted child plugin | unset |
 | `ANOMALO_BUDDY_REQUEST_TIMEOUT_MS` | Buddy bridge request timeout | `1500` |
 | `ANOMALO_AGENT_PROMPT_PROFILE` | Default prompt profile | `agent` |
 | `WEB_TOOLS_ENABLED` | Publishes DuckDuckGo search and Markdown fetch tools | `true` |
@@ -137,10 +144,13 @@ See [`.env.example`](.env.example) for the complete template. Empty optional val
 
 ### Optional capability plugins
 
-The Node Host deliberately does not expose built-in Buddy, audio, or vision
-routes. Buddy runs as an independent optional Node service in
-`apps/buddy-service/`; the Node Host uses the explicitly allowlisted
-`@anomalo/buddy-bridge` plugin and the `runtime-bundle/skills/buddy` Skill.
+The Node Host does not embed Buddy hardware, audio, or vision runtimes. Buddy
+runs as an independent optional Node service in `apps/buddy-service/`. The UI's
+Buddy tab is an admin-only control-plane proxy for status, events, connection,
+and lightweight state commands; it is not a model-visible ToolRuntime. The
+Node Host uses the explicitly allowlisted `@anomalo/buddy-bridge` plugin and
+the `runtime-bundle/skills/buddy` Skill only when an Agent Preset Model binds
+that plugin.
 Audio, vision, camera, and media processing remain outside this integration.
 
 Start the Buddy service separately when a device is available:
@@ -177,6 +187,30 @@ current session, including DuckDuckGo result lists, fetch backend and timing met
 Markdown. `GET /api/sessions/{session_id}/web-traces` exposes the same in-memory trace data for
 development and evaluation. Direct fetch rejects private and local targets; JavaScript-rendered
 pages require a separately deployed capability plugin or external service.
+
+### Retrieval modes and external Python sandbox
+
+The Retrieval Mode panel controls the current session's `search_mode`:
+
+- `native` uses the active model to execute the Provider's native web retrieval capability.
+- `subagent` starts an isolated child AgentCore using the fixed `WEB_RESEARCH_SUBAGENT_MODEL`.
+  The child has an ephemeral Session and exactly one tool, `web_search`; it cannot access Python,
+  files, browser automation, MCP, Buddy, or the parent Agent's other tools.
+- `diy` uses the Node Host's DuckDuckGo search and page-fetch tools.
+
+The mode is persisted in the session database. Existing v2 databases are migrated at startup when
+they are missing the `agent_sessions.search_mode` column; a Node.js version change is not required
+for this migration.
+
+`sandbox_python_run` is an external capability. The Node Host sends code to FruitSpy over the
+configured HTTP API and never starts a Python process or installs Python in the AnomaloHaris
+container. FruitSpy must be reachable from the container, and its Bearer token should be kept in
+the private `.env`. Requested artifacts are cached under `ANOMALO_DATA_DIR/artifacts/python/` and
+served through signed, session-bound artifact URLs; raster images remain inline while other files
+download as inert attachments. Set `ANOMALO_ARTIFACT_SECRET` to keep URLs valid across restarts
+(the admin token is used as a fallback). See
+[`runtime-bundle/docs/fruitspy-python-sandbox-api-requirements.md`](runtime-bundle/docs/fruitspy-python-sandbox-api-requirements.md)
+for the endpoint contract.
 
 ### Chat endpoints
 
@@ -225,8 +259,10 @@ The **Preset Models** tab creates immutable, versioned Agent capability bundles.
 fixes the prompt, plugin set, provider model, tool policy, and runtime limits; callers select it
 with an explicit `name@version` such as `anomalo@1` or `fomc-brief@3`. Definitions are stored in
 `ANOMALO_DATA_DIR/preset-models.sqlite3`. Management requests use
-`GET/POST /api/manage/preset-models` plus the versioned `validate`, `publish`, and `retire` routes
-and require `ANOMALO_ADMIN_TOKEN`.
+`GET /api/preset-models` is the public published-model listing used by the
+control panel. Draft/retired definitions and all mutations use
+`GET/POST /api/manage/preset-models` plus the versioned `validate`, `publish`,
+and `retire` routes and require `ANOMALO_ADMIN_TOKEN`.
 
 The default chat entry point resolves `ANOMALO_DEFAULT_PRESET_MODEL` (default `anomalo@1`).
 External services can use the collected compatibility route or the native compute API; neither
@@ -325,10 +361,11 @@ remain outside the Node Host core.
 ## Retired Python and hardware integrations
 
 The former Python Agent Host, audio, vision, and direct Node-owned Codex hook runtime have been
-removed. The active Buddy service is Node-only under `apps/buddy-service/`; the root
+removed. Python execution is available only through the explicitly configured external FruitSpy
+service described above. The active Buddy service is Node-only under `apps/buddy-service/`; the root
 `buddy-backend/` directory is retained only for firmware/protocol notes. Neither is imported by
-the Node Host or copied into the Node production image. The
-optional Node bridge is allowlisted separately and fails open when the Buddy service is absent.
+the Node Host or copied into the Node production image. The optional Node bridge is allowlisted
+separately and fails open when the Buddy service is absent.
 
 ## Apple Container deployment
 

@@ -61,9 +61,11 @@ export function createManagementAccess({
       }
     }
     if (!response.ok) {
-      const error = new Error(payload.detail || `${response.status} ${response.statusText}`);
+      const detail = payload.detail || payload.error || payload.message;
+      const error = new Error(detail || `${response.status} ${response.statusText}`);
       error.status = response.status;
-      error.detail = payload.detail;
+      error.detail = detail;
+      error.code = payload.error_code || payload.code;
       throw error;
     }
     return payload;
@@ -96,6 +98,7 @@ function withManagementAccess(url, options = {}, token) {
 
 function requiresManagementAccess(url) {
   return (
+    url.startsWith("/api/buddy") ||
     url.startsWith("/api/manage")
   );
 }

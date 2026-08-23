@@ -23,6 +23,14 @@
           </button>
           <button
             class="nav-tab"
+            :class="{ active: activeView === 'buddy' }"
+            type="button"
+            @click="setActiveView('buddy')"
+          >
+            Buddy
+          </button>
+          <button
+            class="nav-tab"
             :class="{ active: activeView === 'preset-agents' }"
             type="button"
             @click="setActiveView('preset-agents')"
@@ -77,6 +85,17 @@
             title="Refresh dashboard"
             aria-label="Refresh dashboard"
             @click="refreshDashboard"
+          >
+            <RefreshCw :size="17" />
+            <span>Refresh</span>
+          </button>
+          <button
+            v-else-if="activeView === 'buddy'"
+            class="toolbar-button"
+            type="button"
+            title="Refresh Buddy dashboard"
+            aria-label="Refresh Buddy dashboard"
+            @click="refreshBuddyDashboard"
           >
             <RefreshCw :size="17" />
             <span>Refresh</span>
@@ -287,6 +306,14 @@
         ref="presetAgentsEl"
         :management="managementAccess"
         @save-management-token="saveManagementToken"
+      />
+
+      <BuddyDashboard
+        v-else-if="activeView === 'buddy'"
+        :controller="buddyDashboard"
+        :management="managementAccess"
+        @save-management-token="saveManagementToken"
+        @clear-management-token="clearManagementToken"
       />
 
       <CapabilityDashboard
@@ -1024,7 +1051,9 @@ import {
 import { createAgentTransport } from "./agent/agentTransport";
 import { createPresetAgentTransport } from "./agent/presetAgentTransport";
 import anomaloharisIconUrl from "./assets/anomaloharis-shrimp.png";
+import BuddyDashboard from "./dashboard/BuddyDashboard.vue";
 import CapabilityDashboard from "./dashboard/CapabilityDashboard.vue";
+import { createBuddyDashboardController } from "./dashboard/buddyDashboardController";
 import { createManagementAccess } from "./management/managementAccess";
 import { createSearchModeController } from "./management/searchModeController";
 import PresetAgents from "./preset-agents/PresetAgents.vue";
@@ -1043,6 +1072,12 @@ const managementAccess = createManagementAccess();
 const { input: managementTokenInput } = managementAccess.state;
 const fetchJson = managementAccess.requestJson;
 const refreshDashboard = () => capabilityDashboardEl.value?.refresh();
+const buddyDashboard = createBuddyDashboardController({
+  requestJson: fetchJson,
+  markAccessError: managementAccess.markError,
+  clearAccessError: () => { managementAccess.state.accessRequired.value = false; },
+});
+const refreshBuddyDashboard = buddyDashboard.refresh;
 
 const tools = ref([]);
 const historySessions = ref([]);
@@ -1178,7 +1213,7 @@ const chatRunActive = computed(() =>
 const searchModeController = createSearchModeController({
   requestJson: fetchJson,
   getSessionId: () => sessionId.value,
-  isDisabled: () => chatRunActive.value,
+  isDisabled: () => chatRunActive.value || chatResumeAvailable.value,
 });
 const {
   mode: searchModeValue,
@@ -1344,8 +1379,12 @@ function handleAgentEventAndRefresh(event) {
 function saveManagementToken() {
   const nextToken = managementTokenInput.value.trim();
   managementAccess.save();
+  void loadOpenRouterCredits({ silent: true });
   if (activeView.value === "dashboard") {
     void refreshDashboard();
+  }
+  if (activeView.value === "buddy") {
+    void refreshBuddyDashboard();
   }
   if (activeView.value === "preset-agents") {
     void presetAgentsEl.value?.refresh();
@@ -1354,8 +1393,14 @@ function saveManagementToken() {
 
 function clearManagementToken() {
   managementAccess.clear();
+  openrouterCredits.value = null;
+  openrouterCreditsStatus.value = "muted";
+  openrouterCreditsMessage.value = "Admin token required to show OpenRouter credits.";
   if (activeView.value === "dashboard") {
     void refreshDashboard();
+  }
+  if (activeView.value === "buddy") {
+    void refreshBuddyDashboard();
   }
 }
 
@@ -1575,6 +1620,12 @@ async function loadMemory() {
 }
 
 async function loadOpenRouterCredits({ silent = false, force = false } = {}) {
+  if (!managementAccess.state.token.value) {
+    openrouterCredits.value = null;
+    openrouterCreditsStatus.value = "muted";
+    openrouterCreditsMessage.value = "Admin token required to show OpenRouter credits.";
+    return;
+  }
   if (!silent) {
     openrouterCreditsStatus.value = "loading";
     openrouterCreditsMessage.value = "Loading OpenRouter credits...";
@@ -1586,8 +1637,10 @@ async function loadOpenRouterCredits({ silent = false, force = false } = {}) {
     openrouterCreditsStatus.value = payload.status || "error";
     openrouterCreditsMessage.value = openrouterCreditsMessageFor(payload);
   } catch (error) {
-    openrouterCreditsStatus.value = "error";
-    openrouterCreditsMessage.value = `OpenRouter credits failed: ${formatError(error)}`;
+    openrouterCreditsStatus.value = error?.status === 403 ? "muted" : "error";
+    openrouterCreditsMessage.value = error?.status === 403
+      ? "Admin token was rejected; credits are unavailable."
+      : `OpenRouter credits failed: ${formatError(error)}`;
   }
 }
 

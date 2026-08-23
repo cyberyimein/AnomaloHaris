@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { AgentCore } from "./core.js";
+import type { BuddyDashboardClient } from "./buddy-dashboard.js";
 import { RunController } from "./controller.js";
 import { ReplayModelAdapter, type ReplayStep } from "./model.js";
 import { InMemorySessionAdapter } from "./session.js";
@@ -12,7 +13,10 @@ import { buildNodeHost } from "./host.js";
 import { DeterministicToolRuntime } from "./tools.js";
 import { SqlitePresetModelRegistry } from "./preset-models.js";
 import { FileResourceLoader } from "./resources.js";
+import { builtinPluginCatalog, type PluginCatalog } from "./plugin-catalog.js";
 import type { PluginHost } from "./plugins.js";
+import { PythonSandboxRuntime, PYTHON_SANDBOX_TOOL_NAME } from "./python-sandbox.js";
+import type { SessionCheckpoint } from "./types.js";
 
 const apps: Array<{ close(): Promise<void> }> = [];
 const tempDirectories: string[] = [];
@@ -148,6 +152,70 @@ describe("Node Host", () => {
     expect(mismatch.json()).toMatchObject({ error_code: "session_model_mismatch" });
   });
 
+  it("uses the saved retrieval mode for the implicit built-in default preset", async () => {
+    const registry = new SqlitePresetModelRegistry(":memory:");
+    registries.push(registry);
+    registry.ensureBuiltinDefault({ model: "replay-model" });
+    const sessions = new InMemorySessionAdapter();
+    await sessions.setSearchMode("retrieval-session", "native");
+    const app = await makeApp(
+      [[{ type: "text.delta", text: "native mode" }, { type: "done" }]],
+      undefined,
+      registry,
+      undefined,
+      undefined,
+      undefined,
+      sessions,
+    );
+    apps.push(app);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/chat",
+      payload: { session_id: "retrieval-session", message: "search" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "run.started", data: expect.objectContaining({ search_mode: "native" }) }),
+    ]));
+  });
+
+  it("rejects retrieval mode changes while a run checkpoint can be resumed", async () => {
+    const sessions = new InMemorySessionAdapter();
+    await sessions.checkpoint({
+      runId: "checkpoint-run",
+      sessionId: "checkpoint-session",
+      reason: "stopped",
+      iteration: 1,
+      state: {
+        promptProfile: "agent",
+        originalUserContent: "search",
+        currentUserMessage: { role: "user", content: "search" },
+        assistantText: "",
+        pendingToolCalls: [],
+        completedToolCallIds: [],
+        loopMessages: [],
+        bootstrapContext: [],
+        model: "replay-model",
+        searchMode: "diy",
+      },
+      createdAt: "2026-08-23T00:00:00.000Z",
+      updatedAt: "2026-08-23T00:00:00.000Z",
+    } satisfies SessionCheckpoint);
+    const app = await makeApp([], undefined, undefined, undefined, undefined, undefined, sessions);
+    apps.push(app);
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/api/sessions/checkpoint-session/search-mode",
+      payload: { mode: "native" },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ error_code: "search_mode_checkpoint_active" });
+  });
+
   it("keeps an existing session on its bound model when the default changes", async () => {
     const registry = new SqlitePresetModelRegistry(":memory:");
     registries.push(registry);
@@ -232,6 +300,85 @@ describe("Node Host", () => {
     expect(draft.statusCode).toBe(201);
     expect(draft.json().preset_model.ref).toBe("luna@1");
   });
+
+  it("shows registered plugin catalog entries even when optional child plugins are disabled", async () => {
+    const app = await makeApp([], undefined, undefined, undefined, undefined, undefined, undefined, "anomalo@1", builtinPluginCatalog());
+    apps.push(app);
+
+    const response = await app.inject({ method: "GET", url: "/api/plugins" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().plugins).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "buddy-bridge", state: "catalogued", loaded: false }),
+      expect.objectContaining({ id: "web", tools: expect.arrayContaining(["web_search"]) }),
+    ]));
+  });
+
+  it("keeps Buddy dashboard control behind management access and proxies only allowlisted operations", async () => {
+    const buddy = {
+      status: async () => ({ connected: true, transport: "tcp" }),
+      events: async () => ({ events: [] }),
+      connect: async () => ({ connected: true }),
+      disconnect: async () => ({ connected: false }),
+      setState: async (body: Record<string, unknown>) => ({ state: body.state }),
+    } as unknown as BuddyDashboardClient;
+    const app = await makeApp([], undefined, undefined, undefined, undefined, "secret", undefined, "anomalo@1", undefined, buddy);
+    apps.push(app);
+
+    expect((await app.inject({ method: "GET", url: "/api/buddy/status" })).statusCode).toBe(403);
+    const status = await app.inject({ method: "GET", url: "/api/buddy/status", headers: { "x-anomalo-admin-token": "secret" } });
+    expect(status.json()).toEqual({ connected: true, transport: "tcp" });
+    const state = await app.inject({
+      method: "POST",
+      url: "/api/buddy/state",
+      headers: { "x-anomalo-admin-token": "secret" },
+      payload: { state: "thinking" },
+    });
+    expect(state.json()).toEqual({ state: "thinking" });
+  });
+
+  it("serves Python artifacts only through signed session-bound URLs", async () => {
+    const artifactsDir = mkdtempSync(join(tmpdir(), "anomalo-host-artifacts-"));
+    tempDirectories.push(artifactsDir);
+    const pythonSandbox = new PythonSandboxRuntime({
+      baseUrl: "http://fruitspy.test",
+      token: "fruitspy-secret",
+      artifactsDir,
+      artifactAccessSecret: "artifact-secret",
+      fetchImpl: async (url) => {
+        if (String(url).endsWith("/api/v1/tools/python")) return new Response(JSON.stringify({ ready: true }), { status: 200 });
+        if (String(url).endsWith("/artifacts/chart.png")) return new Response(Uint8Array.from([1, 2, 3]), { status: 200, headers: { "content-type": "image/png" } });
+        return new Response(JSON.stringify({
+          ok: true,
+          execution_id: "exec_host",
+          artifacts: [{ name: "chart.png", media_type: "image/png", download_url: "/api/v1/tools/python/executions/exec_host/artifacts/chart.png" }],
+        }), { status: 200 });
+      },
+    });
+    const result = await pythonSandbox.call(
+      { id: "artifact-call", name: PYTHON_SANDBOX_TOOL_NAME, arguments: { code: "plot()", artifacts: [{ path: "chart.png" }] } },
+      {
+        sessionId: "artifact-session",
+        runId: "artifact-run",
+        searchMode: "diy",
+        model: "replay",
+        activeSkills: new Set(),
+        activeMcpServers: new Set(),
+      },
+      new AbortController().signal,
+    );
+    const artifactUrl = String((result.data as { artifacts: Array<{ url: string }> }).artifacts[0]?.url);
+    const app = await makeApp([], undefined, undefined, undefined, undefined, undefined, undefined, "anomalo@1", undefined, undefined, pythonSandbox);
+    apps.push(app);
+
+    expect((await app.inject({ method: "GET", url: artifactUrl })).statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: artifactUrl })).headers).toMatchObject({
+      "content-disposition": "inline; filename=\"chart.png\"",
+      "x-content-type-options": "nosniff",
+    });
+    expect((await app.inject({ method: "GET", url: artifactUrl.split("?")[0] })).statusCode).toBe(404);
+    expect((await app.inject({ method: "GET", url: artifactUrl.replace("artifact-session", "other-session") })).statusCode).toBe(404);
+  });
 });
 
 async function makeApp(
@@ -243,6 +390,9 @@ async function makeApp(
   managementToken?: string,
   sessionAdapter?: InMemorySessionAdapter,
   defaultPresetModel = "anomalo@1",
+  pluginCatalog?: PluginCatalog,
+  buddy?: BuddyDashboardClient,
+  pythonSandbox?: PythonSandboxRuntime,
 ) {
   const tools = new DeterministicToolRuntime([]);
   const model = new ReplayModelAdapter(steps);
@@ -257,6 +407,9 @@ async function makeApp(
     ...(staticDir ? { staticDir } : {}),
     ...(resources ? { resources } : {}),
     ...(plugins ? { plugins } : {}),
+    ...(pluginCatalog ? { pluginCatalog } : {}),
+    ...(buddy ? { buddy } : {}),
+    ...(pythonSandbox ? { pythonSandbox } : {}),
     ...(managementToken ? { managementToken } : {}),
   });
 }

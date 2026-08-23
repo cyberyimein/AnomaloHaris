@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { AgentCore } from "./core.js";
 import { ResourceContextBuilder } from "./context.js";
+import { BuddyDashboardClient } from "./buddy-dashboard.js";
 import { buildNodeHost } from "./host.js";
 import { OpenAICompatibleAdapter, ProviderUnavailableError, type ModelAdapter, type ModelCompletion, type ModelRequest, type ModelStreamEvent } from "./model.js";
 import { BrowserToolBridge, BrowserToolRuntime } from "./browser.js";
@@ -12,6 +13,8 @@ import { FileResourceLoader } from "./resources.js";
 import { ChildProcessPluginBackend, PiPluginHost, readPluginLoadConfig } from "./plugins.js";
 import { builtinPluginCatalog, createPluginManifest } from "./plugin-catalog.js";
 import { DEFAULT_PRESET_MODEL_REF, SqlitePresetModelRegistry, type CompiledPresetModel } from "./preset-models.js";
+import { DEFAULT_SEARCH_MODE, DEFAULT_SUBAGENT_MODEL, isSearchMode, ResponsesSearchRuntime } from "./retrieval.js";
+import { PythonSandboxRuntime } from "./python-sandbox.js";
 import { SqliteSessionAdapter } from "./sqlite.js";
 import { RunController } from "./controller.js";
 import { asToolAdapter, CompositeToolRuntime, CoreToolRuntime, PluginToolAdapter } from "./tools.js";
@@ -28,6 +31,11 @@ const defaultPresetModelRef = process.env.ANOMALO_DEFAULT_PRESET_MODEL || DEFAUL
 const apiKey = process.env.OPENROUTER_API_KEY;
 const managementApiKey = process.env.OPENROUTER_MANAGEMENT_API_KEY;
 const baseUrl = process.env.OPENAI_BASE_URL ?? "https://openrouter.ai/api/v1";
+const artifactAccessSecret = process.env.ANOMALO_ARTIFACT_SECRET || process.env.ANOMALO_ADMIN_TOKEN;
+const configuredSearchMode = process.env.ANOMALO_SEARCH_MODE;
+const defaultSearchMode = isSearchMode(configuredSearchMode) ? configuredSearchMode : DEFAULT_SEARCH_MODE;
+const subagentModel = process.env.WEB_RESEARCH_SUBAGENT_MODEL?.trim() || DEFAULT_SUBAGENT_MODEL;
+const searchTimeoutMs = Number(process.env.SEARCH_MODE_TIMEOUT_SECONDS ?? "90") * 1000;
 const staticDir = process.env.ANOMALO_FRONTEND_DIR ?? join(repoRoot, "runtime-bundle", "app", "frontend");
 const port = Number(process.env.PORT ?? "8000");
 const requestedHost = process.env.HOST ?? "127.0.0.1";
@@ -121,6 +129,23 @@ presetModels.ensureBuiltinDefault({
 const defaultPresetModel = presetModels.resolve(defaultPresetModelRef);
 
 const browserBridge = new BrowserToolBridge(Number(process.env.BROWSER_TOOL_TIMEOUT_SECONDS ?? "60") * 1000);
+const pythonSandbox = new PythonSandboxRuntime({
+  enabled: process.env.PYTHON_SANDBOX_ENABLED !== "false",
+  ...(process.env.FRUITSPY_PYTHON_TOOL_BASE_URL ? { baseUrl: process.env.FRUITSPY_PYTHON_TOOL_BASE_URL } : {}),
+  ...(process.env.FRUITSPY_PYTHON_TOOL_API_PATH ? { apiPath: process.env.FRUITSPY_PYTHON_TOOL_API_PATH } : {}),
+  ...(process.env.FRUITSPY_PYTHON_TOOL_TOKEN ? { token: process.env.FRUITSPY_PYTHON_TOOL_TOKEN } : {}),
+  defaultTimeoutMs: Number(process.env.PYTHON_SANDBOX_TIMEOUT_SECONDS ?? "10") * 1000,
+  statusTimeoutMs: Number(process.env.FRUITSPY_PYTHON_TOOL_STATUS_TIMEOUT_SECONDS ?? "2") * 1000,
+  artifactsDir: join(dataDir, "artifacts"),
+  ...(artifactAccessSecret ? { artifactAccessSecret } : {}),
+});
+const buddyDashboard = process.env.ANOMALO_BUDDY_SERVICE_URL?.trim()
+  ? new BuddyDashboardClient({
+    baseUrl: process.env.ANOMALO_BUDDY_SERVICE_URL,
+    ...(process.env.ANOMALO_BUDDY_SERVICE_TOKEN ? { token: process.env.ANOMALO_BUDDY_SERVICE_TOKEN } : {}),
+    timeoutMs: Number(process.env.ANOMALO_BUDDY_REQUEST_TIMEOUT_MS ?? "1500"),
+  })
+  : undefined;
 
 const plugins = new PiPluginHost({
   timeoutMs: Number(process.env.ANOMALO_PLUGIN_TIMEOUT_MS ?? "30000"),
@@ -218,10 +243,30 @@ const tools = new CompositeToolRuntime([
     timeoutMs: Number(process.env.WEB_FETCH_TIMEOUT_SECONDS ?? "30") * 1000,
     maxChars: Number(process.env.WEB_FETCH_MAX_CHARS ?? "30000"),
   })),
+  asToolAdapter("web", 81, new ResponsesSearchRuntime({
+    ...(apiKey ? { apiKey } : {}),
+    baseUrl,
+    subagentModel,
+    timeoutMs: searchTimeoutMs,
+    resolveProvider: (context) => {
+      if (!context.presetModelRef) return undefined;
+      try {
+        const compiled = presetModels.resolveForBoundSession(context.presetModelRef);
+        const provider = providerConfig(compiled, { baseUrl, ...(apiKey ? { apiKey } : {}) });
+        return {
+          baseUrl: provider.baseUrl,
+          ...(provider.apiKey ? { apiKey: provider.apiKey } : {}),
+        };
+      } catch {
+        return { baseUrl: "", apiKey: "" };
+      }
+    },
+  })),
+  asToolAdapter("python-sandbox", 75, pythonSandbox),
   asToolAdapter("browser-bridge", 70, new BrowserToolRuntime(browserBridge)),
   new PluginToolAdapter(plugins),
 ]);
-const sessions = new SqliteSessionAdapter(databasePath);
+const sessions = new SqliteSessionAdapter(databasePath, { defaultSearchMode });
 const core = new AgentCore({
   model,
   tools,
@@ -241,7 +286,11 @@ const app = await buildNodeHost({
   ...(existsSync(join(staticDir, "index.html")) ? { staticDir } : {}),
   resources,
   plugins,
+  pluginCatalog,
+  ...(buddyDashboard ? { buddy: buddyDashboard } : {}),
   ...(providerCredits ? { providerCredits } : {}),
+  subagentModel,
+  pythonSandbox,
   ...(process.env.ANOMALO_ADMIN_TOKEN ? { managementToken: process.env.ANOMALO_ADMIN_TOKEN } : {}),
   compute: {
     auth: serviceAuth,

@@ -14,6 +14,8 @@ Codex Hook Runner ── hook token ──▶ apps/buddy-service (Node)
                                       └─ HTTP API：状态、控制、事件
 
 Node Agent ── buddy Skill + buddy-bridge ── service token ──▶ apps/buddy-service
+
+Admin UI ── admin token ── Node Host `/api/buddy/*` proxy ── service token ──▶ apps/buddy-service
 ```
 
 - Node Host 不导入 `buddy-backend` 的旧 Python 包，不连接串口，也不包含音频、视觉或媒体栈。
@@ -22,6 +24,7 @@ Node Agent ── buddy Skill + buddy-bridge ── service token ──▶ apps
 - 服务启动时默认自动建立 Gateway；无串口配置时只监听本机 127.0.0.1:8766。
 - 远程 TCP 设备必须显式配置 BUDDY_TCP_CLIENT_IP；未配置客户端白名单时拒绝公开监听。
 - `buddy-bridge` 是可选 L2 plugin；它的故障必须转换成普通 tool failure 或生命周期诊断，不能让 Agent Core 崩溃。
+- Buddy dashboard 只使用 Node Host 的 admin-gated control-plane proxy；它不会把 Buddy 工具添加到默认 Agent 或 retrieval subagent 的工具图。
 - `buddy` Skill 是模型侧说明，不是设备执行器；真实工具由 plugin 注册并调用 Node 服务。
 
 ## 2. 服务 API

@@ -5,7 +5,7 @@
         <div>
           <span>Optional extensions</span>
           <h2>Plugin capabilities</h2>
-          <p>Buddy, audio and vision are not embedded in the Node Host. If enabled, they run as explicitly installed plugins or external services.</p>
+          <p>The catalog shows the fixed runtime/plugin boundary. Buddy remains an external service and is only exposed to an Agent when an explicit Buddy plugin binding is loaded.</p>
         </div>
         <button type="button" class="capability-refresh" :disabled="loading" @click="load">
           {{ loading ? "Refreshing…" : "Refresh" }}
@@ -15,20 +15,20 @@
       <div v-if="error" class="capability-notice capability-notice-error">{{ error }}</div>
       <div v-if="loading && !plugins.length" class="capability-empty">Loading plugin catalog…</div>
       <div v-else-if="!plugins.length" class="capability-empty">
-        <strong>No optional capability plugins are loaded.</strong>
-        <span>Core model, web and browser behavior remains owned by the Node Host/plugin runtime.</span>
+        <strong>No plugins are registered.</strong>
+        <span>Core model, web and browser behavior remains owned by the Node Host runtime.</span>
       </div>
       <div v-else class="capability-grid">
         <article v-for="plugin in plugins" :key="plugin.id" class="capability-card">
           <div class="capability-card-heading">
             <strong>{{ plugin.id }}</strong>
             <span :class="plugin.loaded ? 'capability-ok' : 'capability-muted'">
-              {{ plugin.loaded ? "loaded" : "unavailable" }}
+              {{ plugin.loaded ? "loaded" : plugin.state === "catalogued" ? "available" : plugin.state || "unavailable" }}
             </span>
           </div>
-          <small v-if="plugin.version">v{{ plugin.version }}</small>
+          <small v-if="plugin.version">v{{ plugin.version }} · {{ plugin.compatibility || "runtime" }}</small>
           <p v-if="plugin.capabilities?.length">{{ plugin.capabilities.join(" · ") }}</p>
-          <p v-else>No optional capability declared.</p>
+          <p v-else>{{ plugin.tools?.length ? `${plugin.tools.length} registered tool${plugin.tools.length === 1 ? "" : "s"}` : "No optional capability declared." }}</p>
           <code v-if="plugin.error">{{ plugin.error }}</code>
         </article>
       </div>

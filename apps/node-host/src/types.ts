@@ -87,6 +87,7 @@ export type ToolContext = {
   toolCallId?: string | undefined;
   searchMode: SearchMode;
   model: string;
+  presetModelRef?: PresetModelRef | undefined;
   activeSkills: ReadonlySet<string>;
   activeMcpServers: ReadonlySet<string>;
   allowedPluginIds?: ReadonlySet<string> | undefined;

@@ -15,14 +15,18 @@ import {
 
 import { RunController, type StartRunRequest } from "./controller.js";
 import { type BrowserRegistration, BrowserToolBridge } from "./browser.js";
+import { BuddyDashboardError, type BuddyDashboardClient } from "./buddy-dashboard.js";
 import { registerComputeRoutes, type ComputeApiOptions } from "./compute-api.js";
 import { randomIds } from "./ids.js";
-import type { CompiledPresetModel, SqlitePresetModelRegistry } from "./preset-models.js";
+import { DEFAULT_PRESET_MODEL_REF, type CompiledPresetModel, SqlitePresetModelRegistry } from "./preset-models.js";
 import type { SessionRepository } from "./session.js";
 import type { SessionSnapshot, SessionSummary, ToolContext } from "./types.js";
 import type { ToolRuntime } from "./tools.js";
 import type { FileResourceLoader } from "./resources.js";
+import type { PluginCatalog } from "./plugin-catalog.js";
 import type { PluginHost } from "./plugins.js";
+import { DEFAULT_SUBAGENT_MODEL, isSearchMode } from "./retrieval.js";
+import { PYTHON_SANDBOX_TOOL_NAME, type PythonSandboxRuntime } from "./python-sandbox.js";
 
 export type NodeHostOptions = {
   controller: RunController;
@@ -38,7 +42,11 @@ export type NodeHostOptions = {
   resources?: FileResourceLoader;
   managementToken?: string;
   plugins?: PluginHost;
+  pluginCatalog?: PluginCatalog;
+  buddy?: BuddyDashboardClient;
   providerCredits?: () => Promise<unknown>;
+  subagentModel?: string;
+  pythonSandbox?: PythonSandboxRuntime;
 };
 
 export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyInstance> {
@@ -97,17 +105,19 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
 
   app.get<{ Params: { sessionId: string } }>("/api/sessions/:sessionId/search-mode", async (request, reply) => {
     const snapshot = await options.sessions.open(request.params.sessionId as SessionId);
-    return reply.send(searchModePayload(request.params.sessionId, snapshot.searchMode, options.model));
+    return reply.send(searchModePayload(request.params.sessionId, snapshot.searchMode, options.model, options.subagentModel));
   });
 
   app.patch<{ Params: { sessionId: string }; Body: unknown }>("/api/sessions/:sessionId/search-mode", async (request, reply) => {
     const sessionId = request.params.sessionId as SessionId;
     if (options.controller.hasActiveRun(sessionId)) return reply.code(409).send({ error: "Stop the active run before changing search mode.", error_code: "run_already_active" });
+    const snapshot = await options.sessions.open(sessionId);
+    if (snapshot.checkpoint) return reply.code(409).send({ error: "Clear or resume the checkpoint before changing search mode.", error_code: "search_mode_checkpoint_active" });
     const mode = asObject(request.body).mode;
-    if (typeof mode !== "string" || !["native", "subagent", "diy"].includes(mode)) return reply.code(400).send({ error: "Invalid search mode.", error_code: "invalid_search_mode" });
+    if (!isSearchMode(mode)) return reply.code(400).send({ error: "Invalid search mode.", error_code: "invalid_search_mode" });
     if (!options.sessions.setSearchMode) return reply.code(501).send({ error: "Search mode persistence is not supported." });
     await options.sessions.setSearchMode(sessionId, mode);
-    return reply.send(searchModePayload(sessionId, mode, options.model));
+    return reply.send(searchModePayload(sessionId, mode, options.model, options.subagentModel));
   });
 
   app.get<{ Params: { sessionId: string } }>("/api/sessions/:sessionId/skills", async (request, reply) => {
@@ -276,7 +286,11 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
       : randomIds.sessionId();
     const snapshot = query.session_id ? await options.sessions.open(sessionId) : undefined;
     const boundRef = typeof snapshot?.metadata.preset_model_ref === "string" ? snapshot.metadata.preset_model_ref : undefined;
-    const requestedRef = query.preset_model ?? query.model ?? boundRef ?? options.defaultPresetModel;
+    const explicitRef = query.preset_model ?? query.model;
+    const requestedRef = explicitRef ?? boundRef ?? options.defaultPresetModel;
+    const interactiveDefault = !explicitRef
+      && requestedRef === options.defaultPresetModel
+      && requestedRef === DEFAULT_PRESET_MODEL_REF;
     let preset: CompiledPresetModel | undefined;
     if (requestedRef && options.presetModels) {
       try {
@@ -292,14 +306,17 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
       : preset?.toolCatalog.length
         ? new Set(preset.toolCatalog)
         : undefined;
+    if (interactiveDefault && options.pythonSandbox && allowedToolNames) allowedToolNames.add(PYTHON_SANDBOX_TOOL_NAME);
+    const allowedPluginIds = preset ? new Set(preset.fixedPlugins.map((selector) => selector.split("@")[0]!)) : undefined;
+    if (interactiveDefault && allowedPluginIds && options.pythonSandbox) allowedPluginIds.add("python-sandbox");
     const context: ToolContext = {
       sessionId,
       runId: randomIds.runId(),
-      searchMode: preset?.policy.searchMode ?? snapshot?.searchMode ?? "diy",
+      searchMode: interactiveDefault ? snapshot?.searchMode ?? "diy" : preset?.policy.searchMode ?? snapshot?.searchMode ?? "diy",
       model: preset?.providerModel ?? options.model,
       activeSkills: new Set(snapshot?.activeSkills ?? []),
       activeMcpServers: new Set(snapshot?.activeMcpServers ?? []),
-      ...(preset ? { allowedPluginIds: new Set(preset.fixedPlugins.map((selector) => selector.split("@")[0]!)) } : {}),
+      ...(allowedPluginIds ? { allowedPluginIds } : {}),
       ...(preset ? { allowedPluginLocks: structuredClone(preset.pluginLocks) } : {}),
     };
     const tools = await options.tools.list(context);
@@ -311,14 +328,68 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
     };
   });
 
-  app.get("/api/plugins", async () => ({ plugins: options.plugins?.status() ?? [] }));
+  app.get("/api/plugins", async () => ({ plugins: pluginStatuses(options.pluginCatalog, options.plugins) }));
 
   app.get("/api/manage/plugins", async (request, reply) => {
     try {
       requireManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
-      return reply.send({ plugins: options.plugins?.status() ?? [] });
+      return reply.send({ plugins: pluginStatuses(options.pluginCatalog, options.plugins) });
     } catch (error) {
       return sendHostError(reply, error);
+    }
+  });
+
+  app.get("/api/buddy/status", async (request, reply) => {
+    try {
+      requireManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
+      if (!options.buddy) throw new HostRequestError(503, "buddy_unavailable", "Buddy dashboard is not configured.");
+      return reply.send(await options.buddy.status());
+    } catch (error) {
+      return sendBuddyError(reply, error);
+    }
+  });
+
+  app.get("/api/buddy/events", async (request, reply) => {
+    try {
+      requireManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
+      if (!options.buddy) throw new HostRequestError(503, "buddy_unavailable", "Buddy dashboard is not configured.");
+      const query = request.query as { limit?: string };
+      return reply.send(await options.buddy.events(Number(query.limit ?? "30")));
+    } catch (error) {
+      return sendBuddyError(reply, error);
+    }
+  });
+
+  app.post("/api/buddy/connect", async (request, reply) => {
+    try {
+      requireManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
+      if (!options.buddy) throw new HostRequestError(503, "buddy_unavailable", "Buddy dashboard is not configured.");
+      return reply.send(await options.buddy.connect());
+    } catch (error) {
+      return sendBuddyError(reply, error);
+    }
+  });
+
+  app.post("/api/buddy/disconnect", async (request, reply) => {
+    try {
+      requireManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
+      if (!options.buddy) throw new HostRequestError(503, "buddy_unavailable", "Buddy dashboard is not configured.");
+      return reply.send(await options.buddy.disconnect());
+    } catch (error) {
+      return sendBuddyError(reply, error);
+    }
+  });
+
+  app.post<{ Body: unknown }>("/api/buddy/state", async (request, reply) => {
+    try {
+      requireManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
+      if (!options.buddy) throw new HostRequestError(503, "buddy_unavailable", "Buddy dashboard is not configured.");
+      const body = request.body && typeof request.body === "object" && !Array.isArray(request.body)
+        ? request.body as Record<string, unknown>
+        : {};
+      return reply.send(await options.buddy.setState(body));
+    } catch (error) {
+      return sendBuddyError(reply, error);
     }
   });
 
@@ -357,6 +428,19 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
   app.get<{ Params: { sessionId: string } }>("/api/sessions/:sessionId/web-traces", async (request, reply) => {
     const snapshot = await options.sessions.open(request.params.sessionId as SessionId);
     return reply.send({ session_id: snapshot.sessionId, traces: snapshot.webTraces });
+  });
+
+  app.get<{ Params: { executionId: string; name: string }; Querystring: { session_id?: string; artifact_token?: string } }>("/api/artifacts/python/:executionId/:name", async (request, reply) => {
+    const sessionId = typeof request.query.session_id === "string" ? request.query.session_id : "";
+    const accessToken = typeof request.query.artifact_token === "string" ? request.query.artifact_token : "";
+    const artifact = options.pythonSandbox?.readArtifact(request.params.executionId, request.params.name, sessionId, accessToken);
+    if (!artifact) return reply.code(404).send({ error: "Artifact not found." });
+    const inline = artifact.mediaType.startsWith("image/");
+    return reply
+      .header("X-Content-Type-Options", "nosniff")
+      .header("Content-Disposition", `${inline ? "inline" : "attachment"}; filename="${request.params.name}"`)
+      .type(artifact.mediaType)
+      .send(artifact.content);
   });
 
   app.delete<{ Params: { sessionId: string } }>("/api/sessions/:sessionId", async (request, reply) => {
@@ -595,6 +679,9 @@ async function toStartRunRequest(
     ? existingSession.metadata.preset_model_ref
     : undefined;
   const requestedRef = explicitRef ?? boundRef ?? options.defaultPresetModel;
+  const interactiveDefault = !explicitRef
+    && requestedRef === options.defaultPresetModel
+    && requestedRef === DEFAULT_PRESET_MODEL_REF;
   let preset: CompiledPresetModel | undefined;
   if (requestedRef) {
     if (!options.presetModels) throw new HostRequestError(404, "preset_model_unavailable", "Preset Model registry is not configured.");
@@ -621,21 +708,29 @@ async function toStartRunRequest(
       ? body.prompt_profile
       : preset?.promptProfile ?? "agent",
     model: preset?.providerModel ?? options.model,
-    searchMode: !preset && typeof body.search_mode === "string" && body.search_mode
-      ? body.search_mode
-    : preset?.policy.searchMode ?? "diy",
+    searchMode: interactiveDefault
+      ? existingSession.searchMode
+      : !preset && typeof body.search_mode === "string" && body.search_mode
+        ? body.search_mode
+        : preset?.policy.searchMode ?? "diy",
     ...(preset?.toolProtocol ? { toolProtocol: preset.toolProtocol } : {}),
   };
+  if (!isSearchMode(input.searchMode)) {
+    throw new HostRequestError(400, "invalid_search_mode", "Invalid search mode. Choose native, subagent, or diy.");
+  }
   if (preset) {
     input.presetModelRef = preset.ref;
     input.compiledHash = preset.compiledHash;
     input.toolProtocol = preset.toolProtocol;
     input.policy = structuredClone(preset.policy);
-    input.allowedPluginIds = new Set(preset.fixedPlugins.map((selector) => selector.split("@")[0]!));
+    const allowedPluginIds = new Set(preset.fixedPlugins.map((selector) => selector.split("@")[0]!));
+    if (interactiveDefault && options.pythonSandbox) allowedPluginIds.add("python-sandbox");
+    input.allowedPluginIds = allowedPluginIds;
     input.allowedPluginLocks = structuredClone(preset.pluginLocks);
     if (preset.systemPrompt !== undefined) input.systemPrompt = preset.systemPrompt;
     if (preset.toolCatalog.length > 0) {
       const fixedTools = new Set(preset.toolCatalog);
+      if (interactiveDefault && options.pythonSandbox) fixedTools.add(PYTHON_SANDBOX_TOOL_NAME);
       input.allowedToolNames = preset.allowedToolNames
         ? new Set(preset.allowedToolNames.filter((name) => fixedTools.has(name)))
         : fixedTools;
@@ -705,6 +800,13 @@ function sendHostError(reply: FastifyReply, error: unknown): FastifyReply {
   });
 }
 
+function sendBuddyError(reply: FastifyReply, error: unknown): FastifyReply {
+  if (error instanceof BuddyDashboardError) {
+    return reply.code(error.statusCode).send({ error: error.message, error_code: error.errorCode });
+  }
+  return sendHostError(reply, error);
+}
+
 function hostErrorStatus(error: unknown): number {
   if (error instanceof HostRequestError) return error.statusCode;
   const code = hostErrorCode(error);
@@ -741,15 +843,37 @@ function requireManagementAccess(headers: Record<string, unknown>, configuredTok
   }
 }
 
-function searchModePayload(sessionId: string, mode: string, model: string): Record<string, unknown> {
+function pluginStatuses(catalog: PluginCatalog | undefined, plugins: PluginHost | undefined): Array<Record<string, unknown>> {
+  const loaded = new Map((plugins?.status() ?? []).map((status) => [status.id, status]));
+  if (!catalog) return [...loaded.values()].map((status) => ({ ...status, tools: [...status.tools], capabilities: [...status.capabilities] }));
+  return catalog.list().map((manifest) => {
+    const status = loaded.get(manifest.id);
+    return {
+      id: manifest.id,
+      version: manifest.version,
+      compatibility: manifest.compatibility,
+      enabled: status?.enabled ?? false,
+      loaded: status?.loaded ?? false,
+      state: status ? (status.loaded ? "loaded" : status.error ? "failed" : "disabled") : "catalogued",
+      required: status?.required ?? manifest.required === true,
+      tools: status?.tools?.length ? [...status.tools] : [...(manifest.toolNames ?? [])],
+      capabilities: status?.capabilities?.length ? [...status.capabilities] : [...(manifest.capabilities ?? [])],
+      ...(status?.failures ? { failures: status.failures } : {}),
+      ...(status?.circuitOpen ? { circuitOpen: true } : {}),
+      ...(status?.error ? { error: status.error } : {}),
+    };
+  });
+}
+
+function searchModePayload(sessionId: string, mode: string, model: string, subagentModel = DEFAULT_SUBAGENT_MODEL): Record<string, unknown> {
   return {
     session_id: sessionId,
     mode,
     model,
-    subagent_model: model,
+    subagent_model: subagentModel,
     modes: [
-      { id: "native", label: "Model-native search", description: "Use the provider's native search capability when configured.", provider: "provider" },
-      { id: "subagent", label: "Web research subagent", description: "Delegate research to the configured research model.", provider: "provider_subagent" },
+      { id: "native", label: "Provider-native web search", description: "Use the active model to execute the Provider's native web retrieval capability.", provider: "responses_api" },
+      { id: "subagent", label: "Web research subagent", description: `Run an isolated ${subagentModel} child AgentCore with web_search as its only capability.`, provider: "responses_api_subagent" },
       { id: "diy", label: "DIY web tools", description: "Use AnomaloHaris's Node web search and fetch tools.", provider: "duckduckgo_html" },
     ],
   };

@@ -270,7 +270,7 @@ export class SqlitePresetModelRegistry {
         capabilities: { streaming: true, tools: "encoded", structuredOutput: "prompted" },
       },
       prompt: { profile: options.promptProfile ?? "agent" },
-      plugins: { fixed: ["host-core", "web", "browser-bridge", "pi-plugin-host"] },
+      plugins: { fixed: ["host-core", "web", "python-sandbox", "browser-bridge", "pi-plugin-host"] },
       policy: { search_mode: "diy" },
       metadata: { builtin: true },
     };

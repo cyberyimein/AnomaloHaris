@@ -213,6 +213,15 @@ export function builtinPluginCatalog(): PluginCatalog {
       toolNames: ["web_fetch", "web_search"],
     }),
     createPluginManifest({
+      id: "python-sandbox",
+      version: "1.0.0",
+      package: "@anomalo/node-host",
+      entry: "builtin:python-sandbox",
+      compatibility: "L1",
+      permissions: ["tools.register"],
+      toolNames: ["sandbox_python_run"],
+    }),
+    createPluginManifest({
       id: "browser-bridge",
       version: "1.0.0",
       package: "@anomalo/node-host",
