@@ -204,6 +204,15 @@ export function builtinPluginCatalog(): PluginCatalog {
       toolNames: ["time_now"],
     }),
     createPluginManifest({
+      id: "time-tools",
+      version: "1.0.0",
+      package: "@anomalo/node-host",
+      entry: "builtin:time-tools",
+      compatibility: "L1",
+      permissions: ["tools.register"],
+      toolNames: ["core_convert_time", "core_get_time"],
+    }),
+    createPluginManifest({
       id: "web",
       version: "1.0.0",
       package: "@anomalo/node-host",

@@ -7,7 +7,8 @@ import { ReplayModelAdapter, type ReplayStep } from "./model.js";
 import { SqlitePresetModelRegistry } from "./preset-models.js";
 import { InMemorySessionAdapter } from "./session.js";
 import { buildNodeHost } from "./host.js";
-import { DeterministicToolRuntime } from "./tools.js";
+import { asToolAdapter, CompositeToolRuntime, CoreToolRuntime, DeterministicToolRuntime, TimeZoneToolRuntime } from "./tools.js";
+import { builtinPluginCatalog } from "./plugin-catalog.js";
 
 const apps: Array<{ close(): Promise<void> }> = [];
 const registries: SqlitePresetModelRegistry[] = [];
@@ -114,6 +115,30 @@ describe("OpenAI-compatible compute API", () => {
     });
     expect(responseFormat.statusCode).toBe(400);
     expect(responseFormat.json()).toMatchObject({ error: { code: "preset_model_override_forbidden" } });
+  });
+
+  it("allows Urus to supply an operation-specific response schema", async () => {
+    const app = await makeUrusApp([
+      [{ type: "text.delta", text: "draft" }, { type: "done" }],
+    ]);
+    apps.push(app);
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      headers: { authorization: "Bearer urus-token" },
+      payload: {
+        model: "scheduled-event-investigator@1",
+        metadata: { session_id: "urus-schema-session" },
+        messages: [{ role: "user", content: "Return an empty result." }],
+        response_format: { type: "json_object" },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      model: "scheduled-event-investigator@1",
+      choices: [{ message: { content: "{}" } }],
+    });
   });
 
   it("supports native preset-model runs and protects routes with scopes", async () => {
@@ -254,4 +279,29 @@ async function makeApp(
     },
   });
   return app;
+}
+
+async function makeUrusApp(steps: ReplayStep[]) {
+  const registry = new SqlitePresetModelRegistry(":memory:", {
+    catalog: builtinPluginCatalog(),
+    resolvePrompt: () => "Urus retrieval prompt",
+  });
+  registries.push(registry);
+  registry.ensureBuiltinUrusScheduledEvent({ model: "fixture-urus-provider" });
+  const sessions = new InMemorySessionAdapter();
+  const tools = new CompositeToolRuntime([
+    asToolAdapter("host-core", 100, new CoreToolRuntime()),
+    asToolAdapter("time-tools", 100, new TimeZoneToolRuntime()),
+  ]);
+  const core = new AgentCore({ model: new ReplayModelAdapter(steps, { completions: ["{}"] }), tools, sessions });
+  return buildNodeHost({
+    controller: new RunController(core),
+    sessions,
+    model: "fixture-urus-provider",
+    presetModels: registry,
+    defaultPresetModel: "scheduled-event-investigator@1",
+    compute: {
+      auth: new ServiceAuth({ clients: [{ id: "urus-client", token: "urus-token" }] }),
+    },
+  });
 }

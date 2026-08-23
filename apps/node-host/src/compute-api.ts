@@ -744,7 +744,7 @@ async function prepareChat(
   if (!validation.valid) throw new ComputeRequestError(400, "invalid_request", "Invalid OpenAI chat completion request.");
   const request = body as OpenAIChatCompletionRequest;
   const bodyRecord = body as Record<string, unknown>;
-  for (const key of ["tools", "tool_choice", "provider", "prompt", "plugins", "temperature", "response_format"]) {
+  for (const key of ["tools", "tool_choice", "provider", "prompt", "plugins", "temperature"]) {
     if (bodyRecord[key] !== undefined) throw new ComputeRequestError(400, "preset_model_override_forbidden", `The ${key} field is controlled by the Preset Model.`);
   }
   for (const message of request.messages) {
@@ -757,6 +757,9 @@ async function prepareChat(
 
   const sessionId = readSessionId(request.metadata) ?? randomIds.sessionId();
   const model = await resolveModelForSession(options.registry, request.model, options.sessions, sessionId);
+  if (bodyRecord.response_format !== undefined && !model.allowResponseFormatOverride) {
+    throw new ComputeRequestError(400, "preset_model_override_forbidden", "The response_format field is controlled by the Preset Model.");
+  }
   if (options.controller.hasActiveRun(sessionId)) throw new ComputeRequestError(409, "run_already_active", "A run is already active for this session.", true);
   await bindSessionModel(options.sessions, sessionId, model.ref);
   const requestId = `chatcmpl_${randomUUID().replaceAll("-", "")}`;
@@ -796,7 +799,11 @@ async function prepareChat(
     ...(allowedToolNames ? { allowedToolNames: new Set(allowedToolNames) } : {}),
     ...(model.bootstrapTools ? { bootstrapTools: structuredClone(model.bootstrapTools) } : {}),
     ...(model.policy.temperature === undefined ? {} : { temperature: model.policy.temperature }),
-    ...(model.policy.responseFormat === undefined ? {} : { responseFormat: structuredClone(model.policy.responseFormat) }),
+    ...(request.response_format !== undefined
+      ? { responseFormat: structuredClone(request.response_format) }
+      : model.policy.responseFormat === undefined
+        ? {}
+        : { responseFormat: structuredClone(model.policy.responseFormat) }),
     ...(historyMessages.length ? { historyMessages } : {}),
   };
   return {
@@ -995,7 +1002,11 @@ function nativeRunInput(body: unknown, model: CompiledPresetModel): StartRunRequ
     ...(allowedToolNames ? { allowedToolNames: new Set(allowedToolNames) } : {}),
     ...(model.bootstrapTools ? { bootstrapTools: structuredClone(model.bootstrapTools) } : {}),
     ...(model.policy.temperature === undefined ? {} : { temperature: model.policy.temperature }),
-    ...(model.policy.responseFormat === undefined ? {} : { responseFormat: structuredClone(model.policy.responseFormat) }),
+    ...(value.response_format !== undefined && model.allowResponseFormatOverride
+      ? { responseFormat: structuredClone(value.response_format as StartRunRequest["responseFormat"]) }
+      : model.policy.responseFormat === undefined
+        ? {}
+        : { responseFormat: structuredClone(model.policy.responseFormat) }),
   };
 }
 

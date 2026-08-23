@@ -695,7 +695,8 @@ async function toStartRunRequest(
   }
   if (preset) {
     for (const key of ["temperature", "response_format", "tools", "tool_choice", "provider", "prompt", "plugins"]) {
-      if (body[key] !== undefined && body[key] !== null) {
+      const responseFormatAllowed = key === "response_format" && preset.allowResponseFormatOverride;
+      if (!responseFormatAllowed && body[key] !== undefined && body[key] !== null) {
         throw new HostRequestError(400, "preset_model_override_forbidden", `The ${key} field is controlled by the Preset Model.`);
       }
     }
@@ -739,12 +740,14 @@ async function toStartRunRequest(
     }
     if (preset.bootstrapTools) input.bootstrapTools = structuredClone(preset.bootstrapTools);
   }
-  if (!preset && body.response_format && typeof body.response_format === "object") {
+  if ((!preset || preset.allowResponseFormatOverride) && body.response_format && typeof body.response_format === "object") {
     input.responseFormat = body.response_format as ResponseFormat;
   }
   if (preset) {
     if (preset.policy.temperature !== undefined) input.temperature = preset.policy.temperature;
-    if (preset.policy.responseFormat !== undefined) input.responseFormat = structuredClone(preset.policy.responseFormat);
+    if (preset.policy.responseFormat !== undefined && !(preset.allowResponseFormatOverride && body.response_format)) {
+      input.responseFormat = structuredClone(preset.policy.responseFormat);
+    }
   }
   return input;
 }
@@ -780,6 +783,7 @@ function serializePresetModel(model: CompiledPresetModel, includeDefinition = fa
     tool_catalog: model.toolCatalog,
     allowed_tools: model.allowedToolNames,
     bootstrap_tools: model.bootstrapTools ?? [],
+    allow_response_format_override: model.allowResponseFormatOverride,
     policy: structuredClone(model.policy),
     compiled_hash: model.compiledHash,
     ...(includeDefinition ? { definition: structuredClone(model.definition) } : {}),

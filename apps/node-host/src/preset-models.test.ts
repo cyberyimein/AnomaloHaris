@@ -4,7 +4,8 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { DEFAULT_PRESET_MODEL_REF, legacyAgentToDefinition, SqlitePresetModelRegistry } from "./preset-models.js";
+import { DEFAULT_PRESET_MODEL_REF, legacyAgentToDefinition, SqlitePresetModelRegistry, URUS_SCHEDULED_EVENT_PRESET_MODEL_REF } from "./preset-models.js";
+import { builtinPluginCatalog } from "./plugin-catalog.js";
 
 const directories: string[] = [];
 
@@ -96,6 +97,26 @@ describe("SqlitePresetModelRegistry", () => {
       provider: { model: "deepseek/deepseek-chat", credential_ref: "openrouter-primary" },
       plugins: { fixed: ["web"], allowed_tools: ["web_search"] },
     });
+    registry.close();
+  });
+
+  it("seeds the Urus scheduled-event retrieval preset with a restricted tool graph", () => {
+    const registry = new SqlitePresetModelRegistry(":memory:", {
+      catalog: builtinPluginCatalog(),
+      resolvePrompt: (profile) => profile === "urus-scheduled-event-investigator" ? "Urus retrieval prompt" : "",
+    });
+    const model = registry.ensureBuiltinUrusScheduledEvent({ model: "deepseek/deepseek-v4-flash-0731" });
+
+    expect(model.ref).toBe(URUS_SCHEDULED_EVENT_PRESET_MODEL_REF);
+    expect(model.fixedPlugins).toEqual(["time-tools", "web"]);
+    expect(model.allowedToolNames).toEqual(["core_get_time", "core_convert_time", "web_search", "web_fetch"]);
+    expect(model.toolCatalog).toEqual(["core_convert_time", "core_get_time", "web_fetch", "web_search"]);
+    expect(model.bootstrapTools).toEqual([
+      { name: "core_get_time", arguments: { timezone: "Asia/Tokyo" }, resultKey: "local_time", required: true },
+      { name: "core_get_time", arguments: { timezone: "America/New_York" }, resultKey: "us_eastern_time", required: true },
+    ]);
+    expect(model.allowResponseFormatOverride).toBe(true);
+    expect(model.systemPrompt).toBe("Urus retrieval prompt");
     registry.close();
   });
 

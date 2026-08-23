@@ -15,6 +15,7 @@ import type { ResponseFormat } from "@anomalo/contracts";
 import { PluginCatalog, type PluginLock } from "./plugin-catalog.js";
 
 export const DEFAULT_PRESET_MODEL_REF = "anomalo@1" as PresetModelRef;
+export const URUS_SCHEDULED_EVENT_PRESET_MODEL_REF = "scheduled-event-investigator@1" as PresetModelRef;
 
 export type CompiledPresetModel = {
   ref: PresetModelRef;
@@ -33,6 +34,7 @@ export type CompiledPresetModel = {
   toolCatalog: string[];
   allowedToolNames?: string[] | undefined;
   bootstrapTools?: BootstrapToolRequest[] | undefined;
+  allowResponseFormatOverride: boolean;
   policy: AgentPolicy;
   definition: PresetModelDefinition;
   promptHash: string;
@@ -273,6 +275,59 @@ export class SqlitePresetModelRegistry {
       plugins: { fixed: ["host-core", "web", "python-sandbox", "browser-bridge", "pi-plugin-host"] },
       policy: { search_mode: "diy" },
       metadata: { builtin: true },
+    };
+    return this.publish(this.createDraft(definition).ref);
+  }
+
+  ensureBuiltinUrusScheduledEvent(options: { model: string }): CompiledPresetModel {
+    try {
+      return this.resolve(URUS_SCHEDULED_EVENT_PRESET_MODEL_REF);
+    } catch (error) {
+      if (!(error instanceof Error) || !["preset_model_not_found", "preset_model_not_published"].includes(error.message)) throw error;
+      try {
+        return this.resolveForBoundSession(URUS_SCHEDULED_EVENT_PRESET_MODEL_REF);
+      } catch {
+        // The built-in row does not exist yet; seed it below.
+      }
+    }
+    try {
+      return this.publish(URUS_SCHEDULED_EVENT_PRESET_MODEL_REF);
+    } catch (error) {
+      if (!(error instanceof Error) || error.message !== "preset_model_not_found") throw error;
+    }
+    const definition: PresetModelDefinition = {
+      name: "scheduled-event-investigator",
+      version: 1,
+      description: "The Urus scheduled-event web retrieval Agent.",
+      provider: {
+        adapter: "openai-compatible",
+        model: options.model,
+        credential_ref: "openrouter-primary",
+        tool_protocol: "auto",
+        capabilities: { streaming: true, tools: "encoded", structuredOutput: "prompted" },
+      },
+      prompt: { profile: "urus-scheduled-event-investigator" },
+      plugins: {
+        fixed: ["time-tools", "web"],
+        allowed_tools: ["core_get_time", "core_convert_time", "web_search", "web_fetch"],
+        bootstrap_tools: [
+          { name: "core_get_time", arguments: { timezone: "Asia/Tokyo" }, resultKey: "local_time", required: true },
+          { name: "core_get_time", arguments: { timezone: "America/New_York" }, resultKey: "us_eastern_time", required: true },
+        ],
+      },
+      policy: {
+        search_mode: "diy",
+        temperature: 0.1,
+        max_tool_iterations: 24,
+        run_timeout_ms: 300_000,
+        bootstrap_tool_timeout_ms: 2_000,
+        tool_timeout_ms: 30_000,
+      },
+      metadata: {
+        builtin: true,
+        owner: "urus",
+        allow_response_format_override: true,
+      },
     };
     return this.publish(this.createDraft(definition).ref);
   }
@@ -551,6 +606,7 @@ function compileDefinition(
   const systemPrompt = definition.prompt?.system !== undefined
     ? definition.prompt.system
     : resolvePrompt?.(promptProfile) ?? "";
+  const allowResponseFormatOverride = definition.metadata?.allow_response_format_override === true;
   const promptHash = hash({ profile: promptProfile, content: systemPrompt });
   const pluginLockHash = graph?.pluginLockHash ?? hash(fixedPlugins);
   const snapshot = {
@@ -568,6 +624,7 @@ function compileDefinition(
     allowed_tools: allowedToolNames ?? null,
     bootstrap_tools: bootstrapTools ?? null,
     policy,
+    ...(allowResponseFormatOverride ? { allow_response_format_override: true } : {}),
   };
   return {
     ref: `${definition.name}@${definition.version}` as PresetModelRef,
@@ -586,6 +643,7 @@ function compileDefinition(
     toolCatalog,
     ...(allowedToolNames ? { allowedToolNames } : {}),
     ...(bootstrapTools ? { bootstrapTools } : {}),
+    allowResponseFormatOverride,
     policy,
     definition: structuredClone(definition),
     promptHash,
@@ -621,6 +679,7 @@ function compiledFromRow(
       ...stored,
       status: row.status,
       definition,
+      allowResponseFormatOverride: stored.allowResponseFormatOverride === true,
       promptHash: row.prompt_hash,
       pluginLockHash: row.plugin_lock_hash,
       compiledHash: row.compiled_hash,
@@ -655,6 +714,7 @@ function compiledHashFromSnapshot(definition: PresetModelDefinition, model: Comp
     allowed_tools: model.allowedToolNames ?? null,
     bootstrap_tools: model.bootstrapTools ?? null,
     policy: model.policy,
+    ...(model.allowResponseFormatOverride ? { allow_response_format_override: true } : {}),
   });
 }
 

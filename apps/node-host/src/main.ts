@@ -17,7 +17,7 @@ import { DEFAULT_SEARCH_MODE, DEFAULT_SUBAGENT_MODEL, isSearchMode, ResponsesSea
 import { PythonSandboxRuntime } from "./python-sandbox.js";
 import { SqliteSessionAdapter } from "./sqlite.js";
 import { RunController } from "./controller.js";
-import { asToolAdapter, CompositeToolRuntime, CoreToolRuntime, PluginToolAdapter } from "./tools.js";
+import { asToolAdapter, CompositeToolRuntime, CoreToolRuntime, PluginToolAdapter, TimeZoneToolRuntime } from "./tools.js";
 import { WebToolRuntime } from "./web.js";
 import { ServiceAuth, SqliteComputeStore, SqliteNativeRunStore } from "./compute-api.js";
 
@@ -126,6 +126,7 @@ presetModels.ensureBuiltinDefault({
   model: modelName,
   promptProfile: process.env.ANOMALO_AGENT_PROMPT_PROFILE ?? "agent",
 });
+presetModels.ensureBuiltinUrusScheduledEvent({ model: modelName });
 const defaultPresetModel = presetModels.resolve(defaultPresetModelRef);
 
 const browserBridge = new BrowserToolBridge(Number(process.env.BROWSER_TOOL_TIMEOUT_SECONDS ?? "60") * 1000);
@@ -238,6 +239,7 @@ const model = new PresetModelAdapter({
 });
 const tools = new CompositeToolRuntime([
   asToolAdapter("host-core", 100, new CoreToolRuntime()),
+  asToolAdapter("time-tools", 100, new TimeZoneToolRuntime()),
   asToolAdapter("web", 80, new WebToolRuntime({
     enabled: process.env.WEB_TOOLS_ENABLED !== "false",
     timeoutMs: Number(process.env.WEB_FETCH_TIMEOUT_SECONDS ?? "30") * 1000,
