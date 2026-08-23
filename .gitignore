@@ -37,7 +37,5 @@ build/
 *.egg-info/
 data/
 artifacts/
-agent-backend/artifacts/
-stock-backend/data/
-stock-backend/outputs/
+runtime-bundle/artifacts/
 archives/

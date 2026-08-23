@@ -1,0 +1,54 @@
+{
+  "type": "object",
+  "required": [
+    "ref",
+    "name",
+    "version",
+    "description",
+    "status",
+    "provider_model",
+    "compiled_hash"
+  ],
+  "properties": {
+    "ref": {
+      "pattern": "^[a-z][a-z0-9._-]{0,63}@[1-9][0-9]{0,8}$",
+      "minLength": 3,
+      "type": "string"
+    },
+    "name": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "version": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "description": {
+      "type": "string"
+    },
+    "status": {
+      "anyOf": [
+        {
+          "const": "draft",
+          "type": "string"
+        },
+        {
+          "const": "published",
+          "type": "string"
+        },
+        {
+          "const": "retired",
+          "type": "string"
+        }
+      ]
+    },
+    "provider_model": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "compiled_hash": {
+      "minLength": 1,
+      "type": "string"
+    }
+  }
+}

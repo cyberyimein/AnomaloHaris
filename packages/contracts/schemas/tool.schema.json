@@ -1,0 +1,30 @@
+{
+  "additionalProperties": true,
+  "$id": "https://anomalo.dev/schemas/tool.schema.json",
+  "type": "object",
+  "required": [
+    "name",
+    "description",
+    "parameters",
+    "source"
+  ],
+  "properties": {
+    "name": {
+      "pattern": "^[a-zA-Z0-9_-]{1,64}$",
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "parameters": {
+      "type": "object",
+      "patternProperties": {
+        "^(.*)$": {}
+      }
+    },
+    "source": {
+      "minLength": 1,
+      "type": "string"
+    }
+  }
+}

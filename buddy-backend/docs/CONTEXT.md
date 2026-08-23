@@ -3,17 +3,18 @@
 This project is the custom Arduino firmware and working documentation for a
 CoreS3 StackChan device used as a local AI/agent buddy.
 
+> This document is firmware/plugin reference material. The optional Buddy
+> backend owns the Hook Relay and Call Buddy transport; audio/vision remains
+> outside the AnomaloHaris Node Host.
+
 ## Current Direction
 
 - Device role: embodied desktop interface, not the main AI runtime.
-- Host agent role: STT/TTS/LLM/tool orchestration, Codex/Copilot hooks,
-  approval policy, and future audio pipeline. The future production host may be
-  the Mac mini, but the current USB-connected development machine is not
-  necessarily the Mac mini.
-- Codex run projection: the host-owned lifecycle Module that correlates Codex
-  hook events and approvals, then projects the current run onto Buddy presence.
-  A permission event is not user attention until it is explicitly unresolved
-  and requires user action.
+- Host role: `apps/buddy-service` translates Codex and Agent state into Call Buddy
+  commands. The Node Host calls it through the optional `buddy-bridge` plugin
+  and does not own Codex hooks, STT/TTS, audio, or vision.
+- Codex run projection: implemented by `apps/buddy-service/src/hook-relay.ts`;
+  the state machine remains outside Agent Core.
 - Firmware role: display buddy state, play sprite animations, drive LEDs/servos,
   read touch input, and expose a small line-based control protocol.
 - Protocol name: Call Buddy.
@@ -63,12 +64,12 @@ CoreS3 StackChan device used as a local AI/agent buddy.
   `network.tcp.connected` to `192.0.2.10:8787`, then the server sent
   `CB connect` text `MacMiniM4 online`. Use `NET STATUS` over serial for live
   diagnostics.
-- Audio transport is implemented in firmware as half-duplex PCM16 over the same
+- Historical firmware note: audio transport was implemented as half-duplex PCM16 over the same
   TCP socket: `audio.input` binary frames are `0x20/0x02`, 16 kHz mono, 320
   samples / 640 bytes; `audio.output` binary frames are `0x21/0x02`, default
   24 kHz mono, 960 bytes. Use `AUDIO STATUS`, `AUDIO IN START/STOP`, and
   `AUDIO OUT START [sample_rate] [chunk_bytes]` for diagnostics/control.
-- Current post-audio-flash network check: Buddy joined Wi-Fi as `192.0.2.20`
+- Historical post-audio-flash network check: Buddy joined Wi-Fi as `192.0.2.20`
   but `192.0.2.10:8787` returned connection refused, so end-to-end audio
   could not be verified until the Mac mini listener is running again.
 - Servo boot jerk was fixed by keeping

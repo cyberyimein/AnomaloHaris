@@ -27,11 +27,9 @@ describe("ManagementAccess", () => {
       storage: storageWith("secret"),
     });
 
-    await management.requestJson("/api/buddy/status");
     await management.requestJson("/api/manage/model");
 
     expect(fetchImpl.mock.calls[0][1].headers.get("X-Anomalo-Admin-Token")).toBe("secret");
-    expect(fetchImpl.mock.calls[1][1].headers.get("X-Anomalo-Admin-Token")).toBe("secret");
   });
 
   it("persists and clears browser-local credentials", () => {
@@ -80,12 +78,12 @@ describe("ManagementAccess", () => {
       });
     const management = createManagementAccess({ fetchImpl, storage: storageWith() });
 
-    await expect(management.requestJson("/api/buddy/status")).rejects.toMatchObject({
+    await expect(management.requestJson("/api/manage/model")).rejects.toMatchObject({
       status: 403,
       detail: "Management API requires X-Anomalo-Admin-Token.",
     });
-    await expect(management.requestJson("/api/buddy/status")).rejects.toThrow(
-      "Invalid JSON from /api/buddy/status",
+    await expect(management.requestJson("/api/manage/model")).rejects.toThrow(
+      "Invalid JSON from /api/manage/model",
     );
   });
 });

@@ -33,7 +33,7 @@ export default defineConfig({
     port: 4173,
   },
   build: {
-    outDir: "../agent-backend/app/frontend",
+    outDir: "../runtime-bundle/app/frontend",
     emptyOutDir: true,
     sourcemap: false,
   },

@@ -1,5 +1,7 @@
 import { ref } from "vue";
 
+import { parseAgentEvent } from "./sharedContracts";
+
 const TERMINAL_EVENTS = new Set(["run.finished", "run.error", "run.stopped"]);
 
 export function createPresetAgentTransport({
@@ -59,7 +61,7 @@ export function createPresetAgentTransport({
 
     try {
       const response = await fetchImpl(
-        `/api/agents/${encodeURIComponent(agentRef)}/chat/stream`,
+        presetModelStreamPath(agentRef),
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -73,7 +75,7 @@ export function createPresetAgentTransport({
       );
       if (!response.ok) {
         const payload = await readErrorPayload(response);
-        throw new Error(payload.detail || payload.error || `Preset agent request failed (${response.status}).`);
+        throw new Error(payload.detail || payload.error || `Preset model request failed (${response.status}).`);
       }
 
       const responseSessionId = response.headers?.get("X-Anomalo-Session-Id");
@@ -195,10 +197,21 @@ function parseNdjsonLine(line, onEvent) {
     return;
   }
   try {
-    onEvent(JSON.parse(trimmed));
+    onEvent(parseAgentEvent(JSON.parse(trimmed)));
   } catch (error) {
-    throw new Error(`Invalid preset agent event: ${error.message}`);
+    throw new Error(`Invalid preset model event: ${error.message}`);
   }
+}
+
+function presetModelStreamPath(modelRef) {
+  const value = String(modelRef || "");
+  const separator = value.lastIndexOf("@");
+  if (separator <= 0 || separator === value.length - 1) {
+    throw new Error("Preset Model must use the name@version format.");
+  }
+  const name = value.slice(0, separator);
+  const version = value.slice(separator + 1);
+  return `/api/preset-models/${encodeURIComponent(name)}/versions/${encodeURIComponent(version)}/runs/stream`;
 }
 
 async function readErrorPayload(response) {

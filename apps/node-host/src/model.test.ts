@@ -1,0 +1,166 @@
+import { describe, expect, it } from "vitest";
+
+import { ModelProtocolError, OpenAICompatibleAdapter, type ModelStreamEvent } from "./model.js";
+
+describe("OpenAICompatibleAdapter", () => {
+  it("normalizes DSML tool calls without leaking markup into text", async () => {
+    const block = '<｜DSML｜tool_calls><｜DSML｜invoke name="web_search"><｜DSML｜parameter name="query" string="true">latest 2026 World Cup result</｜DSML｜parameter></｜DSML｜invoke></｜DSML｜tool_calls>';
+    const events = await collect(
+      new OpenAICompatibleAdapter({
+        model: "deepseek/deepseek-chat",
+        baseUrl: "https://example.test/v1",
+        apiKey: "test-key",
+        fetchImpl: async () => sseResponse([
+          { choices: [{ delta: { content: `我会搜索。${block.slice(0, 27)}` } }] },
+          { choices: [{ delta: { content: block.slice(27) } }] },
+          "[DONE]",
+        ], 11),
+      }).stream({ model: "deepseek/deepseek-chat", messages: [], tools: [], }, new AbortController().signal),
+    );
+
+    expect(events).toEqual([
+      { type: "text.delta", text: "我会搜索。" },
+      {
+        type: "tool.calls",
+        calls: [{
+          id: "dsml_call_1",
+          name: "web_search",
+          arguments: { query: "latest 2026 World Cup result" },
+        }],
+      },
+    ]);
+  });
+
+  it("keeps native OpenAI tool-call deltas working", async () => {
+    const events = await collect(
+      new OpenAICompatibleAdapter({
+        model: "native-model",
+        baseUrl: "https://example.test/v1",
+        apiKey: "test-key",
+        fetchImpl: async () => sseResponse([
+          { choices: [{ delta: { tool_calls: [{ index: 0, id: "call-1", function: { name: "time_now", arguments: "{\"timezone\":\"UTC\"}" } }] } }] },
+          "[DONE]",
+        ]),
+      }).stream({ model: "native-model", messages: [], tools: [], }, new AbortController().signal),
+    );
+
+    expect(events).toEqual([
+      { type: "tool.calls", calls: [{ id: "call-1", name: "time_now", arguments: { timezone: "UTC" } }] },
+    ]);
+  });
+
+  it("does not expose or parse tools for the none protocol", async () => {
+    let body: Record<string, unknown> | undefined;
+    const events = await collect(
+      new OpenAICompatibleAdapter({
+        model: "text-only-model",
+        baseUrl: "https://example.test/v1",
+        apiKey: "test-key",
+        toolProtocol: "none",
+        fetchImpl: async (_url, init) => {
+          body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          return sseResponse([
+            { choices: [{ delta: { content: "answer" } }] },
+            { choices: [{ delta: { tool_calls: [{ index: 0, id: "ignored", function: { name: "time_now", arguments: "{}" } }] } }] },
+            "[DONE]",
+          ]);
+        },
+      }).stream({
+        model: "text-only-model",
+        toolProtocol: "none",
+        messages: [],
+        tools: [{ name: "time_now", description: "Read time", parameters: {}, source: "test" }],
+      }, new AbortController().signal),
+    );
+
+    expect(body?.tools).toBeUndefined();
+    expect(events).toEqual([{ type: "text.delta", text: "answer" }, { type: "done" }]);
+  });
+
+  it("serializes tool definitions and loop messages using the OpenAI wire shape", async () => {
+    let body: Record<string, unknown> | undefined;
+    const adapter = new OpenAICompatibleAdapter({
+      model: "native-model",
+      baseUrl: "https://example.test/v1",
+      apiKey: "test-key",
+      fetchImpl: async (_url, init) => {
+        body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return sseResponse([{ choices: [{ delta: { content: "done" } }] }, "[DONE]"]);
+      },
+    });
+    await collect(adapter.stream({
+      model: "native-model",
+      messages: [
+        { role: "user", content: "What time is it?" },
+        { role: "assistant", content: "", tool_calls: [{ id: "call-1", name: "time_now", arguments: {} }] },
+        { role: "tool", content: "2026-08-22T00:00:00.000Z", tool_call_id: "call-1", name: "time_now" },
+      ],
+      tools: [{ name: "time_now", description: "Read UTC time", parameters: { type: "object" }, source: "host-core" }],
+    }, new AbortController().signal));
+
+    expect(body?.tools).toEqual([{
+      type: "function",
+      function: { name: "time_now", description: "Read UTC time", parameters: { type: "object" } },
+    }]);
+    expect(body?.messages).toEqual([
+      { role: "user", content: "What time is it?" },
+      { role: "assistant", content: null, tool_calls: [{ id: "call-1", type: "function", function: { name: "time_now", arguments: "{}" } }] },
+      { role: "tool", tool_call_id: "call-1", name: "time_now", content: "2026-08-22T00:00:00.000Z" },
+    ]);
+  });
+
+  it("captures usage sent after the finish chunk", async () => {
+    const adapter = new OpenAICompatibleAdapter({
+      model: "usage-model",
+      baseUrl: "https://example.test/v1",
+      apiKey: "test-key",
+      fetchImpl: async () => sseResponse([
+        { id: "provider-request-1", choices: [{ delta: { content: "answer" }, finish_reason: null }] },
+        { id: "provider-request-1", choices: [{ delta: {}, finish_reason: "stop" }] },
+        { id: "provider-request-1", choices: [], usage: { prompt_tokens: 7, completion_tokens: 3, total_tokens: 10 } },
+        "[DONE]",
+      ]),
+    });
+    const events = await collect(adapter.stream({ model: "usage-model", messages: [], tools: [] }, new AbortController().signal));
+    expect(events).toEqual([
+      { type: "text.delta", text: "answer" },
+      { type: "usage", usage: { promptTokens: 7, completionTokens: 3, totalTokens: 10, providerRequestId: "provider-request-1" } },
+      { type: "done" },
+    ]);
+    expect(adapter.lastUsage).toMatchObject({ promptTokens: 7, totalTokens: 10 });
+  });
+
+  it("turns incomplete provider markup into a protocol error", async () => {
+    const stream = new OpenAICompatibleAdapter({
+      model: "broken-model",
+      baseUrl: "https://example.test/v1",
+      apiKey: "test-key",
+      fetchImpl: async () => sseResponse([
+        { choices: [{ delta: { content: "<｜DSML｜tool_calls>" } }] },
+        "[DONE]",
+      ]),
+    }).stream({ model: "broken-model", messages: [], tools: [] }, new AbortController().signal);
+
+    await expect(collect(stream)).rejects.toBeInstanceOf(ModelProtocolError);
+  });
+});
+
+async function collect(stream: AsyncIterable<ModelStreamEvent>): Promise<ModelStreamEvent[]> {
+  const events: ModelStreamEvent[] = [];
+  for await (const event of stream) events.push(event);
+  return events;
+}
+
+function sseResponse(payloads: Array<Record<string, unknown> | string>, chunkSize = 1_000_000): Response {
+  const body = payloads.map((payload) => `data: ${typeof payload === "string" ? payload : JSON.stringify(payload)}\n\n`).join("");
+  const bytes = new TextEncoder().encode(body);
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+        controller.enqueue(bytes.slice(offset, offset + chunkSize));
+      }
+      controller.close();
+    },
+  });
+  return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+}

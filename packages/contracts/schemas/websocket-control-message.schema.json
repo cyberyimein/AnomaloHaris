@@ -1,0 +1,98 @@
+{
+  "additionalProperties": true,
+  "$id": "https://anomalo.dev/schemas/websocket-control-message.schema.json",
+  "type": "object",
+  "required": [
+    "type"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "type": "number"
+    },
+    "type": {
+      "anyOf": [
+        {
+          "anyOf": [
+            {
+              "const": "client.hello",
+              "type": "string"
+            },
+            {
+              "const": "user.message",
+              "type": "string"
+            },
+            {
+              "const": "run.stop",
+              "type": "string"
+            },
+            {
+              "const": "run.resume",
+              "type": "string"
+            },
+            {
+              "const": "browser.tool.result",
+              "type": "string"
+            },
+            {
+              "const": "ping",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "anyOf": [
+            {
+              "const": "session.state",
+              "type": "string"
+            },
+            {
+              "const": "client.ready",
+              "type": "string"
+            },
+            {
+              "const": "client.error",
+              "type": "string"
+            },
+            {
+              "const": "browser.tool.call",
+              "type": "string"
+            },
+            {
+              "const": "browser.tool.cancel",
+              "type": "string"
+            },
+            {
+              "const": "pong",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    "session_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "run_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "content": {
+      "type": "string"
+    },
+    "search_mode": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "data": {
+      "type": "object",
+      "patternProperties": {
+        "^(.*)$": {}
+      }
+    },
+    "error": {
+      "type": "string"
+    }
+  }
+}

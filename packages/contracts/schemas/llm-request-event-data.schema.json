@@ -1,0 +1,81 @@
+{
+  "additionalProperties": true,
+  "$id": "https://anomalo.dev/schemas/llm-request-event-data.schema.json",
+  "type": "object",
+  "required": [
+    "model_ref",
+    "provider_model",
+    "iteration",
+    "request",
+    "context"
+  ],
+  "properties": {
+    "model_ref": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "provider_model": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "iteration": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "request": {
+      "type": "object",
+      "required": [
+        "message_count",
+        "tool_count",
+        "response_format"
+      ],
+      "properties": {
+        "message_count": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tool_count": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "response_format": {
+          "minLength": 1,
+          "type": "string"
+        }
+      }
+    },
+    "context": {
+      "additionalProperties": true,
+      "type": "object",
+      "required": [
+        "segment_counts",
+        "total_message_count",
+        "tool_count",
+        "compiled_hash"
+      ],
+      "properties": {
+        "segment_counts": {
+          "type": "object",
+          "patternProperties": {
+            "^(.*)$": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        },
+        "total_message_count": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tool_count": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "compiled_hash": {
+          "minLength": 1,
+          "type": "string"
+        }
+      }
+    }
+  }
+}

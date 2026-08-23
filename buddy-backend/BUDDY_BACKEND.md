@@ -1,231 +1,110 @@
-# Buddy Backend 对接说明
+# Buddy 设备协议与迁移参考
 
-这份文档给开发 Buddy 客户端的 AI 使用，描述当前 Buddy 后端的代码结构、运行方式、HTTP API、设备协议和对齐要求。
+> 状态：设备/协议参考；活动服务位于 `apps/buddy-service`，当前不由 AnomaloHaris 默认加载。
+> 目的：由独立 Node Buddy 服务拥有设备控制、Hook Relay 和审批状态机，再通过 Node bridge plugin 向 Agent 暴露能力。
 
-## 目录结构
+AnomaloHaris 的核心运行时是 Node.js。Buddy 不挂载到 Node Host 的 HTTP、WebSocket 或 Agent
+Core 硬件层；Buddy 作为 `apps/buddy-service` 下的独立 Node 服务运行，负责硬件连接、Hook
+Relay、审批状态机和鉴权。Node Agent 只通过 `buddy-bridge` 插件调用 Buddy HTTP API，Skill
+只提供模型侧的使用说明。
 
-- `buddy_backend/gateway.py`：Buddy 连接网关。负责串口/TCP 连接、发送文本命令、读取 JSON Lines 事件、收发二进制音频帧。
-- `buddy_backend/audio_bridge.py`：Buddy 语音回合桥。仅在 `ANOMALO_BUDDY_AUDIO_AI_ENABLED=true` 时启动，把设备麦克风音频交给 agent 的 STT/LLM/TTS，再把回答音频回传给设备。
-- `buddy_backend/api.py`：FastAPI Buddy 管理接口，挂载在主服务的 `/api/buddy/*`。
-- `buddy_backend/copilot_api.py`：Copilot/Codex hook HTTP 接口，挂载在 `/api/copilot/hooks/{event_name}`。
-- `buddy_backend/copilot_hooks.py`：把 hook 事件转换成 Buddy 状态和可选审批请求。
-- `buddy_backend/tools.py`：把 Buddy 控制暴露成 agent tools。
-- `buddy_backend/skill_api.py`：给 `skills/` 下的 Buddy 技能调用的轻量 API。
-- `skills/`：Buddy 相关运行时技能，包括 presence、approval、events。
-- `docs/call-buddy-protocol.md`：设备侧 Call Buddy 协议原文，客户端实现时以它为低层协议细节来源。
-- `scripts/copilot_buddy_hook.py`：本地 hook 转发脚本，读取仓库根目录 `.env` 后把 hook payload 发到 Anomalo HTTP API。
+## 目录边界
 
-## 运行关系
+- `apps/buddy-service/src/gateway.ts`：Node Call Buddy TCP/可选串口适配和 JSON Lines 事件网关。
+- `apps/buddy-service/src/hook-relay.ts`：Node 会话隔离、顺序检查、状态投影和可选审批等待。
+- `apps/buddy-service/src/service.ts`：Node HTTP API、鉴权和 Hook 兼容路由。
+- `/Users/waynewong/.codex/hooks/codex-hook.mjs`：Codex stdin/stdout Hook 适配器，故障时 fail-open。
+- `apps/buddy-bridge/`：Agent Host 的可选 L2 插件，不包含硬件代码。
+- 旧 `buddy_backend/` Python 网关和工具已删除；迁移时只参考本目录的固件协议文档。
+- `docs/call-buddy-protocol.md`：设备侧 Call Buddy 低层协议参考。
 
-当前 Buddy 后端作为独立 Python 包 `buddy_backend` 存在，但仍由 `agent-backend/app/main.py` 统一挂载到同一个 FastAPI 进程中。
+不属于本批次的运行时包括：
 
-主服务启动时：
+- Buddy 音频桥和音频帧处理；
+- Buddy 视觉检测 API 和检测器；
+- 旧的 Copilot/Codex hook 转发脚本；Hook Relay 已迁移到 `apps/buddy-service`，不恢复旧脚本；
+- 将 Buddy 自动挂载进旧 FastAPI Host 的入口。
 
-1. `app.container.get_buddy_gateway()` 创建 `BuddyGateway`。
-2. 如果 `ANOMALO_BUDDY_TRANSPORT=tcp`，FastAPI lifespan 会自动启动 TCP listener。
-3. `ANOMALO_BUDDY_AUDIO_AI_ENABLED=false` 是默认值，因此不会加载 STT/TTS 语音模型。
-4. 只有显式启用 `ANOMALO_BUDDY_AUDIO_AI_ENABLED=true` 时，`BuddyAudioBridge.start()` 才启动后台线程，轮询 `BuddyGateway.wait_for_audio_turn()`。
-5. 前端、agent tools、skills、Copilot hooks 都通过同一个 gateway 操作 Buddy。
+Hook 状态机实现见 [`apps/buddy-service/src/hook-relay.ts`](../apps/buddy-service/src/hook-relay.ts)，协议和恢复边界见
+[`docs/design/buddy-hook-state-machine.md`](../docs/design/buddy-hook-state-machine.md)。
 
-本地运行（Buddy 需要通过局域网访问 HTTP 人脸接口，因此必须监听 `0.0.0.0`）：
+## 推荐的未来边界
+
+```text
+Node Host / Preset Model
+        │ fixed optional plugin binding
+        ▼
+buddy-bridge plugin
+        │ authenticated HTTP
+        ▼
+Buddy backend / Hook Relay
+        │ Call Buddy protocol
+        ▼
+StackChan / Buddy device
+```
+
+插件至少应独立拥有：
+
+1. 设备连接与断线重连；
+2. `buddy.status`、`buddy.events`、状态和审批工具；
+3. admin/service token 校验与日志脱敏；
+4. 可选能力声明和超时/故障隔离；
+5. 与 Node Host 的版本化插件契约。
+
+Node 服务启动：
 
 ```bash
-buddy-backend/scripts/run_local_dev.sh
+npm run build --workspace @anomalo/buddy-service
+npm run start --workspace @anomalo/buddy-service
 ```
 
-## 环境变量
+默认只监听 `127.0.0.1:8765`。远程或容器部署必须设置独立的
+`BUDDY_SERVICE_TOKEN` 和 `BUDDY_HOOK_TOKEN`；Node bridge 只接收显式 allowlist
+中的 `ANOMALO_BUDDY_*` 变量。
 
-- `ANOMALO_BUDDY_TRANSPORT`：`serial` 或 `tcp`。默认 `serial`。
-- `ANOMALO_BUDDY_SERIAL_PORT`：串口设备，例如 `/dev/tty.usbmodem2101`。
-- `ANOMALO_BUDDY_BAUD_RATE`：串口波特率，默认 `115200`。
-- `ANOMALO_BUDDY_TCP_HOST`：TCP listener 绑定地址，默认 `0.0.0.0`。
-- `ANOMALO_BUDDY_TCP_PORT`：TCP listener 端口，默认 `8787`。
-- `ANOMALO_BUDDY_TCP_CLIENT_IP`：可选客户端 IP 白名单。
-- `ANOMALO_BUDDY_HOST_NAME`：发给设备展示的 host 名称。
-- `ANOMALO_BUDDY_AUDIO_AI_ENABLED`：是否启用 Buddy 语音 AI 回合桥，默认 `false`。关闭时仍保留 TCP/串口连接、事件、审批、视觉等能力，但不会加载 STT/TTS 模型。
-- `ANOMALO_BUDDY_AUDIO_DEBUG_STORAGE`：`auto` / `on` / `off`，控制是否保存 Buddy 音频诊断文件。
-- `ANOMALO_BUDDY_VISION_ENABLED`：是否让检测结果控制 Buddy。启用后找到人脸会注视目标并暂停漫游。
-- `ANOMALO_BUDDY_VISION_PAUSE_MS`：人脸出现后的漫游暂停时长。默认 `0` 表示保持暂停，直到后续检测确认无人脸。
-- `ANOMALO_COPILOT_BUDDY_APPROVAL_TIMEOUT_SECONDS`：hook 审批等待秒数，默认 `90`。
-- `ANOMALO_COPILOT_BUDDY_PERMISSION_BRIDGE_ENABLED`：是否让 `permissionRequest` 真的等待 Buddy 审批，默认 `false`。
+核心路由：
 
-## HTTP API
+- `GET /healthz`
+- `GET /v1/buddy/status`
+- `GET /v1/buddy/events`
+- `POST /v1/buddy/state|text|look|led|approval`
+- `POST /v1/agent/events`
+- `POST /api/copilot/hooks/{event_name}`（兼容 Hook runner）
 
-所有 Buddy 管理接口都需要通过 `X-Anomalo-Admin-Token` 访问，除非服务未配置 `ANOMALO_ADMIN_TOKEN`。
+Node Host 不应因为 Buddy 未安装、设备离线或插件崩溃而影响普通 Agent、Preset Model、
+旧 API 或 WebSocket 会话。
 
-### `GET /api/buddy/status`
+## 当前设备协议摘要
 
-返回连接状态、transport、TCP/串口信息、音频输入状态、最近事件数量和可用串口。
-
-### `POST /api/buddy/connect`
-
-请求体可为空，也可覆盖连接参数：
-
-```json
-{
-  "transport": "tcp",
-  "port": "/dev/tty.usbmodem2101",
-  "baud_rate": 115200,
-  "tcp_host": "0.0.0.0",
-  "tcp_port": 8787,
-  "tcp_client_ip": "192.0.2.20"
-}
-```
-
-### `POST /api/buddy/disconnect`
-
-断开当前串口/TCP 连接并停止 listener。
-
-### `GET /api/buddy/events?after_id=0&limit=50`
-
-返回 gateway 缓存的 JSON Lines 事件。客户端轮询时用 `after_id` 做增量读取。
-
-### `POST /api/buddy/command`
-
-发送原始文本命令：
-
-```json
-{ "command": "CB think asking model" }
-```
-
-### `POST /api/buddy/state`
-
-发送高层状态：
-
-```json
-{ "state": "thinking", "text": "asking model" }
-```
-
-支持状态：`connect`、`disconnect`、`idle`、`listening`、`thinking`、`waiting_user`、`speaking`、`stop`、`error`、`coding`、`approval`、`done`。`waiting_user` 当前复用固件的 thinking 视觉，但在 Codex run projection 中保留独立语义。
-
-Codex hook 不再把每一个 `PermissionRequest` 直接解释为 Buddy 审批提醒。只有 payload
-明确携带 `requires_user_action=true`（或等价 pending-user 状态），或者启用了 Buddy permission
-bridge 时，Buddy 才进入 approval。自动审批保持 coding，后续 tool/session 事件按 session ID
-清理或更新投影。
-
-### `POST /api/buddy/approval`
-
-在 Buddy 上展示审批请求并等待事件响应：
-
-```json
-{
-  "request_id": "codex-123",
-  "text": "Allow shell command?",
-  "timeout_seconds": 30
-}
-```
-
-设备应返回 `approval.response` 事件，payload 至少包含 `id` 和 `choice`。`choice` 建议使用 `approve`、`deny` 或 `timeout`。
-
-### `POST /api/buddy/vision/detect`
-
-multipart 图片上传接口。服务端在第一次请求时懒加载人脸检测器，返回检测到的人脸框。
-默认只检测，不控制 Buddy；传 `apply_buddy_action=true` 时，检测到脸会按配置尝试暂停漫游。
-
-### `POST /api/buddy/vision/frame`
-
-Buddy 设备侧上传低频摄像头帧的接口。和 `/detect` 使用同一个检测器，但默认
-`apply_buddy_action=true`。建议设备每几分钟上传一张低分辨率 JPEG 或灰度转 RGB 图片即可，
-不需要实时视频流。
-
-这个接口允许三种访问方式：localhost、管理端 token，或设备侧专用访问。设备侧专用访问
-可通过请求头 `X-Anomalo-Buddy-Vision-Token` 对应
-`ANOMALO_BUDDY_VISION_FRAME_TOKEN`，也可以通过
-`ANOMALO_BUDDY_VISION_FRAME_CLIENT_IP` / `ANOMALO_BUDDY_TCP_CLIENT_IP` 配置 Buddy 设备 IP。
-
-检测到任意人脸时，如果 `ANOMALO_BUDDY_VISION_ENABLED=true` 且 Buddy 已连接，服务端会先暂停
-漫游，再用最大人脸框的中心点计算 `LOOK` 目标，让 Buddy 看向人脸：
+低层协议是每行一条文本命令、设备事件使用 JSON Lines。常用主机命令包括：
 
 ```text
-ROAM PAUSE <ANOMALO_BUDDY_VISION_PAUSE_MS>
-LOOK <yaw> <pitch> <ANOMALO_BUDDY_VISION_LOOK_SPEED>
-CB idle person nearby
+CB connect [text]
+CB idle [text]
+CB listen [text]
+CB think [text]
+CB speak [text]
+CB error [text]
+CODEX CODING [text]
+CODEX APPROVAL <id> [text]
+CODEX DONE [text]
+STATE idle|listening|thinking|speaking|coding|approval|done|error|sleep
+TEXT <text>
+APPROVAL <id> [text]
+LOOK <yaw> <pitch> [speed]
+LED <r> <g> <b> [ms]
 ```
 
-`LOOK` 使用绝对舵机目标。服务端默认以 `ANOMALO_BUDDY_VISION_LOOK_CENTER_YAW=0`、
-`ANOMALO_BUDDY_VISION_LOOK_CENTER_PITCH=260` 作为中心姿态，再叠加人脸相对画面中心的偏移；
-因此画面右侧检测到脸时会发类似 `LOOK 127 260 40`，而不是把 pitch 发成 `0`。
+常用设备事件包括 `device.boot`、`device.heartbeat`、`buddy.state.changed`、
+`approval.response`、`touch.click` 和 `touch.listen_cancel`。完整协议以
+`docs/call-buddy-protocol.md` 为准；其中的音频帧章节是历史固件能力，不构成 AnomaloHaris
+Host 的功能承诺，未来是否恢复必须由独立插件重新评估。
 
-如果人脸已经接近画面中心，服务端会按 `ANOMALO_BUDDY_VISION_LOOK_DEADBAND` 跳过 `LOOK`，只
-暂停漫游。方向校准可用 `ANOMALO_BUDDY_VISION_LOOK_INVERT_X` 和
-`ANOMALO_BUDDY_VISION_LOOK_INVERT_Y`。
+## 恢复前检查
 
-如果后续检测不到人脸，并且漫游是由 vision 上一次检测暂停的，服务端会发送：
-
-```text
-ROAM RESUME
-```
-
-固件侧应支持 `ROAM PAUSE <ms>`、`ROAM RESUME` 和 `ROAM STATUS`，用于停止和恢复 idle
-wander。
-
-### `GET /api/buddy/vision/status`
-
-返回 Buddy vision 是否启用、detector 是否已经加载、阈值、暂停时长和最近一次检测结果。
-
-### `POST /api/buddy/vision/start`
-
-按需预加载人脸检测器。
-
-### `POST /api/buddy/vision/enable` / `POST /api/buddy/vision/disable`
-
-运行时启用或关闭整个 Vision 功能。`disable` 会卸载检测器并拒绝后续摄像头帧；`enable`
-只恢复 Vision 功能，不会自动加载检测器，仍需调用 `start`。
-
-默认检测器是 `ANOMALO_BUDDY_VISION_PROVIDER=opencv_haar`。它是 CPU-only 的 OpenCV Haar
-检测器，适合几分钟一次的低功耗“看到人脸/照片就停止漫游”场景。MediaPipe BlazeFace 可通过
-`ANOMALO_BUDDY_VISION_PROVIDER=mediapipe_blazeface` 启用，但需要额外安装兼容的 MediaPipe；
-新版本 MediaPipe 不再提供旧的 `mediapipe.solutions.face_detection` API，macOS 下也可能因为
-OpenGL 初始化失败不可用。
-
-## 设备协议摘要
-
-低层协议详见 `docs/call-buddy-protocol.md`。客户端 AI 对齐时重点保证这些能力：
-
-- 连接后可以接收 host 发来的文本命令，每条命令以换行分隔。
-- 设备主动事件用 JSON Lines 发回 host，每行一个 JSON object。
-- 常用 host 命令包括 `CB idle`、`CB listen`、`CB think`、`CB speak`、`CB error`、`CODEX CODING`、`CODEX DONE`、`TEXT`、`LOOK`、`LED`、`APPROVAL`、`ROAM PAUSE`、`ROAM RESUME`。
-- 设备事件包括 `device.heartbeat`、`buddy.state.changed`、`touch.click`、`touch.listen_cancel`、`approval.response`、`audio.input.start`、`audio.input.stop`。
-- TCP 模式下 Buddy 是 client，Anomalo 是 server；Buddy 主动连接 `ANOMALO_BUDDY_TCP_HOST:ANOMALO_BUDDY_TCP_PORT`。
-
-## 音频回合
-
-Buddy 设备侧负责采集 PCM16 麦克风音频并按协议发送给 host。后端流程：
-
-1. `gateway.py` 收到音频输入开始、二进制音频帧、音频输入结束。
-2. 完整音频被封装成 `BuddyAudioTurn`。
-3. 如果 `ANOMALO_BUDDY_AUDIO_AI_ENABLED=false`，音频回合只会排队保留在 gateway 中，不会进入语音模型。
-4. 如果启用语音 AI，`audio_bridge.py` 对 PCM 做预处理和归一化。
-5. 调用 agent 后端的 `VoiceService`：STT -> agent run -> TTS。
-6. TTS 音频被转换为 Buddy 需要的 PCM 输出格式，按 chunk 发回设备。
-
-客户端需要确保采样率、声道数、sample width 与协议声明一致；如果音量过低，后端会让 Buddy 回到 `idle` 并提示 `mic too quiet`。
-
-## Agent Tools 和 Skills
-
-主 agent 会加载 Buddy tool provider：
-
-- `buddy_set_state`
-- `buddy_set_text`
-- `buddy_request_approval`
-- `buddy_look`
-- `buddy_set_led`
-
-Buddy 技能位于 `buddy-backend/skills`，由 agent 后端的多目录技能加载器读取。客户端 AI 不需要直接调用这些 Python 文件，但要保证设备协议能支撑技能发出的状态、文本、LED、审批和事件查询需求。
-
-## 客户端对齐清单
-
-- 能用串口或 TCP 建立长连接。
-- 文本命令按行解析，未知命令要返回可诊断事件而不是断开。
-- 状态命令会改变设备 UI：idle、listening、thinking、speaking、coding、approval、done、error。
-- 周期性发送 `device.heartbeat`，payload 包含当前 state 和可选电量。
-- 触摸/按钮事件用 JSON Lines 回传，事件名稳定。
-- 审批 UI 能根据 `APPROVAL`/状态命令展示请求，并返回 `approval.response`。
-- 如实现低频视觉检测，按几分钟一次上传低分辨率帧到 `/api/buddy/vision/frame`，
-  并携带 `X-Anomalo-Buddy-Vision-Token` 或确保设备 IP 匹配服务端配置。
-- 如希望检测到人脸后停止电机噪音并看向人脸，固件需要实现 `ROAM PAUSE <ms>` 停止
-  idle wander、`ROAM RESUME` 恢复 idle wander，并支持已有 `LOOK <yaw> <pitch> [speed]`
-  舵机指向命令。
-- 麦克风音频流能明确 start/stop，并发送完整 PCM 帧。
-- 播放 host 返回音频时，设备状态应能进入 speaking，播放结束后回到 idle。
-- 出错时发事件说明原因，避免只静默断线。
+- 为插件新增独立包、manifest、权限和集成测试；
+- 不修改 Node Host 默认插件 allowlist；
+- Hook runner 只指向 Buddy backend，不重新挂载到 Node Host；
+- 明确音频/视觉是否仍是产品需求；若需要，作为独立媒体插件或外部服务实现；
+- 更新 ADR 和本文档，确保没有重新引入 Python Host、FastAPI 路由或隐式硬件依赖。
+- 串口能力通过可选 `serialport` 适配提供；没有该依赖时 Node 服务仍可使用 TCP 和模拟/测试网关。

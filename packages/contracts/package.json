@@ -1,0 +1,33 @@
+{
+  "name": "@anomalo/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./fixtures/agent-events.json": "./fixtures/agent-events.json",
+    "./session-v2.sql": "./session-v2.sql",
+    "./schemas/*": "./schemas/*"
+  },
+  "files": [
+    "dist",
+    "fixtures",
+    "schemas",
+    "session-v2.sql"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/export-schemas.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@sinclair/typebox": "^0.34.41",
+    "ajv": "^8.17.1"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "additionalProperties": true,
+  "$id": "https://anomalo.dev/schemas/openai-usage.schema.json",
+  "type": "object",
+  "required": [
+    "prompt_tokens",
+    "completion_tokens",
+    "total_tokens"
+  ],
+  "properties": {
+    "prompt_tokens": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "completion_tokens": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "total_tokens": {
+      "minimum": 0,
+      "type": "integer"
+    }
+  }
+}

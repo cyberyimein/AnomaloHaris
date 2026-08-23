@@ -20,7 +20,7 @@ export function createAgentSessionProjection({
   const agentState = ref("Idle");
   const runStatus = ref("Idle");
   const runId = ref("none");
-  const promptProfile = ref("default");
+  const promptProfile = ref("agent");
   const iterationCount = ref("0");
   const stateDetail = ref("Waiting for input.");
   const runTitle = ref("Ready");
@@ -50,8 +50,13 @@ export function createAgentSessionProjection({
         addEventLog("run.started", event.run_id);
         break;
       case "llm.request": {
-        renderLlmRequest(data.request, data.context, data.iteration);
-        const summary = summarizeLlmRequest(data.request);
+        const request = {
+          ...(data.request || {}),
+          ...(data.model_ref ? { model_ref: data.model_ref } : {}),
+          ...(data.provider_model ? { provider_model: data.provider_model } : {}),
+        };
+        renderLlmRequest(request, data.context, data.iteration);
+        const summary = summarizeLlmRequest(request);
         setAgentState("LLM Request", summary);
         activeThinkingActivityId = addConversationActivity({
           kind: "thinking",
@@ -484,9 +489,19 @@ export function createAgentSessionProjection({
   function renderLlmRequest(request, context, iteration) {
     const safeRequest = request || {};
     const messages = Array.isArray(safeRequest.messages) ? safeRequest.messages : [];
-    latestMessagesJson.value = JSON.stringify(messages, null, 2);
+    latestMessagesJson.value = JSON.stringify(
+      messages.length > 0
+        ? messages
+        : {
+            message_count: safeRequest.message_count ?? "Unavailable",
+            tool_count: safeRequest.tool_count ?? "Unavailable",
+            response_format: safeRequest.response_format || "text",
+          },
+      null,
+      2,
+    );
     copyMessagesDisabled.value = messages.length === 0;
-    promptProfile.value = context?.profile || "default";
+    promptProfile.value = context?.profile || "agent";
     iterationCount.value = String(iteration || 0);
     setPromptOutput({ source: "llm.request", iteration, context, request: safeRequest });
     contextStats.value = contextStatRows(safeRequest, context, messages);
@@ -671,9 +686,16 @@ function refreshTargets(data) {
 }
 
 function summarizeLlmRequest(request) {
-  const messageCount = request?.messages?.length || 0;
-  const toolCount = request?.tools?.length || 0;
-  return `${messageCount} prompt parts · ${toolCount} tools · ${request?.model || "unknown model"}`;
+  const messageCount = displayCount(
+    request?.message_count,
+    Array.isArray(request?.messages) ? request.messages : undefined,
+  );
+  const toolCount = displayCount(
+    request?.tool_count,
+    Array.isArray(request?.tools) ? request.tools : undefined,
+  );
+  const model = request?.model || request?.provider_model || request?.model_ref || "model unavailable";
+  return `${messageCount} prompt parts · ${toolCount} tools · ${model}`;
 }
 
 function summarizeToolArguments(argumentsValue) {
@@ -696,15 +718,34 @@ function truncateInline(value, maxLength) {
 }
 
 function contextStatRows(request, context, messages) {
+  const messageCount = displayCount(
+    request?.message_count,
+    Array.isArray(request?.messages) ? messages : undefined,
+  );
+  const toolCount = displayCount(
+    request?.tool_count,
+    Array.isArray(request?.tools) ? request.tools : undefined,
+  );
+  const segments = context?.segment_counts || {};
   return [
-    { label: "Prompt Parts", value: messages.length },
-    { label: "Prompt", value: context?.prompt_message_count ?? 0 },
-    { label: "Memory", value: context?.memory_message_count ?? 0 },
-    { label: "Skills", value: context?.active_skill_count ?? 0 },
-    { label: "MCP", value: context?.active_mcp_server_count ?? 0 },
-    { label: "History", value: context?.history_message_count ?? 0 },
-    { label: "Tools", value: context?.tool_count ?? request?.tools?.length ?? 0 },
+    { label: "Prompt Parts", value: messageCount },
+    { label: "Prompt", value: context?.prompt_message_count ?? segments.prompt ?? "Unavailable" },
+    { label: "Memory", value: context?.memory_message_count ?? segments.memory ?? "Unavailable" },
+    { label: "Skills", value: context?.active_skill_count ?? segments.skills ?? "Unavailable" },
+    { label: "MCP", value: context?.active_mcp_server_count ?? segments.mcp ?? "Unavailable" },
+    { label: "History", value: context?.history_message_count ?? segments.history ?? "Unavailable" },
+    { label: "Tools", value: context?.tool_count ?? toolCount },
   ];
+}
+
+function displayCount(explicit, collection) {
+  if (Number.isFinite(explicit)) {
+    return explicit;
+  }
+  if (Array.isArray(collection)) {
+    return collection.length;
+  }
+  return "Unavailable";
 }
 
 function sourceForIndex(index, context) {

@@ -1,15 +1,19 @@
 {
-  "name": "anomalo-frontend",
+  "name": "anomaloharis-frontend",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": {
+    "predev": "npm --prefix ../packages/contracts run build",
     "dev": "vite --host 127.0.0.1",
+    "prebuild": "npm --prefix ../packages/contracts run build",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
+    "pretest": "npm --prefix ../packages/contracts run build",
     "test": "vitest run"
   },
   "dependencies": {
+    "@anomalo/contracts": "0.1.0",
     "@lucide/vue": "^1.21.0",
     "vue": "^3.5.13"
   },

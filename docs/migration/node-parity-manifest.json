@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "target_runtime": "node",
+  "default_preset_model": "anomalo@1",
+  "status": "partial",
+  "source": {
+    "legacy_python_host": "removed",
+    "node_host": "apps/node-host/src",
+    "frontend": "frontend/src"
+  },
+  "capabilities": [
+    {
+      "id": "chat",
+      "legacy_routes": ["POST /api/chat", "POST /api/chat/stream", "POST /api/chat/stop", "WS /ws/chat/{session_id}"],
+      "node_routes": ["POST /api/chat", "POST /api/chat/stream", "POST /api/chat/stop", "WS /ws/chat/{session_id}"],
+      "status": "partial",
+      "gaps": ["default preset model resolution", "legacy response-shape parity"],
+      "tests": ["apps/node-host/src/host.test.ts", "apps/node-host/src/core.test.ts"]
+    },
+    {
+      "id": "preset_models",
+      "legacy_routes": ["GET /api/manage/agents", "POST /api/manage/agents", "PATCH /api/manage/agents/{agent_ref}", "POST /api/agents/{agent_ref}", "POST /api/agents/{agent_ref}/chat", "POST /api/agents/{agent_ref}/chat/stream"],
+      "node_routes": ["GET /api/preset-models", "GET /api/manage/preset-models", "POST /api/manage/preset-models", "POST /api/manage/preset-models/{name}/versions/{version}/validate", "POST /api/manage/preset-models/{name}/versions/{version}/publish", "POST /api/manage/preset-models/{name}/versions/{version}/retire", "POST /api/preset-models/{name}/versions/{version}/runs", "POST /api/preset-models/{name}/versions/{version}/runs/stream"],
+      "status": "partial",
+      "gaps": ["legacy management alias intentionally not used by new UI", "migration fixture"],
+      "tests": ["apps/node-host/src/preset-models.test.ts", "apps/node-host/src/compute-api.test.ts", "apps/node-host/src/host.test.ts"]
+    },
+    {
+      "id": "sessions",
+      "legacy_routes": ["GET /api/sessions", "GET /api/sessions/{session_id}", "DELETE /api/sessions/{session_id}", "GET /api/sessions/{session_id}/skills", "GET /api/sessions/{session_id}/mcp"],
+      "node_routes": ["GET /api/sessions", "GET /api/sessions/{session_id}", "DELETE /api/sessions/{session_id}", "GET /api/sessions/{session_id}/web-traces", "GET/PATCH /api/sessions/{session_id}/search-mode", "GET/PUT /api/sessions/{session_id}/skills", "GET/PUT /api/sessions/{session_id}/mcp"],
+      "status": "partial",
+      "gaps": ["migration fixture", "legacy history shape parity"],
+      "tests": ["apps/node-host/src/sqlite.test.ts", "apps/node-host/src/host.test.ts"]
+    },
+    {
+      "id": "context_resources",
+      "legacy_routes": ["GET /api/prompts", "GET /api/memory", "GET /api/skills", "GET /api/mcp", "POST /api/mcp/reload"],
+      "node_routes": ["GET /api/prompts", "GET /api/memory", "POST /api/memory/upload", "GET /api/skills", "GET /api/mcp", "POST /api/mcp/reload"],
+      "status": "partial",
+      "gaps": ["frontend context inspector parity", "multipart memory upload compatibility"],
+      "tests": ["apps/node-host/src/resources.test.ts", "apps/node-host/src/host.test.ts"]
+    },
+    {
+      "id": "tools_and_provider",
+      "legacy_routes": ["GET /api/tools", "GET /api/models", "GET /api/openrouter/credits"],
+      "node_routes": ["GET /api/tools", "GET /api/models", "GET /api/manage/providers", "GET /api/openrouter/credits"],
+      "status": "partial",
+      "gaps": ["credits require configured provider key", "DSML conformance"],
+      "tests": ["apps/node-host/src/model.test.ts", "apps/node-host/src/host.test.ts"]
+    },
+    {
+      "id": "buddy_media_artifacts",
+      "legacy_routes": ["/api/buddy/*", "/api/audio/*", "/api/vision/*", "/api/copilot/*", "/api/artifacts/*"],
+      "node_routes": ["GET /api/plugins", "GET /api/manage/plugins"],
+      "status": "optional-plugin",
+      "disposition": "Buddy/audio/vision are not Node Host core; they require an explicitly installed plugin or remain deprecated.",
+      "gaps": ["No built-in Buddy/media/artifact routes by design", "External capability plugin packages and their own gates are separate deliverables"],
+      "tests": ["apps/node-host/src/plugins.test.ts"]
+    },
+    {
+      "id": "management_and_observability",
+      "legacy_routes": ["/api/manage/*", "/api/health", "/api/runtime"],
+      "node_routes": ["GET /health", "GET /api/runtime", "GET /api/manage/preset-models", "GET /api/manage/plugins", "GET /api/manage/providers", "GET /api/manage/usage"],
+      "status": "partial",
+      "gaps": ["admin auth", "usage and cost records", "migration report"],
+      "tests": ["apps/node-host/src/host.test.ts"]
+    }
+  ],
+  "acceptance": {
+    "node_startup_is_not_completion": true,
+    "real_provider_tool_call_required": true,
+    "frontend_must_not_infer_missing_llm_fields": true,
+    "production_image_runtime": "node",
+    "python_runtime_is_not_a_production_dependency": true,
+    "optional_media_capabilities_do_not_block_core": true
+  }
+}
