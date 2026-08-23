@@ -14,7 +14,7 @@ frontend/.vite/
 local-fonts/
 artifacts/
 archives/
-agent-backend/artifacts/
+runtime-bundle/artifacts/
 data/
 dist/
 build/

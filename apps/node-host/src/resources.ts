@@ -76,7 +76,7 @@ export class FileResourceLoader implements ResourceLoader {
   constructor(options: FileResourceLoaderOptions) {
     this.projectRoot = resolve(options.projectRoot);
     this.skillDirs = options.skillDirs ?? [join(this.projectRoot, "skills")];
-    this.promptConfigPath = options.promptConfigPath ?? join(this.projectRoot, "agent-backend", "config", "prompts.yaml");
+    this.promptConfigPath = options.promptConfigPath ?? join(this.projectRoot, "runtime-bundle", "config", "prompts.yaml");
     this.mcpConfigPath = options.mcpConfigPath ?? join(this.projectRoot, "config", "mcp_servers.yaml");
     this.mcpInstructionDir = join(dirname(this.mcpConfigPath), "mcp");
     this.maxFileBytes = options.maxFileBytes ?? 256_000;
@@ -193,7 +193,7 @@ export class FileResourceLoader implements ResourceLoader {
   private readMemoryFiles(messages: ModelMessage[]): number {
     const candidates = [
       join(this.projectRoot, "AGENTS.md"),
-      join(this.projectRoot, "agent-backend", "config", "AGENTS.md"),
+      join(this.projectRoot, "runtime-bundle", "config", "AGENTS.md"),
       join(this.projectRoot, "docs", "AGENTS.md"),
     ];
     let count = 0;
@@ -211,8 +211,8 @@ export class FileResourceLoader implements ResourceLoader {
     if (!normalized) return undefined;
     const candidates = [
       join(this.projectRoot, "prompts", `${normalized}.md`),
-      join(this.projectRoot, "agent-backend", "prompts", `${normalized}.md`),
-      join(this.projectRoot, "agent-backend", "config", "prompts", `${normalized}.md`),
+      join(this.projectRoot, "runtime-bundle", "prompts", `${normalized}.md`),
+      join(this.projectRoot, "runtime-bundle", "config", "prompts", `${normalized}.md`),
     ];
     for (const path of candidates) {
       const content = readBoundedFile(path, this.maxFileBytes);

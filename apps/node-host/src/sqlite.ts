@@ -1,7 +1,6 @@
-import { createHash } from "node:crypto";
 import { dirname } from "node:path";
-import { mkdirSync, existsSync } from "node:fs";
-import { DatabaseSync, type SQLInputValue } from "node:sqlite";
+import { mkdirSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 
 import type { EntryId, RunId, SessionId } from "@anomalo/contracts";
 
@@ -306,6 +305,7 @@ export class SqliteSessionAdapter implements SessionRepository {
     const limit = Math.max(1, Math.min(query.limit ?? 100, 500));
     const rows = this.db.prepare(`
       SELECT s.session_id, s.title, s.updated_at,
+        json_extract(s.metadata_json, '$.preset_model_ref') AS preset_model_ref,
         EXISTS(SELECT 1 FROM run_checkpoints c WHERE c.session_id = s.session_id) AS can_resume,
         (
           SELECT count(*) FROM session_entries e
@@ -324,6 +324,7 @@ export class SqliteSessionAdapter implements SessionRepository {
       messageCount: Number(row.message_count ?? 0),
       updatedAt: String(row.updated_at),
       canResume: Boolean(row.can_resume),
+      ...(typeof row.preset_model_ref === "string" ? { presetModelRef: row.preset_model_ref } : {}),
     }));
   }
 
@@ -391,16 +392,10 @@ export class SqliteSessionAdapter implements SessionRepository {
       this.ensureResources(sessionId);
       return;
     }
-    if (legacyTableExists(this.db)) migrateLegacySession(this.db, sessionId, this.clock);
-    const migrated = this.db.prepare(
-      "SELECT session_id FROM agent_sessions WHERE session_id = ?",
-    ).get(sessionId);
-    if (!migrated) {
-      const now = this.clock.now();
-      this.db.prepare(`
-        INSERT INTO agent_sessions(session_id, schema_version, created_at, updated_at) VALUES (?, ?, ?, ?)
-      `).run(sessionId, SESSION_V2_SCHEMA_VERSION, now, now);
-    }
+    const now = this.clock.now();
+    this.db.prepare(`
+      INSERT INTO agent_sessions(session_id, schema_version, created_at, updated_at) VALUES (?, ?, ?, ?)
+    `).run(sessionId, SESSION_V2_SCHEMA_VERSION, now, now);
   }
 
   private ensureResources(sessionId: SessionId): void {
@@ -480,245 +475,50 @@ export class SqliteSessionAdapter implements SessionRepository {
   }
 }
 
-export type MigrationError = { sessionId: string; error: string };
-export type SessionMigrationReport = {
-  dryRun: boolean;
-  legacySessions: number;
-  migratedSessions: number;
-  skippedSessions: number;
-  errors: MigrationError[];
-  sourceHash: string;
-};
-
-export function migrateLegacyDatabase(
-  dbPath: string,
-  options: { dryRun?: boolean; clock?: Clock } = {},
-): SessionMigrationReport {
-  const dryRun = options.dryRun ?? false;
-  if (dbPath !== ":memory:" && !existsSync(dbPath)) {
-    return { dryRun, legacySessions: 0, migratedSessions: 0, skippedSessions: 0, errors: [], sourceHash: hashJson([]) };
-  }
-  const db = new DatabaseSync(dbPath);
-  const clock = options.clock ?? systemClock;
-  try {
-    if (!legacyTableExists(db)) {
-      return { dryRun, legacySessions: 0, migratedSessions: 0, skippedSessions: 0, errors: [], sourceHash: hashJson([]) };
-    }
-    const rows = db.prepare("SELECT * FROM sessions ORDER BY session_id").all() as Row[];
-    const report: SessionMigrationReport = {
-      dryRun,
-      legacySessions: rows.length,
-      migratedSessions: 0,
-      skippedSessions: 0,
-      errors: [],
-      sourceHash: hashJson(rows),
-    };
-    if (dryRun) {
-      for (const row of rows) {
-        const sessionId = String(row.session_id);
-        try {
-          validateLegacyRow(row);
-        } catch (error) {
-          report.errors.push({ sessionId, error: error instanceof Error ? error.message : String(error) });
-        }
-      }
-      return report;
-    }
-    initializeSessionV2Database(db, clock);
-    for (const row of rows) {
-      const sessionId = String(row.session_id);
-      try {
-        if (db.prepare("SELECT 1 FROM agent_sessions WHERE session_id = ?").get(sessionId)) {
-          report.skippedSessions += 1;
-          continue;
-        }
-        migrateLegacyRow(db, row, clock);
-        report.migratedSessions += 1;
-      } catch (error) {
-        report.errors.push({ sessionId, error: error instanceof Error ? error.message : String(error) });
-      }
-    }
-    return report;
-  } finally {
-    db.close();
-  }
-}
-
-function migrateLegacySession(db: DatabaseSync, sessionId: SessionId, clock: Clock): void {
-  const row = db.prepare("SELECT * FROM sessions WHERE session_id = ?").get(sessionId) as Row | undefined;
-  if (!row) return;
-  if (db.prepare("SELECT 1 FROM agent_sessions WHERE session_id = ?").get(sessionId)) return;
-  migrateLegacyRow(db, row, clock);
-}
-
-function migrateLegacyRow(db: DatabaseSync, row: Row, clock: Clock): void {
-  const sessionId = String(row.session_id);
-  const now = String(row.updated_at || clock.now());
-  const { checkpoint, messages } = validateLegacyRow(row);
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    db.prepare(`
-      INSERT INTO agent_sessions(session_id, schema_version, title, search_mode, metadata_json, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      sessionId,
-      SESSION_V2_SCHEMA_VERSION,
-      String(row.title || firstTitle(messages)),
-      String(row.search_mode || "diy"),
-      JSON.stringify({
-        legacy_source_hash: hashJson(row),
-        legacy_messages_json: String(row.messages_json || "[]"),
-        legacy_checkpoint_json: row.checkpoint_json ?? null,
-      }),
-      now,
-      now,
-    );
-    const insertResource = db.prepare(
-      "INSERT INTO session_resources(session_id, resource_type, resource_name, active) VALUES (?, ?, ?, 1)",
-    );
-    for (const name of parseStringArrayStrict(row.active_skills_json, "active_skills_json")) insertResource.run(sessionId, "skill", name);
-    for (const name of parseStringArrayStrict(row.active_mcp_servers_json, "active_mcp_servers_json")) insertResource.run(sessionId, "mcp", name);
-    let parent: string | null = null;
-    for (const [index, message] of messages.entries()) {
-      if (!message || typeof message !== "object") continue;
-      const payload = message as Record<string, unknown>;
-      const entryId = `legacy-${hashJson({ sessionId, index, payload }).slice(0, 24)}`;
-      db.prepare(`
-        INSERT INTO session_entries(entry_id, session_id, parent_entry_id, kind, role, payload_json, created_at)
-        VALUES (?, ?, ?, 'message', ?, ?, ?)
-      `).run(entryId, sessionId, parent, typeof payload.role === "string" ? payload.role : null, JSON.stringify(payload), now);
-      parent = entryId;
-    }
-    db.prepare("UPDATE agent_sessions SET active_leaf_entry_id = ? WHERE session_id = ?").run(parent, sessionId);
-    if (checkpoint) {
-      const runId = String(checkpoint.run_id || `legacy-run-${sessionId}`);
-      const checkpointMessages = parseArrayStrict(checkpoint.messages, "checkpoint.messages");
-      db.prepare(`
-        INSERT INTO runs(run_id, session_id, status, last_entry_id, config_json, started_at)
-        VALUES (?, ?, 'paused', ?, '{}', ?)
-      `).run(runId, sessionId, parent, now);
-      db.prepare(`
-        INSERT INTO run_checkpoints(run_id, session_id, reason, iteration, state_json, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        runId,
-        sessionId,
-        String(checkpoint.reason || "stopped"),
-        Number(checkpoint.iteration || 0),
-        JSON.stringify({
-          promptProfile: String(checkpoint.prompt_profile || "agent"),
-          originalUserContent: String(checkpoint.user_content || ""),
-          currentUserMessage: { role: "user", content: "Continue the interrupted task from the saved context." },
-          assistantText: "",
-          pendingToolCalls: [],
-          completedToolCallIds: [],
-          loopMessages: [],
-          legacyMessages: checkpointMessages,
-          bootstrapContext: parseArrayStrict(checkpoint.bootstrap_context, "checkpoint.bootstrap_context"),
-          ...(checkpoint.response_format ? { responseFormat: checkpoint.response_format } : {}),
-          model: "legacy",
-          searchMode: String(row.search_mode || "diy"),
-        }),
-        now,
-        now,
-      );
-    }
-    for (const trace of parseArrayStrict(row.web_traces_json, "web_traces_json")) {
-      if (!trace || typeof trace !== "object") continue;
-      const payload = trace as Record<string, unknown>;
-      const traceId = typeof payload.id === "string" ? payload.id : `legacy-trace-${hashJson(payload).slice(0, 24)}`;
-      db.prepare(`
-        INSERT OR IGNORE INTO web_traces(trace_id, session_id, run_id, tool_call_id, payload_json, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `).run(traceId, sessionId, stringOrNull(payload.run_id), stringOrNull(payload.tool_call_id), JSON.stringify(payload), String(payload.timestamp || now));
-    }
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
-}
-
-function validateLegacyRow(row: Row): {
-  checkpoint: Record<string, unknown> | undefined;
-  messages: unknown[];
-} {
-  const checkpoint = parseNullableObjectStrict(row.checkpoint_json, "checkpoint_json");
-  const messages = checkpoint
-    ? parseArrayStrict(checkpoint.messages, "checkpoint.messages")
-    : parseArrayStrict(row.messages_json, "messages_json");
-  parseStringArrayStrict(row.active_skills_json, "active_skills_json");
-  parseStringArrayStrict(row.active_mcp_servers_json, "active_mcp_servers_json");
-  if (checkpoint) {
-    parseArrayStrict(checkpoint.messages, "checkpoint.messages");
-    parseArrayStrict(checkpoint.bootstrap_context, "checkpoint.bootstrap_context");
-  }
-  parseArrayStrict(row.web_traces_json, "web_traces_json");
-  return { checkpoint, messages };
-}
-
 function checkpointFromRow(row: Row): SessionCheckpoint {
   const raw = parseObject(row.state_json);
-  const legacyMessages = raw.legacyMessages ?? raw.legacy_messages;
-  const rawMessages = parseModelMessages(raw.messages ?? legacyMessages);
-  const explicitLoopMessages = raw.loopMessages ?? raw.loop_messages;
-  const loopMessages = Array.isArray(explicitLoopMessages)
-    ? parseModelMessages(explicitLoopMessages)
-    : legacyMessages === undefined
-      ? inferLoopMessages(rawMessages)
-      : [];
-  const responseFormat = parseResponseFormat(raw.responseFormat ?? raw.response_format);
-  const model = typeof raw.model === "string" && raw.model !== "legacy" ? raw.model : undefined;
-  const systemPrompt = stringValue(raw.systemPrompt ?? raw.system_prompt);
-  const presetModelRef = stringValue(raw.presetModelRef ?? raw.preset_model_ref);
-  const allowedToolNames = parseStringArray(raw.allowedToolNames ?? raw.allowed_tool_names);
-  const allowedPluginIds = parseStringArray(raw.allowedPluginIds ?? raw.allowed_plugin_ids);
-  const allowedPluginLocks = parsePluginLocks(raw.allowedPluginLocks ?? raw.allowed_plugin_locks);
+  const responseFormat = parseResponseFormat(raw.responseFormat);
+  const model = stringValue(raw.model);
+  const systemPrompt = stringValue(raw.systemPrompt);
+  const presetModelRef = stringValue(raw.presetModelRef);
+  const allowedToolNames = parseStringArray(raw.allowedToolNames);
+  const allowedPluginIds = parseStringArray(raw.allowedPluginIds);
+  const allowedPluginLocks = parsePluginLocks(raw.allowedPluginLocks);
   const policy = parseAgentPolicy(raw.policy);
-  const toolProtocol = stringValue(raw.toolProtocol ?? raw.tool_protocol);
+  const toolProtocol = stringValue(raw.toolProtocol);
   return {
     runId: row.run_id as RunId,
     sessionId: row.session_id as SessionId,
     reason: String(row.reason),
     iteration: Number(row.iteration),
     state: {
-      promptProfile: stringValue(raw.promptProfile ?? raw.prompt_profile) ?? "agent",
+      promptProfile: stringValue(raw.promptProfile) ?? "agent",
       ...(systemPrompt === undefined ? {} : { systemPrompt }),
-      originalUserContent: stringValue(
-        raw.originalUserContent ?? raw.original_user_content ?? raw.user_content,
-      ) ?? "",
-      currentUserMessage: parseCurrentUserMessage(raw.currentUserMessage ?? raw.current_user_message),
-      assistantText: stringValue(raw.assistantText ?? raw.assistant_text) ?? "",
-      pendingToolCalls: parseToolCalls(raw.pendingToolCalls ?? raw.pending_tool_calls),
-      completedToolCallIds: parseStringArray(raw.completedToolCallIds ?? raw.completed_tool_call_ids),
-      loopMessages,
-      bootstrapContext: parseRecordArray(raw.bootstrapContext ?? raw.bootstrap_context),
+      originalUserContent: stringValue(raw.originalUserContent) ?? "",
+      currentUserMessage: parseCurrentUserMessage(raw.currentUserMessage),
+      assistantText: stringValue(raw.assistantText) ?? "",
+      pendingToolCalls: parseToolCalls(raw.pendingToolCalls),
+      completedToolCallIds: parseStringArray(raw.completedToolCallIds),
+      loopMessages: parseModelMessages(raw.loopMessages),
+      bootstrapContext: parseRecordArray(raw.bootstrapContext),
       ...(responseFormat === undefined ? {} : { responseFormat }),
-      ...(allowedToolNames.length === 0 && raw.allowedToolNames === undefined && raw.allowed_tool_names === undefined
+      ...(allowedToolNames.length === 0 && raw.allowedToolNames === undefined
         ? {}
         : { allowedToolNames }),
       ...(model === undefined ? {} : { model }),
       ...(presetModelRef === undefined ? {} : { presetModelRef: presetModelRef as SessionCheckpoint["state"]["presetModelRef"] }),
       ...(toolProtocol === undefined ? {} : { toolProtocol: toolProtocol as SessionCheckpoint["state"]["toolProtocol"] }),
       ...(policy === undefined ? {} : { policy }),
-      ...(allowedPluginIds.length === 0 && raw.allowedPluginIds === undefined && raw.allowed_plugin_ids === undefined
+      ...(allowedPluginIds.length === 0 && raw.allowedPluginIds === undefined
         ? {}
         : { allowedPluginIds }),
       ...(allowedPluginLocks.length === 0 ? {} : { allowedPluginLocks }),
       ...(typeof raw.temperature === "number" ? { temperature: raw.temperature } : {}),
-      searchMode: stringValue(raw.searchMode ?? raw.search_mode) ?? "diy",
+      searchMode: stringValue(raw.searchMode) ?? "diy",
     },
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
-}
-
-function inferLoopMessages(messages: ModelMessage[]): ModelMessage[] {
-  let lastUserIndex = -1;
-  for (let index = 0; index < messages.length; index += 1) {
-    if (messages[index]?.role === "user") lastUserIndex = index;
-  }
-  return lastUserIndex < 0 ? messages : messages.slice(lastUserIndex + 1);
 }
 
 function parseCurrentUserMessage(value: unknown): ModelMessage {
@@ -759,17 +559,17 @@ function parseResponseFormat(value: unknown): ResponseFormat | undefined {
 
 function parseAgentPolicy(value: unknown): AgentPolicy | undefined {
   if (!isRecord(value)) return undefined;
-  const maxToolIterations = policyInteger(value, ["maxToolIterations", "max_tool_iterations"], 1, 1_000);
-  const runTimeoutMs = policyInteger(value, ["runTimeoutMs", "run_timeout_ms"], 1_000, 3_600_000);
-  const bootstrapToolTimeoutMs = policyInteger(value, ["bootstrapToolTimeoutMs", "bootstrap_tool_timeout_ms"], 1, 120_000);
-  const toolTimeoutMs = policyInteger(value, ["toolTimeoutMs", "tool_timeout_ms"], 1, 600_000);
-  const toolExecution = value.toolExecution ?? value.tool_execution ?? "sequential";
+  const maxToolIterations = policyInteger(value, "maxToolIterations", 1, 1_000);
+  const runTimeoutMs = policyInteger(value, "runTimeoutMs", 1_000, 3_600_000);
+  const bootstrapToolTimeoutMs = policyInteger(value, "bootstrapToolTimeoutMs", 1, 120_000);
+  const toolTimeoutMs = policyInteger(value, "toolTimeoutMs", 1, 600_000);
+  const toolExecution = value.toolExecution ?? "sequential";
   if (maxToolIterations === undefined || runTimeoutMs === undefined || bootstrapToolTimeoutMs === undefined || toolTimeoutMs === undefined) return undefined;
   if (toolExecution !== "sequential") return undefined;
   const temperature = typeof value.temperature === "number" && Number.isFinite(value.temperature) ? value.temperature : undefined;
-  const responseFormat = parseResponseFormat(value.responseFormat ?? value.response_format);
-  const searchMode = typeof (value.searchMode ?? value.search_mode) === "string"
-    ? value.searchMode ?? value.search_mode
+  const responseFormat = parseResponseFormat(value.responseFormat);
+  const searchMode = typeof value.searchMode === "string"
+    ? value.searchMode
     : undefined;
   return {
     maxToolIterations,
@@ -784,8 +584,8 @@ function parseAgentPolicy(value: unknown): AgentPolicy | undefined {
   };
 }
 
-function policyInteger(value: Record<string, unknown>, keys: string[], minimum: number, maximum: number): number | undefined {
-  const candidate = keys.map((key) => value[key]).find((item) => item !== undefined);
+function policyInteger(value: Record<string, unknown>, key: string, minimum: number, maximum: number): number | undefined {
+  const candidate = value[key];
   return typeof candidate === "number" && Number.isInteger(candidate) && candidate >= minimum && candidate <= maximum
     ? candidate
     : undefined;
@@ -821,12 +621,6 @@ function stringValue(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-function legacyTableExists(db: DatabaseSync): boolean {
-  return Boolean(db.prepare(
-    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sessions'",
-  ).get());
-}
-
 function parseObject(value: unknown): Record<string, unknown> {
   if (typeof value === "object" && value !== null && !Array.isArray(value)) return value as Record<string, unknown>;
   if (typeof value !== "string" || !value) return {};
@@ -838,61 +632,14 @@ function parseObject(value: unknown): Record<string, unknown> {
   }
 }
 
-function parseNullableObjectStrict(value: unknown, field: string): Record<string, unknown> | undefined {
-  if (value === null || value === undefined || value === "") return undefined;
-  if (isRecord(value)) return value;
-  if (typeof value !== "string") throw new Error(`Invalid ${field}: expected a JSON object.`);
-  try {
-    const parsed: unknown = JSON.parse(value);
-    if (!isRecord(parsed)) throw new Error("expected a JSON object");
-    return parsed;
-  } catch (error) {
-    throw new Error(`Invalid ${field}: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
 function parseArray(value: unknown): unknown[] {
-  if (Array.isArray(value)) return value;
-  if (typeof value !== "string" || !value) return [];
-  try {
-    const parsed: unknown = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-function parseArrayStrict(value: unknown, field: string): unknown[] {
-  if (Array.isArray(value)) return value;
-  if (value === null || value === undefined || value === "") return [];
-  if (typeof value !== "string") throw new Error(`Invalid ${field}: expected a JSON array.`);
-  try {
-    const parsed: unknown = JSON.parse(value);
-    if (!Array.isArray(parsed)) throw new Error("expected a JSON array");
-    return parsed;
-  } catch (error) {
-    throw new Error(`Invalid ${field}: ${error instanceof Error ? error.message : String(error)}`);
-  }
+  return Array.isArray(value) ? value : [];
 }
 
 function parseStringArray(value: unknown): string[] {
   return parseArray(value).filter((item): item is string => typeof item === "string");
 }
 
-function parseStringArrayStrict(value: unknown, field: string): string[] {
-  return parseArrayStrict(value, field).filter((item): item is string => typeof item === "string");
-}
-
 function stringOrNull(value: unknown): string | null {
   return typeof value === "string" ? value : null;
-}
-
-function firstTitle(messages: unknown[]): string {
-  const message = messages.find((item) => item && typeof item === "object" && (item as Record<string, unknown>).role === "user" && typeof (item as Record<string, unknown>).content === "string");
-  const content = message && typeof message === "object" ? String((message as Record<string, unknown>).content || "").trim() : "";
-  return content.slice(0, 120) || "Untitled conversation";
-}
-
-function hashJson(value: unknown): string {
-  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }

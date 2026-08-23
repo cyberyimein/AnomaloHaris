@@ -8,7 +8,7 @@
     "start": "node dist/main.js",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "migrate": "node dist/migrate.js"
+    "migrate:preset-models": "node dist/migrate-preset-models.js"
   },
   "dependencies": {
     "@anomalo/contracts": "0.1.0",

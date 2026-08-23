@@ -1,8 +1,8 @@
 {
-  "name": "anomalo",
+  "name": "anomaloharis",
   "version": "0.1.0",
   "private": true,
-  "description": "Anomalo shared TypeScript workspace for the phased Node runtime migration.",
+  "description": "AnomaloHaris shared TypeScript workspace and local AI compute center.",
   "workspaces": [
     "packages/*",
     "apps/*",

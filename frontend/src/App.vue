@@ -4,11 +4,11 @@
       <header class="chat-topbar">
         <div class="brand">
           <div class="brand-mark" aria-hidden="true">
-            <img :src="anomaloIconUrl" alt="" />
+            <img :src="anomaloharisIconUrl" alt="" />
           </div>
           <div class="brand-copy">
-            <h1>Anomalo</h1>
-            <p>Local harness</p>
+            <h1>AnomaloHaris</h1>
+            <p>A Caris · Local Harness</p>
           </div>
         </div>
 
@@ -92,7 +92,7 @@
       >
         <div v-if="!conversationTurns.length" class="empty-state">
           <div class="empty-emblem" aria-hidden="true">
-            <img :src="anomaloIconUrl" alt="" />
+            <img :src="anomaloharisIconUrl" alt="" />
           </div>
           <h2>Ready when you are</h2>
           <p>Send a message to start.</p>
@@ -268,7 +268,7 @@
                   <img
                     v-if="artifact.media_type?.startsWith('image/')"
                     :src="artifact.url"
-                    :alt="artifact.name || 'Python output image'"
+                    :alt="artifact.name || 'Tool output image'"
                     loading="lazy"
                   />
                   <span v-else>{{ artifact.name || "Open artifact" }}</span>
@@ -543,9 +543,8 @@
                 <span>
                   {{ formatHistoryDate(historySession.updated_at) }} ·
                   {{ historySession.message_count }} messages
-                  <em v-if="historySession.preset_agent">
-                    · {{ historySession.preset_agent.ghost || "👻" }}
-                    {{ historySession.preset_agent.name }}
+                  <em v-if="historySession.preset_model">
+                    · {{ historySession.preset_model }}
                   </em>
                   <em v-if="historySession.can_resume"> · Paused</em>
                 </span>
@@ -1024,7 +1023,7 @@ import {
 } from "./agent/agentSessionProjection";
 import { createAgentTransport } from "./agent/agentTransport";
 import { createPresetAgentTransport } from "./agent/presetAgentTransport";
-import anomaloIconUrl from "./assets/anomalo-shrimp.png";
+import anomaloharisIconUrl from "./assets/anomaloharis-shrimp.png";
 import CapabilityDashboard from "./dashboard/CapabilityDashboard.vue";
 import { createManagementAccess } from "./management/managementAccess";
 import { createSearchModeController } from "./management/searchModeController";
@@ -1202,7 +1201,7 @@ const composerPlaceholder = computed(() => {
   if (presetMode.value) {
     return "Select a preset model";
   }
-  return "Message Anomalo";
+  return "Message AnomaloHaris";
 });
 const activeSkillCount = computed(() => skills.value.filter((skill) => skill.active).length);
 const activeMcpCount = computed(() => mcpServers.value.filter((server) => server.active).length);
@@ -1554,7 +1553,7 @@ async function loadPromptProfile() {
   try {
     const response = await fetch("/api/prompts");
     const data = await response.json();
-    promptProfile.value = data.profile || "default";
+    promptProfile.value = data.profile || "agent";
     setPromptOutput({
       source: "config",
       profile: data.profile,
@@ -1823,7 +1822,7 @@ async function switchHistorySession(historySession) {
     return;
   }
 
-  if (historySession?.preset_agent) {
+  if (historySession?.preset_model) {
     await switchPresetHistorySession(historySession);
     return;
   }
@@ -1852,12 +1851,8 @@ async function switchHistorySession(historySession) {
 
 async function switchPresetHistorySession(historySession) {
   const nextSessionId = historySession.session_id;
-  const presetAgent = historySession.preset_agent;
-  if (!nextSessionId || !presetAgent?.id) {
-    return;
-  }
-  if (presetAgent.deleted) {
-    historyError.value = "This conversation belongs to a retired preset model.";
+  const presetModelRef = historySession.preset_model;
+  if (!nextSessionId || !presetModelRef) {
     return;
   }
 
@@ -1865,7 +1860,7 @@ async function switchPresetHistorySession(historySession) {
     presetReturnSessionId.value = defaultSessionId.value;
   }
   await loadPresetAgents();
-  if (!presetAgents.value.some((agent) => agent.id === presetAgent.id)) {
+  if (!presetAgents.value.some((agent) => agent.id === presetModelRef)) {
     historyError.value = "The preset model for this conversation is no longer available.";
     return;
   }
@@ -1873,7 +1868,7 @@ async function switchPresetHistorySession(historySession) {
   historyOpen.value = false;
   inspectorOpen.value = false;
   presetMode.value = true;
-  selectedPresetAgentId.value = presetAgent.id;
+  selectedPresetAgentId.value = presetModelRef;
   presetSessionId.value = nextSessionId;
   presetAgentTransport.switchSession(nextSessionId, {
     canResume: Boolean(historySession.can_resume),
@@ -2259,13 +2254,13 @@ function renderInlineMarkdown(value, artifacts = []) {
 
   html = html.replace(/!\[([^\]]*)\]\(([^\s)]+)\)/g, (match, label, source) => {
     const artifact = artifacts.find((candidate) => candidate.name === source || candidate.url === source);
-    const url = artifact?.url || (source.startsWith("/api/artifacts/python/") ? source : "");
+    const url = artifact?.url || "";
     if (!url) {
       return match;
     }
     const token = `\u0000IMAGE${imageTokens.length}\u0000`;
     imageTokens.push(
-      `<a class="markdown-image-link" href="${escapeAttribute(url)}" target="_blank" rel="noreferrer"><img src="${escapeAttribute(url)}" alt="${escapeAttribute(label || artifact?.name || "Python output image")}" loading="lazy"></a>`,
+      `<a class="markdown-image-link" href="${escapeAttribute(url)}" target="_blank" rel="noreferrer"><img src="${escapeAttribute(url)}" alt="${escapeAttribute(label || artifact?.name || "Tool output image")}" loading="lazy"></a>`,
     );
     return token;
   });

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { InProcessPluginBackend, PiPluginHost, resolvePluginModuleSpecifier } from "./plugins.js";
-import { createPluginManifest, PluginCatalog } from "./plugin-catalog.js";
+import { builtinPluginCatalog, createPluginManifest, PluginCatalog } from "./plugin-catalog.js";
 import { SqlitePresetModelRegistry } from "./preset-models.js";
 import type { ToolContext } from "./types.js";
 
@@ -23,6 +23,30 @@ afterEach(() => {
 });
 
 describe("PluginCatalog", () => {
+  it("catalogues Buddy as an optional fixed plugin without loading it by default", () => {
+    const manifest = builtinPluginCatalog().get("buddy-bridge");
+
+    expect(manifest).toMatchObject({
+      id: "buddy-bridge",
+      package: "@anomalo/buddy-bridge",
+      packageRoot: expect.stringMatching(/[\\/]apps[\\/]buddy-bridge[\\/]dist$/),
+      capabilities: ["buddy"],
+      toolNames: expect.arrayContaining(["buddy_status", "buddy_set_state"]),
+    });
+  });
+
+  it("keeps the Buddy package lock stable when the host cwd changes", () => {
+    const catalog = builtinPluginCatalog();
+    const locks = catalog.compile(["buddy-bridge@1.0.0"]).locks;
+    const originalCwd = process.cwd();
+    process.chdir(join(originalCwd, "..", ".."));
+    try {
+      expect(() => catalog.assertCurrent(locks)).not.toThrow();
+    } finally {
+      process.chdir(originalCwd);
+    }
+  });
+
   it("locks an on-disk plugin and blocks source drift before invocation", async () => {
     const directory = mkdtempSync(join(process.cwd(), ".anomalo-real-plugin-"));
     directories.push(directory);

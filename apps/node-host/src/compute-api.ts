@@ -516,7 +516,7 @@ export function registerComputeRoutes(app: FastifyInstance, options: ComputeApiO
           id: model.ref,
           object: "model" as const,
           created: 0,
-          owned_by: "anomalo",
+          owned_by: "anomaloharis",
           metadata: { name: model.name, version: model.version, description: model.description, compiled_hash: model.compiled_hash },
         })),
       };

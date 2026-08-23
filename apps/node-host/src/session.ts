@@ -131,6 +131,7 @@ export class InMemorySessionAdapter implements SessionRepository {
       messageCount: snapshot.messages.filter((message) => message.role === "user" || message.role === "assistant").length,
       updatedAt: this.clock.now(),
       canResume: Boolean(snapshot.checkpoint),
+      ...(typeof snapshot.metadata.preset_model_ref === "string" ? { presetModelRef: snapshot.metadata.preset_model_ref } : {}),
     }));
     return values.slice(0, query.limit ?? 100);
   }

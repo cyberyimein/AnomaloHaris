@@ -19,7 +19,7 @@ import { registerComputeRoutes, type ComputeApiOptions } from "./compute-api.js"
 import { randomIds } from "./ids.js";
 import type { CompiledPresetModel, SqlitePresetModelRegistry } from "./preset-models.js";
 import type { SessionRepository } from "./session.js";
-import type { SessionSnapshot, ToolContext } from "./types.js";
+import type { SessionSnapshot, SessionSummary, ToolContext } from "./types.js";
 import type { ToolRuntime } from "./tools.js";
 import type { FileResourceLoader } from "./resources.js";
 import type { PluginHost } from "./plugins.js";
@@ -30,11 +30,6 @@ export type NodeHostOptions = {
   model: string;
   presetModels?: SqlitePresetModelRegistry;
   defaultPresetModel?: string;
-  promptProfile?: string;
-  searchMode?: string;
-  temperature?: number;
-  runtimeImpl?: string;
-  sessionSchema?: number;
   staticDir?: string;
   logger?: boolean;
   browserBridge?: BrowserToolBridge;
@@ -52,20 +47,20 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
 
   app.get("/health", async () => ({
     status: "ok",
-    runtime: options.runtimeImpl ?? "node",
-    session_schema: options.sessionSchema ?? 2,
+    runtime: "node",
+    session_schema: 2,
   }));
 
   app.get("/api/runtime", async () => ({
-    runtime: options.runtimeImpl ?? "node",
-    session_schema: options.sessionSchema ?? 2,
+    runtime: "node",
+    session_schema: 2,
     model: options.model,
     default_preset_model: options.defaultPresetModel,
   }));
 
   app.get("/api/prompts", async (_request, reply) => {
     if (!options.resources) return reply.code(404).send({ error: "Resource loader is not configured." });
-    return reply.send(options.resources.prompt(options.promptProfile ?? "agent"));
+    return reply.send(options.resources.prompt("agent"));
   });
 
   app.get("/api/memory", async (_request, reply) => {
@@ -149,7 +144,7 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
     return reply.send({ session_id: sessionId, active_servers: [...new Set(active)].sort(), servers: options.resources?.mcpServers(new Set(active)) ?? [] });
   });
 
-  app.get("/api/models", async () => ({ models: [{ id: options.model, model: options.model, object: "model", owned_by: "anomalo" }] }));
+  app.get("/api/models", async () => ({ models: [{ id: options.model, model: options.model, object: "model", owned_by: "anomaloharis" }] }));
 
   app.get("/api/manage/providers", async (request, reply) => {
     try {
@@ -272,10 +267,6 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
       return sendHostError(reply, error);
     }
   });
-
-  app.get("/api/agents", async () => ({
-    agents: (options.presetModels?.list() ?? []).map(serializeLegacyAgent),
-  }));
 
   app.get("/api/tools", async (request, reply) => {
     if (!options.tools) return { tools: [], providers: [] };
@@ -414,45 +405,6 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
     }
   });
 
-  app.post<{ Params: { agentRef: string }; Body: unknown }>("/api/agents/:agentRef/chat", async (request, reply) => {
-    const parsed = parseRunRequest({ ...asObject(request.body), preset_model: request.params.agentRef }, reply);
-    if (!parsed) return;
-    let input: StartRunRequest;
-    try {
-      input = await toStartRunRequest(parsed, options);
-      await bindPresetModel(input, options);
-    } catch (error) {
-      return sendHostError(reply, error);
-    }
-    const events = await collectRun(options.controller, input);
-    return reply.send(summarizeRun(events, input.sessionId));
-  });
-
-  app.post<{ Params: { agentRef: string }; Body: unknown }>("/api/agents/:agentRef/chat/stream", async (request, reply) => {
-    const parsed = parseRunRequest({ ...asObject(request.body), preset_model: request.params.agentRef }, reply);
-    if (!parsed) return;
-    let input: StartRunRequest;
-    try {
-      input = await toStartRunRequest(parsed, options);
-      await bindPresetModel(input, options);
-    } catch (error) {
-      return sendHostError(reply, error);
-    }
-    reply.hijack();
-    reply.raw.statusCode = 200;
-    reply.raw.setHeader("content-type", "application/x-ndjson; charset=utf-8");
-    reply.raw.setHeader("cache-control", "no-cache");
-    reply.raw.setHeader("X-Anomalo-Session-Id", input.sessionId);
-    if (input.presetModelRef) reply.raw.setHeader("X-Anomalo-Agent-Id", input.presetModelRef);
-    try {
-      for await (const event of options.controller.start(input)) {
-        if (!reply.raw.destroyed) reply.raw.write(`${JSON.stringify(event)}\n`);
-      }
-    } finally {
-      if (!reply.raw.writableEnded) reply.raw.end();
-    }
-  });
-
   app.post<{ Body: unknown }>("/api/chat/stop", async (request, reply) => {
     const body = asObject(request.body);
     const sessionId = typeof body.session_id === "string" ? body.session_id as SessionId : undefined;
@@ -482,7 +434,7 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
         data: {
           can_resume: Boolean(snapshot.checkpoint),
           search_mode: snapshot.searchMode,
-          runtime: options.runtimeImpl ?? "node",
+          runtime: "node",
           preset_model: snapshot.metadata.preset_model_ref ?? options.defaultPresetModel,
         },
       });
@@ -503,7 +455,7 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
       activeTask = (async () => {
         for await (const event of options.controller.start(input)) send(event);
       })().catch((error: unknown) => {
-        sendError(error instanceof Error ? error.message : String(error), "worker_unavailable");
+        sendError(error instanceof Error ? error.message : String(error), "model_failed");
       }).finally(() => {
         activeTask = undefined;
       });
@@ -548,7 +500,7 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
           return;
         }
         initialized = true;
-        send({ type: "client.ready", session_id: sessionId, data: { runtime: options.runtimeImpl ?? "node" } });
+        send({ type: "client.ready", session_id: sessionId, data: { runtime: "node" } });
         return;
       }
       initialized = true;
@@ -667,11 +619,11 @@ async function toStartRunRequest(
     resume: body.resume === true,
     promptProfile: typeof body.prompt_profile === "string" && body.prompt_profile
       ? body.prompt_profile
-      : preset?.promptProfile ?? options.promptProfile ?? "agent",
+      : preset?.promptProfile ?? "agent",
     model: preset?.providerModel ?? options.model,
     searchMode: !preset && typeof body.search_mode === "string" && body.search_mode
       ? body.search_mode
-    : preset?.policy.searchMode ?? options.searchMode ?? "diy",
+    : preset?.policy.searchMode ?? "diy",
     ...(preset?.toolProtocol ? { toolProtocol: preset.toolProtocol } : {}),
   };
   if (preset) {
@@ -698,8 +650,6 @@ async function toStartRunRequest(
   if (preset) {
     if (preset.policy.temperature !== undefined) input.temperature = preset.policy.temperature;
     if (preset.policy.responseFormat !== undefined) input.responseFormat = structuredClone(preset.policy.responseFormat);
-  } else if (options.temperature !== undefined) {
-    input.temperature = options.temperature;
   }
   return input;
 }
@@ -738,19 +688,6 @@ function serializePresetModel(model: CompiledPresetModel, includeDefinition = fa
     policy: structuredClone(model.policy),
     compiled_hash: model.compiledHash,
     ...(includeDefinition ? { definition: structuredClone(model.definition) } : {}),
-  };
-}
-
-function serializeLegacyAgent(summary: { ref: string; name: string; description: string; provider_model: string }): Record<string, unknown> {
-  return {
-    id: summary.ref,
-    ref: summary.ref,
-    name: summary.name,
-    description: summary.description,
-    ghost: false,
-    model: summary.provider_model,
-    tool_names: [],
-    bootstrap_tools: [],
   };
 }
 
@@ -813,7 +750,7 @@ function searchModePayload(sessionId: string, mode: string, model: string): Reco
     modes: [
       { id: "native", label: "Model-native search", description: "Use the provider's native search capability when configured.", provider: "provider" },
       { id: "subagent", label: "Web research subagent", description: "Delegate research to the configured research model.", provider: "provider_subagent" },
-      { id: "diy", label: "DIY web tools", description: "Use Anomalo's Node web search and fetch tools.", provider: "duckduckgo_html" },
+      { id: "diy", label: "DIY web tools", description: "Use AnomaloHaris's Node web search and fetch tools.", provider: "duckduckgo_html" },
     ],
   };
 }
@@ -841,13 +778,14 @@ function summarizeRun(events: AgentEvent[], sessionId: SessionId): Record<string
   };
 }
 
-function serializeSummary(summary: { sessionId: SessionId; title: string; messageCount: number; updatedAt: string; canResume: boolean }): Record<string, unknown> {
+function serializeSummary(summary: SessionSummary): Record<string, unknown> {
   return {
     session_id: summary.sessionId,
     title: summary.title,
     message_count: summary.messageCount,
     updated_at: summary.updatedAt,
     can_resume: summary.canResume,
+    ...(summary.presetModelRef ? { preset_model: summary.presetModelRef } : {}),
   };
 }
 

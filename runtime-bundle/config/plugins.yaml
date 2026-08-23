@@ -1,0 +1,9 @@
+# Optional plugin allowlist. Set ANOMALO_PI_EXTENSIONS_ENABLED=true to load it.
+plugins:
+  - id: buddy-bridge
+    version: 1.0.0
+    compatibility: L2
+    enabled: true
+    trust: local-code
+    capabilities: [buddy]
+    environment: [ANOMALO_BUDDY_SERVICE_URL, ANOMALO_BUDDY_SERVICE_TOKEN, ANOMALO_BUDDY_REQUEST_TIMEOUT_MS]

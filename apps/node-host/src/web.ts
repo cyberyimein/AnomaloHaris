@@ -92,7 +92,7 @@ export class WebToolRuntime implements ToolRuntime {
       const body = new URLSearchParams({ q: query }).toString();
       const response = await this.request(this.searchUrl, {
         method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded", "user-agent": "Anomalo/0.1 Node Host" },
+        headers: { "content-type": "application/x-www-form-urlencoded", "user-agent": "AnomaloHaris/0.1 Node Host" },
         body,
       }, signal);
       const html = await response.text();
@@ -121,7 +121,7 @@ export class WebToolRuntime implements ToolRuntime {
     const maxChars = clampInteger(call.arguments.max_chars, this.maxChars, 1_000, this.maxChars);
     const startChar = clampInteger(call.arguments.start_char, 0, 0, Number.MAX_SAFE_INTEGER);
     try {
-      const response = await this.requestPublic(parsed.href, { headers: { "user-agent": "Anomalo/0.1 Node Host" } }, signal);
+      const response = await this.requestPublic(parsed.href, { headers: { "user-agent": "AnomaloHaris/0.1 Node Host" } }, signal);
       if (!response.ok) return { name: call.name, ok: false, content: `HTTP ${response.status} while fetching ${parsed.href}`, data: { error_code: "tool_failed", status: response.status } };
       const contentType = response.headers.get("content-type") ?? "";
       if (!/(text\/|application\/(xhtml\+xml|json|xml))/.test(contentType)) return { name: call.name, ok: false, content: `Unsupported response content type: ${contentType}`, data: { error_code: "tool_failed" } };

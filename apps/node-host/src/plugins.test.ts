@@ -157,9 +157,15 @@ describe("PiPluginHost", () => {
     const directory = mkdtempSync(join(tmpdir(), "anomalo-plugin-config-"));
     tempDirectories.push(directory);
     const path = join(directory, "plugins.yaml");
-    writeFileSync(path, `plugins:\n  - id: sample\n    entry: ./sample.mjs\n    compatibility: L3\n    enabled: true\n`);
+    writeFileSync(path, `plugins:\n  - id: sample\n    entry: ./sample.mjs\n    compatibility: L3\n    enabled: true\n    environment: [ANOMALO_BUDDY_SERVICE_URL, ANOMALO_BUDDY_SERVICE_TOKEN]\n`);
     expect(readPluginLoadConfig(path)).toEqual({
-      plugins: [{ id: "sample", entry: "./sample.mjs", compatibility: "L3", enabled: true }],
+      plugins: [{
+        id: "sample",
+        entry: "./sample.mjs",
+        compatibility: "L3",
+        enabled: true,
+        environment: ["ANOMALO_BUDDY_SERVICE_URL", "ANOMALO_BUDDY_SERVICE_TOKEN"],
+      }],
     });
   });
 

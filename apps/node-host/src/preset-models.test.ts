@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { DEFAULT_PRESET_MODEL_REF, SqlitePresetModelRegistry } from "./preset-models.js";
+import { DEFAULT_PRESET_MODEL_REF, legacyAgentToDefinition, SqlitePresetModelRegistry } from "./preset-models.js";
 
 const directories: string[] = [];
 
@@ -70,14 +70,14 @@ describe("SqlitePresetModelRegistry", () => {
     restarted.close();
   });
 
-  it("seeds the built-in default and provides a dry-run legacy migration", () => {
+  it("seeds the built-in default and migrates legacy agents as Preset Models", () => {
     const registry = new SqlitePresetModelRegistry(":memory:");
     const builtin = registry.ensureBuiltinDefault({ model: "openai/gpt-4o-mini" });
     expect(builtin.ref).toBe(DEFAULT_PRESET_MODEL_REF);
     expect(registry.resolve("anomalo").providerModel).toBe("openai/gpt-4o-mini");
 
-    const report = registry.migrationDryRun([
-      { name: "Luna", description: "writer", model: "deepseek/deepseek-chat", tool_names: ["web_search"] },
+    const report = registry.migrateLegacyAgents([
+      { id: "luna-old", name: "Luna", description: "writer", model: "deepseek/deepseek-chat", tool_names: ["web_search"] },
       { name: "anomalo", model: "openai/gpt-4o-mini" },
       { name: "", model: "broken" },
     ]);
@@ -86,7 +86,25 @@ describe("SqlitePresetModelRegistry", () => {
     expect(report.skipped).toEqual([{ ref: "anomalo@1", reason: "already_exists" }]);
     expect(report.errors[0]?.name).toBe("");
     expect(registry.list()).toHaveLength(1);
+
+    const applied = registry.migrateLegacyAgents([
+      { id: "luna-old", name: "Luna", description: "writer", model: "deepseek/deepseek-chat", tool_names: ["web_search"] },
+    ], { dryRun: false, publish: true });
+    expect(applied.created.map((item) => item.ref)).toEqual(["luna@1"]);
+    expect(registry.resolve("luna@1").definition).toMatchObject({
+      metadata: { migrated_from: "preset_agents.sqlite3", legacy_id: "luna-old" },
+      provider: { model: "deepseek/deepseek-chat", credential_ref: "openrouter-primary" },
+      plugins: { fixed: ["web"], allowed_tools: ["web_search"] },
+    });
     registry.close();
+  });
+
+  it("removes retired Python and voice wording while migrating legacy prompts", () => {
+    const definition = legacyAgentToDefinition({
+      name: "legacy-browser",
+      system_prompt: "When the Python sandbox is available, use it for calculation, small data tasks, and deterministic checks. Buddy is a separate voice/device surface with its own prompt profile.",
+    });
+    expect(definition.prompt?.system).toBe("Use available local tools for calculation, small data tasks, and deterministic checks. Buddy is a separate device surface.");
   });
 
   it("compiles provider and policy behavior into the immutable snapshot", () => {

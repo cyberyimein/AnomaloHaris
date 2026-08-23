@@ -70,5 +70,4 @@ export type ErrorCode =
   | "tool_not_allowed"
   | "finalizer_failed"
   | "structured_output_invalid"
-  | "plugin_failed"
-  | "worker_unavailable";
+  | "plugin_failed";

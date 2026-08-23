@@ -1,12 +1,14 @@
-# Buddy / Codex 钩子状态机（保留设计，当前停用）
+# Buddy / Codex 钩子状态机（Buddy 后端可选服务）
 
-> 状态：`Deprecated / Disabled`  
+> 状态：`Implemented in apps/buddy-service; optional`
 > 更新时间：2026-08-23  
-> 适用范围：为后续恢复 Codex → 中转插件 → Buddy 的能力保留协议和状态机设计。本文档不是当前运行时的启用说明。
+> 适用范围：Codex → Buddy 后端 Hook Relay → Buddy 的协议和状态机；Node Agent 通过独立 bridge plugin 使用同一服务。
 
 ## 1. 当前决策
 
-Anomalo 当前以 Node.js Agent Core / Node Host 为核心，Buddy、Codex 钩子中转、音频和视觉能力不属于核心运行时。当前版本移除 Anomalo 注册的 Codex 全局钩子，以及旧的 `/api/copilot/hooks/*` 接口和仓库内钩子脚本，避免 Node 迁移期间继续依赖已删除的 Python/Buddy 适配层。
+AnomaloHaris 当前以 Node.js Agent Core / Node Host 为核心，Buddy 也是独立可选的 Node 服务。
+`apps/buddy-service` 拥有 Codex Hook Relay、状态机、审批桥和 Call Buddy 设备连接；Node Host
+只通过 `buddy-bridge` 插件发送 Agent 生命周期事件和工具请求，不直接导入 Buddy 或硬件代码。
 
 后续若恢复，应作为独立的可选插件或外部 relay 部署：
 
@@ -14,13 +16,14 @@ Anomalo 当前以 Node.js Agent Core / Node Host 为核心，Buddy、Codex 钩�
 Codex hook runner
         │
         ▼
-Hook relay / plugin（可选）
+apps/buddy-service Hook Relay（Node 可选服务）
         │ 事件归一化、顺序检查、审批等待
         ▼
 Buddy adapter（可选）
 ```
 
-Node Agent Core 不直接导入 Buddy SDK、钩子脚本或视觉/音频模块。预设模型、默认 Agent API 和普通 WebSocket/HTTP 请求也不应隐式触发这条链路。
+Node Agent Core 不直接导入 Buddy SDK、钩子脚本或视觉/音频模块。预设模型通过固定的
+`buddy-bridge` plugin 获得工具；普通默认 Preset Model 不隐式获得硬件能力。
 
 ## 2. 事件归一化
 
@@ -82,21 +85,27 @@ Node Agent Core 不直接导入 Buddy SDK、钩子脚本或视觉/音频模块�
 
 ## 4. 钩子输入、输出与传输约定
 
-恢复 relay 时，Codex hook runner 向 relay 的 HTTP 端点发送 JSON：
+当前 Codex hook runner 通过仓库内的 Node 适配器
+`/Users/waynewong/.codex/hooks/codex-hook.mjs` 向 relay 的 HTTP 端点发送 JSON：
+
+用户级 `/Users/waynewong/.codex/hooks.json` 已注册该适配器的
+`SessionStart`、`UserPromptSubmit`、`PreToolUse`、`PostToolUse`、`PermissionRequest` 和
+`Stop` 事件；现有 Otty hooks 保持不变。
 
 ```text
 POST /api/copilot/hooks/{event_name}
 Content-Type: application/json
-x-anomalo-admin-token: <optional admin token>
+Authorization: Bearer <hook token>
+# 兼容旧 runner：x-anomalo-admin-token: <hook token>
 ```
 
 旧实现的环境变量约定如下，仅作为恢复参考：
 
 | 变量 | 作用 | 默认值 |
 | --- | --- | --- |
-| `ANOMALO_COPILOT_HOOK_BASE_URL` | relay 基地址 | 其次使用 `ANOMALO_SITE_URL`，再其次 `http://127.0.0.1:8000` |
-| `ANOMALO_COPILOT_HOOK_ADMIN_TOKEN` | relay 管理令牌 | 其次使用 `ANOMALO_ADMIN_TOKEN` |
-| `ANOMALO_COPILOT_BUDDY_APPROVAL_TIMEOUT_SECONDS` | Buddy 审批等待时间 | 由插件自行设定；旧实现额外预留网络超时 |
+| `BUDDY_HOOK_BASE_URL` | relay 基地址 | 其次使用 `ANOMALO_BUDDY_SERVICE_URL`，再其次 `http://127.0.0.1:8765` |
+| `BUDDY_HOOK_TOKEN` | relay Hook 令牌 | 其次使用旧变量 `ANOMALO_COPILOT_HOOK_ADMIN_TOKEN` / `ANOMALO_ADMIN_TOKEN` |
+| `BUDDY_HOOK_TIMEOUT_MS` | Hook 网络超时 | 普通事件 5000ms；审批事件使用审批超时再加 5000ms |
 
 relay 返回紧凑 JSON hook effect：
 
@@ -116,9 +125,9 @@ relay 返回紧凑 JSON hook effect：
 
 状态同步本身返回空结果时，Codex 应继续按其默认行为运行。网络错误、状态解析错误和 Buddy 断开都采用 fail-open；只有明确的 `allow` / `deny` 才改变审批结果。
 
-## 5. 未来 Node 兼容边界
+## 5. Node Bridge 兼容边界
 
-如果以后需要让 Node Host 提供可选的中转能力，建议只定义插件边界，不把状态机实现硬编码进 Agent Core：
+Node Host 只通过可选 bridge plugin 调用 Buddy 服务，不实现状态机。插件向 Buddy 后端发送规范事件：
 
 ```ts
 type HookEvent = {
@@ -134,30 +143,32 @@ type HookEffect =
   | { behavior: "deny"; message: string }
   | Record<string, never>;
 
-interface HookRelayPlugin {
-  handle(event: HookEvent): Promise<HookEffect>;
+POST /v1/agent/events
+
+interface BuddyBridgePlugin {
+  handleTool(call: ToolCall): Promise<ToolResult>;
+  notify(event: HookEvent): Promise<void>;
 }
 ```
 
-插件可自行实现 Buddy 投影、审批超时、重连和持久化。Node Host 只负责可选插件的生命周期和隔离，不应默认加载插件，也不应因为插件不可用而影响普通 Agent、preset model 或旧 API 请求。
+Buddy 后端实现 Buddy 投影、审批超时、重连和会话状态。Node Host 只负责可选插件的生命周期和隔离，不应默认加载插件，也不应因为插件不可用而影响普通 Agent、preset model 或旧 API 请求。
 
 ## 6. 删除与恢复清单
 
 当前删除内容：
 
-- Anomalo 全局 Codex hook 配置中的 `copilot_buddy_hook.py` 注册项；
 - 旧的 `buddy-backend/scripts/copilot_buddy_hook.py`；
-- 旧的 `/api/copilot/hooks/{event_name}` HTTP 路由；
-- 依赖该路由的旧 hook 配置文件。
+- 旧的直接依赖 Anomalo Host 的 hook 配置；当前配置应调用 Node 适配器；
+- 音频、视觉和媒体处理运行时。
 
 恢复前必须重新确认：
 
-1. relay 是独立进程、独立插件，还是外部服务；
-2. Node Host 与 relay 的权限边界、认证和 fail-open 策略；
-3. `sessionId`、事件顺序和 request id 的来源；
-4. Buddy 是否仍需要审批桥，以及审批超时后的默认行为；
-5. 是否需要持久化跨进程状态；
-6. 各事件的脱敏日志与集成测试；
-7. 只为需要该能力的机器/用户安装 hook，不修改 Anomalo 核心默认配置。
+1. 只为需要该能力的机器/用户安装 Buddy service 和 hook；
+2. 使用独立的 service token 与 hook token；
+3. 保持 `sessionId`、事件顺序和 request id 的来源可追踪；
+4. 只在明确启用审批桥时返回 allow/deny；
+5. 需要跨进程持久化时再引入存储，不把状态写入 Node Agent 数据库；
+6. 继续保持各事件的脱敏日志与集成测试；
+7. 不修改 AnomaloHaris 默认 Preset Model 的硬件能力。
 
 本文档应作为恢复时的设计基线；恢复实现必须新增独立 ADR 和测试，不应仅凭旧脚本直接复制回来。

@@ -26,6 +26,8 @@ export type PluginSpec = {
   permissions?: readonly PluginPermission[];
   /** Capability labels are metadata only; implementations stay in the plugin process. */
   capabilities?: readonly string[];
+  /** Explicit Buddy/plugin-only environment names forwarded to child plugins. */
+  environment?: readonly string[];
   priority?: number;
 };
 
@@ -462,7 +464,7 @@ export class InProcessPluginBackend implements PluginBackend {
   }
 }
 
-/** Child-process backend used by production hosts. The child receives no model or admin secrets. */
+/** Child-process backend used by production hosts. Only explicit Buddy-scoped variables are forwarded. */
 export class ChildProcessPluginBackend implements PluginBackend {
   private readonly childEntry: string;
 
@@ -481,6 +483,7 @@ export class ChildProcessPluginBackend implements PluginBackend {
         NODE_ENV: "production",
         ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
         ...(process.env.NODE_PATH ? { NODE_PATH: process.env.NODE_PATH } : {}),
+        ...forwardedPluginEnvironment(spec.environment),
       },
     });
     const request = createChildRequester(child);
@@ -572,6 +575,7 @@ function parsePluginField(target: Partial<PluginSpec>, field: string): void {
   else if (key === "required") target.required = raw === "true";
   else if (key === "priority") target.priority = Number(raw);
   else if (key === "capabilities") target.capabilities = parseStringList(raw);
+  else if (key === "environment") target.environment = parseStringList(raw);
   else if (key === "id" || key === "package" || key === "entry" || key === "trust" || key === "compatibility") target[key] = raw as never;
 }
 
@@ -581,6 +585,16 @@ function parseStringList(value: string): string[] {
     .split(",")
     .map((item) => item.trim().replace(/^['\"]|['\"]$/g, ""))
     .filter(Boolean);
+}
+
+function forwardedPluginEnvironment(names: readonly string[] | undefined): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const name of names ?? []) {
+    if (!/^ANOMALO_BUDDY_[A-Z0-9_]+$/.test(name)) continue;
+    const value = process.env[name];
+    if (value !== undefined) result[name] = value;
+  }
+  return result;
 }
 
 function normalizeToolResult(result: ToolResult, name: string): ToolResult {

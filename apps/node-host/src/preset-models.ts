@@ -52,21 +52,23 @@ type RegistryRow = {
   compiled_hash: string;
 };
 
-type LegacyPresetAgent = {
+export type LegacyPresetAgent = {
+  id?: string;
   name: string;
   description?: string;
-  ghost?: boolean;
+  ghost?: string | boolean;
   system_prompt?: string;
   model?: string;
   temperature?: number;
   tool_names?: string[];
+  tool_sources?: Record<string, string>;
   bootstrap_tools?: BootstrapToolRequest[];
   search_mode?: string;
   response_format?: Record<string, unknown>;
 };
 
-export type PresetModelMigrationDryRun = {
-  dryRun: true;
+export type PresetModelMigrationReport = {
+  dryRun: boolean;
   created: Array<{ ref: PresetModelRef; definition: PresetModelDefinition }>;
   skipped: Array<{ ref: string; reason: string }>;
   errors: Array<{ name: string; error: string }>;
@@ -259,7 +261,7 @@ export class SqlitePresetModelRegistry {
     const definition: PresetModelDefinition = {
       name: "anomalo",
       version: 1,
-      description: options.description ?? "The built-in Anomalo Agent preset model.",
+      description: options.description ?? "The built-in AnomaloHaris Agent preset model.",
       provider: {
         adapter: "openai-compatible",
         model: options.model,
@@ -275,17 +277,25 @@ export class SqlitePresetModelRegistry {
     return this.publish(this.createDraft(definition).ref);
   }
 
-  migrationDryRun(agents: LegacyPresetAgent[]): PresetModelMigrationDryRun {
-    const result: PresetModelMigrationDryRun = { dryRun: true, created: [], skipped: [], errors: [] };
+  migrateLegacyAgents(
+    agents: LegacyPresetAgent[],
+    options: { dryRun?: boolean; publish?: boolean } = {},
+  ): PresetModelMigrationReport {
+    const dryRun = options.dryRun ?? true;
+    const result: PresetModelMigrationReport = { dryRun, created: [], skipped: [], errors: [] };
     for (const agent of agents) {
       try {
         const definition = legacyAgentToDefinition(agent);
         const ref = `${definition.name}@${definition.version}`;
         if (this.has(ref)) {
           result.skipped.push({ ref, reason: "already_exists" });
-        } else {
-          result.created.push({ ref: ref as PresetModelRef, definition });
+          continue;
         }
+        if (!dryRun) {
+          const created = this.createDraft(definition);
+          if (options.publish) this.publish(created.ref);
+        }
+        result.created.push({ ref: ref as PresetModelRef, definition });
       } catch (error) {
         result.errors.push({ name: agent.name, error: error instanceof Error ? error.message : String(error) });
       }
@@ -382,21 +392,25 @@ export class SqlitePresetModelRegistry {
 export function legacyAgentToDefinition(agent: LegacyPresetAgent): PresetModelDefinition {
   const name = agent.name.trim().toLowerCase();
   if (!name) throw new Error("legacy_agent_name_required");
+  const toolNames = [...new Set(agent.tool_names ?? [])].map((tool) => tool.trim()).filter(Boolean);
+  const fixedPlugins = legacyPluginSelection(toolNames, agent.tool_sources);
+  const systemPrompt = normalizeLegacySystemPrompt(agent.system_prompt);
   return {
     name,
     version: 1,
-    description: agent.description ?? "Migrated legacy Anomalo agent.",
+    description: agent.description ?? "Migrated legacy AnomaloHaris preset model.",
     provider: {
       adapter: "openai-compatible",
       model: agent.model ?? "",
+      credential_ref: "openrouter-primary",
       tool_protocol: "auto",
     },
-    ...(agent.system_prompt === undefined && agent.search_mode === undefined
+    ...(systemPrompt === undefined
       ? {}
-      : { prompt: { ...(agent.system_prompt === undefined ? {} : { system: agent.system_prompt }) } }),
+      : { prompt: { system: systemPrompt } }),
     plugins: {
-      fixed: agent.ghost ? [] : ["host-core", "web", "browser-bridge"],
-      ...(agent.tool_names ? { allowed_tools: agent.tool_names } : {}),
+      fixed: fixedPlugins,
+      ...(toolNames.length > 0 ? { allowed_tools: toolNames } : {}),
       ...(agent.bootstrap_tools ? { bootstrap_tools: agent.bootstrap_tools } : {}),
     },
     policy: {
@@ -404,8 +418,34 @@ export function legacyAgentToDefinition(agent: LegacyPresetAgent): PresetModelDe
       ...(agent.search_mode === undefined ? {} : { search_mode: agent.search_mode }),
       ...(agent.response_format === undefined ? {} : { response_format: agent.response_format }),
     },
-    metadata: { migrated_from: "legacy_preset_agent" },
+    metadata: {
+      migrated_from: "preset_agents.sqlite3",
+      ...(agent.id ? { legacy_id: agent.id } : {}),
+      ...(typeof agent.ghost === "string" ? { legacy_ghost: agent.ghost } : {}),
+    },
   };
+}
+
+function normalizeLegacySystemPrompt(prompt: string | undefined): string | undefined {
+  if (prompt === undefined) return undefined;
+  return prompt
+    .replace(
+      /When the Python sandbox is available, use it\s+for calculation, small data tasks, and deterministic checks\./g,
+      "Use available local tools for calculation, small data tasks, and deterministic checks.",
+    )
+    .replace(/\bPython sandbox\b/g, "local tools")
+    .replace(/Buddy is a separate voice\/device surface with its own\s+prompt profile\./g, "Buddy is a separate device surface.");
+}
+
+function legacyPluginSelection(toolNames: readonly string[], toolSources: Record<string, string> | undefined): string[] {
+  const plugins = new Set<string>();
+  for (const toolName of toolNames) {
+    const source = `${toolSources?.[toolName] ?? ""} ${toolName}`.toLowerCase();
+    if (toolName === "time_now" || source.includes("host") || source.includes("core")) plugins.add("host-core");
+    if (toolName === "web_search" || toolName === "web_fetch" || source.includes("web")) plugins.add("web");
+    if (toolName.startsWith("browser.") || source.includes("browser")) plugins.add("browser-bridge");
+  }
+  return [...plugins].sort();
 }
 
 function validateDefinition(definition: PresetModelDefinition): void {

@@ -17,7 +17,7 @@ const FALLBACK_OPTIONS = [
   {
     id: "diy",
     label: "DIY web tools",
-    description: "Use Anomalo's existing DuckDuckGo search and page-fetch tools.",
+    description: "Use AnomaloHaris's existing DuckDuckGo search and page-fetch tools.",
     provider: "duckduckgo_html",
   },
 ];

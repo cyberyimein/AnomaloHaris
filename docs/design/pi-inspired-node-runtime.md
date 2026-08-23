@@ -1,10 +1,10 @@
-# Anomalo Node.js 驱动与 Pi 兼容运行时开发设计
+# AnomaloHaris Node.js 驱动与 Pi 兼容运行时开发设计
 
 > 状态：Superseded by `docs/design/node-preset-model-compute-center.md`
 >
 > 面向读者：负责后续编码、测试、迁移和部署的实现模型
 >
-> 设计目标：在保持 Anomalo 现有产品行为的前提下，以 Node.js/TypeScript 作为 Host，深化 Agent 循环 Module，并逐步兼容 Pi 扩展生态
+> 设计目标：在保持 AnomaloHaris 现有产品行为的前提下，以 Node.js/TypeScript 作为 Host，深化 Agent 循环 Module，并逐步兼容 Pi 扩展生态
 >
 > 本文中的 MUST、SHOULD、MAY 分别表示必须满足、默认应满足、可以延后实现
 
@@ -13,10 +13,14 @@
 > `docs/design/node-preset-model-compute-center.md` 取代：生产架构必须是
 > Node-only，Preset Model 使用不可变的 `name@version`，Python Worker 不再是
 > 完成态组件。
+>
+> 其中旧 Session v2/legacy 迁移方案仅保留为历史记录，已不属于当前实施要求。
+> 当前决策是直接丢弃旧 Python Session 数据，使用新的 Node Session schema；不得
+> 为恢复旧 Session 而重新加入 Python parser、lazy migration 或 fallback。
 
 ## 1. 决策摘要
 
-Anomalo 的目标架构采用“Node.js/TypeScript Host + 深 Agent Module + Python Worker + Pi 兼容 Adapter”。
+AnomaloHaris 的目标架构采用“Node.js/TypeScript Host + 深 Agent Module + Python Worker + Pi 兼容 Adapter”。
 
 三项核心决策如下：
 
@@ -167,7 +171,7 @@ Adapter → 外部 SDK、SQLite、MCP、Buddy、Python Worker
 采用 npm workspaces，保留现有根目录 Python `pyproject.toml`，迁移完成前形成双工具链仓库。
 
 ```text
-Anomalo/
+AnomaloHaris/
 ├── package.json
 ├── package-lock.json
 ├── tsconfig.base.json
@@ -181,7 +185,7 @@ Anomalo/
 │   ├── session/                    # Session 深 Module
 │   ├── context/                    # ContextBuilder 深 Module
 │   ├── tools/                      # ToolRuntime 与 Tool Interface
-│   ├── plugin-host/                # Anomalo plugin lifecycle
+│   ├── plugin-host/                # AnomaloHaris plugin lifecycle
 │   ├── pi-compat/                  # Pi Extension/Package Adapter
 │   ├── preset-agents/              # preset 定义、绑定和 bootstrap policy
 │   └── adapters/
@@ -192,7 +196,7 @@ Anomalo/
 │       ├── buddy/
 │       └── python-worker/
 ├── python-workers/                 # 从现有 Python Host 逐步迁移出的能力
-├── agent-backend/                  # 迁移期旧 Host；最终只保留必要 Worker 代码
+├── runtime-bundle/                  # 迁移期旧 Host；最终只保留必要 Worker 代码
 ├── buddy-backend/
 ├── frontend/                       # 迁移期保留
 └── docs/
@@ -685,7 +689,11 @@ type CheckpointState = {
 
 checkpoint 写入和 run 状态更新 MUST 在同一 SQLite 事务完成。
 
-### 10.4 旧 Session 迁移
+### 10.4 旧 Session 迁移（历史方案，不再执行）
+
+> 本节描述的“新表 + 懒迁移 + 保留旧表”方案已被当前 Node-only 决策废弃。
+> 旧 Python Session 数据直接丢弃；当前实现只创建 Node Session schema，不读取
+> 旧 `sessions` 表，也不提供本节的 dry-run/import/fallback。
 
 迁移策略采用“新表 + 懒迁移 + 保留旧表”，不就地覆盖旧行。
 
@@ -751,7 +759,7 @@ interface PluginHost {
 
 首批建议映射：
 
-| Pi 概念 | Anomalo 事件或阶段 | 兼容行为 |
+| Pi 概念 | AnomaloHaris 事件或阶段 | 兼容行为 |
 | --- | --- | --- |
 | `session_start` | Session 首次打开 | 通知 |
 | `before_agent_start` | ContextBuilder 构建前 | 可注入 system/context 数据 |
@@ -899,7 +907,7 @@ WebSocket Module 只负责连接级状态。active run 的事实来源是 `RunCo
 - Node Host 在生产中直接托管 Vite build 输出。
 - 开发模式仍由 Vite proxy `/api`、`/ws`、`/health`、`/fonts`、`/static`。
 - 前端先迁移为 import `@anomalo/contracts`，再考虑将目录移动到 `apps/web`。
-- 旧 `agent-backend/app/frontend` 生成目录在 Node Host 接管生产前继续维护。
+- 旧 `runtime-bundle/app/frontend` 生成目录在 Node Host 接管生产前继续维护。
 
 ## 14. 配置设计
 
@@ -1124,7 +1132,7 @@ Buddy 硬件验证保持人工 Gate：
 
 编码内容：
 
-- SQLite Session Adapter、schema migration、dry-run CLI。
+- SQLite Session Adapter 和 Node Session schema（不包含旧 Session import）。
 - 为旧 Python Host 增加读取和写入同一 v2 schema 的兼容 Adapter。
 - 在切换 Node Host 前，先让 Python Host 以 `ANOMALO_SESSION_SCHEMA=v2` 运行并验证恢复能力。
 - Fastify Host、REST/NDJSON/WebSocket Interface。
@@ -1134,7 +1142,7 @@ Buddy 硬件验证保持人工 Gate：
 
 退出条件：
 
-- 旧 Session 迁移校验通过。
+- 新 Node Session schema 和 stop/resume 校验通过；旧 Session 不属于切换 Gate。
 - Python Host 和 Node Host 的 Session 契约测试运行于同一组 v2 fixture。
 - `/api/chat`、`/api/chat/stream`、WebSocket 与旧 Host 契约一致。
 - Node Host 可使用 mock model 完成全部前端流程。
@@ -1197,7 +1205,7 @@ Buddy 硬件验证保持人工 Gate：
 3. `refactor: deepen python context and run modules`
 4. `chore: add typescript workspace and shared contracts`
 5. `feat: implement replayable typescript agent core`
-6. `feat: add session v2 sqlite adapter and migration cli`
+6. `feat: add node session v2 sqlite adapter without legacy import`
 7. `feat: add node host chat transports`
 8. `feat: add runtime implementation switch`
 9. `refactor: expose python capabilities through worker interface`
@@ -1259,7 +1267,7 @@ Buddy 硬件验证保持人工 Gate：
 - Vue 与 Host 共享 `@anomalo/contracts`。
 - AgentCore、Session、ToolRuntime、PluginHost 都有稳定 Interface 和契约测试。
 - 现有 chat、preset、browser、stop/resume、structured output 行为通过回归。
-- 旧 Session 可无损读取和恢复。
+- 新 Node Session 可读取和恢复；旧 Python Session 不属于兼容范围。
 - Python 只保留明确的 Worker 能力。
 - Buddy 仍符合“设备是具身 Interface，Host 是主运行时”的领域定义。
 - Pi L1/L2 兼容通过至少两个真实扩展验证。
@@ -1300,7 +1308,7 @@ npm --prefix frontend run build
 - [Pi Sessions](https://pi.dev/docs/latest/sessions)
 - [Pi Compaction](https://pi.dev/docs/latest/compaction)
 - [Pi Security](https://pi.dev/docs/latest/security)
-- Anomalo 当前运行时：`agent-backend/app/agent/runtime.py`
-- Anomalo 当前 Session：`agent-backend/app/agent/session.py`
-- Anomalo 当前 Tool Interface：`agent-backend/app/tools/base.py`
+- AnomaloHaris 当前运行时：`runtime-bundle/app/agent/runtime.py`
+- AnomaloHaris 当前 Session：`runtime-bundle/app/agent/session.py`
+- AnomaloHaris 当前 Tool Interface：`runtime-bundle/app/tools/base.py`
 - Buddy 领域上下文：`buddy-backend/docs/CONTEXT.md`

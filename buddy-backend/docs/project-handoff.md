@@ -1,8 +1,9 @@
 # MystackChan Project Handoff
 
-> Historical firmware handoff. Anomalo's Node Host no longer embeds the Python
-> Buddy host, Codex hook relay, audio bridge, or vision service. Restore any of
-> those capabilities only as an explicit, separately tested plugin.
+> Historical firmware handoff. AnomaloHaris's Node Host does not embed Buddy
+> hardware, audio, or vision. The independent Node Buddy service at
+> `apps/buddy-service` owns the Call Buddy gateway and Codex Hook Relay; Node
+> uses it through the optional `buddy-bridge` plugin.
 
 This document captures the working context from the StackChan firmware discussion
 so the project can continue from `/path/to/MyStackChan` without
@@ -17,7 +18,7 @@ depending on the old `StackChan-BSP` workspace or chat history.
 | Firmware version | `0.5.0` in `device.boot` events. |
 | Protocol | Call Buddy line protocol over USB Serial, optional TCP line mode. |
 | Buddy art | Uses source sprite sheet cut into 16-color, 4-bit packed frames. |
-| Host agent | Not implemented here; protocol and architecture docs are ready. |
+| Host agent | Optional `apps/buddy-service` plus Node `buddy-bridge` integration. |
 | Xiaozhi | Not used in current firmware; kept only as conceptual/reference material. |
 | Camera probe | Isolated Arduino experiment exists; not integrated into main Buddy firmware. |
 

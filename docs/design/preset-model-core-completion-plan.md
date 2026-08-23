@@ -4,11 +4,11 @@
 - Date: 2026-08-23
 - Target branch: `codex/preset-model-phase5-7`
 - Based on: `docs/design/node-preset-model-compute-center.md`
-- Audience: Luna、Anomalo runtime/frontend maintainers、reviewers
+- Audience: Luna、AnomaloHaris runtime/frontend maintainers、reviewers
 
 ## 1. 目标
 
-本计划用于完成 Anomalo Node.js Preset Model 的核心运行语义，使 Anomalo 可以作为其他 Agent 服务的本地 AI 算力中心。
+本计划用于完成 AnomaloHaris Node.js Preset Model 的核心运行语义，使 AnomaloHaris 可以作为其他 Agent 服务的本地 AI 算力中心。
 
 完成后必须满足：
 
@@ -288,7 +288,7 @@ fix: route provider execution through compiled preset bindings
 退出条件：
 
 - 非默认 Preset Model 的 Provider 配置真实生效。
-- 默认 Anomalo Agent 也通过同一 Gateway，没有特殊 runtime。
+- 默认 AnomaloHaris Agent 也通过同一 Gateway，没有特殊 runtime。
 
 #### Slice 3：强制不可变 policy
 
@@ -340,8 +340,8 @@ fix: preserve preset model bindings across session lifecycle
 | 场景 | 预期 |
 | --- | --- |
 | 新 Session 未指定 Ref | 绑定当前明确默认 Ref |
-| 旧 Session 未指定 Ref，默认值已变化 | 继续使用原绑定 Ref |
-| 旧 Session 指定其他 Ref | `409 session_model_mismatch` |
+| 已有 Node Session 未指定 Ref，默认值已变化 | 继续使用原绑定 Ref |
+| 已有 Node Session 指定其他 Ref | `409 session_model_mismatch` |
 | retire 后创建新 Session | `404/410 preset_model_not_available` |
 | retire 前已绑定 Session | 可继续和 resume |
 | retire 当前默认 Ref | management 请求失败 |
@@ -407,7 +407,7 @@ E2E：
 - 创建 draft、validate、publish 新版本。
 - 用明确版本创建 Session 并发送普通问题。
 - 发送当前信息问题，观察真实 `web_search`/`web_fetch` timeline 和来源。
-- 切换默认版本后继续旧 Session。
+- 切换默认版本后继续已有 Node Session。
 - retire 非默认旧版本后继续其已绑定 Session，且新 Session 不能使用它。
 - Provider 或 required 插件不可用时 UI 显示结构化错误。
 
@@ -431,7 +431,7 @@ test: close node preset model production acceptance gates
 - 使用 OpenAI Node SDK 调用 `/v1/chat/completions` 的 stream/non-stream。
 - 运行 Web 当前信息检索，确认工具执行而非输出 markup 或凭记忆作答。
 - 执行 production image、静态前端和 Node process-tree smoke。
-- 执行 Session/legacy preset migration dry-run、幂等检查和摘要报告。
+- 执行 legacy Preset Agent migration dry-run、幂等检查和摘要报告；旧 Session 数据不迁移，Node Session 数据库从空 schema 开始。
 - 执行数据库备份恢复与上一版 Node 镜像回滚演练。
 - 更新 parity manifest：只有有测试证据的能力可改为 `parity`；其余必须明确归类 `optional-plugin` 或 `deprecated`。
 - 更新 README、ADR、部署和运维文档。
@@ -473,7 +473,7 @@ rollback_result
 ```bash
 npm test --workspace @anomalo/contracts
 npm test --workspace @anomalo/node-host
-npm test --workspace anomalo-frontend
+npm test --workspace anomaloharis-frontend
 npm run build --workspaces --if-present
 git diff --check
 ```
@@ -499,9 +499,9 @@ git diff --check
 
 - published 记录禁止原地重编译后覆盖旧 hash。
 - 如果 CompiledRunSpec schema 升级，旧记录使用明确 schema version。
-- migration 首先 dry-run，输出 created/skipped/error 统计和非敏感 hash。
+- Preset Agent migration 首先 dry-run，输出 created/skipped/error 统计和非敏感 hash；旧 Session 数据明确丢弃，不提供兼容导入。
 - migration 必须幂等；重复执行不得创建新版本或改变已发布 hash。
-- 历史 Session 保留原 `preset_model_ref` 和 `compiled_hash`。
+- 新 Node Session 只记录 Node 运行产生的 `preset_model_ref` 和 `compiled_hash`；旧 Python Session 不属于迁移范围。
 - legacy `/api/chat` 继续有价值，但只是默认 Preset Model 的便利入口。
 - `/api/agents` 等兼容 alias 不得拥有独立存储或运行语义。
 

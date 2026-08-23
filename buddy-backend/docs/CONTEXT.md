@@ -3,18 +3,18 @@
 This project is the custom Arduino firmware and working documentation for a
 CoreS3 StackChan device used as a local AI/agent buddy.
 
-> This document is firmware/plugin reference material. The Buddy hook relay and
-> host-side audio/vision pipeline described in older notes are disabled and are
-> not part of the Anomalo Node Host.
+> This document is firmware/plugin reference material. The optional Buddy
+> backend owns the Hook Relay and Call Buddy transport; audio/vision remains
+> outside the AnomaloHaris Node Host.
 
 ## Current Direction
 
 - Device role: embodied desktop interface, not the main AI runtime.
-- Host role: an optional Buddy plugin or external service may translate agent
-  state into Call Buddy commands. The Node Host does not own Codex hooks,
-  STT/TTS, audio, or vision.
-- Codex run projection: retained only as a historical design reference in
-  `docs/design/buddy-hook-state-machine.md`; it is not an active module.
+- Host role: `apps/buddy-service` translates Codex and Agent state into Call Buddy
+  commands. The Node Host calls it through the optional `buddy-bridge` plugin
+  and does not own Codex hooks, STT/TTS, audio, or vision.
+- Codex run projection: implemented by `apps/buddy-service/src/hook-relay.ts`;
+  the state machine remains outside Agent Core.
 - Firmware role: display buddy state, play sprite animations, drive LEDs/servos,
   read touch input, and expose a small line-based control protocol.
 - Protocol name: Call Buddy.

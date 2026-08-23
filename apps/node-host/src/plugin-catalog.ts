@@ -1,8 +1,11 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import type { PluginCompatibility, PluginPermission, PluginSpec } from "./plugins.js";
+
+const REPOSITORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 
 /**
  * A catalog entry is the only executable plugin metadata that a Preset Model
@@ -235,6 +238,28 @@ export function builtinPluginCatalog(): PluginCatalog {
       entry: "builtin:pi-plugin-host",
       compatibility: "L2",
       permissions: ["tools.register", "lifecycle.context", "lifecycle.run"],
+    }),
+    createPluginManifest({
+      id: "buddy-bridge",
+      version: "1.0.0",
+      package: "@anomalo/buddy-bridge",
+      entry: ".",
+      // Hash the compiled package payload. Source checkouts and production
+      // images intentionally contain different workspace metadata, while
+      // this directory is copied byte-for-byte into the runtime image.
+      packageRoot: resolve(REPOSITORY_ROOT, "apps/buddy-bridge/dist"),
+      compatibility: "L2",
+      permissions: ["tools.register", "lifecycle.run"],
+      toolNames: [
+        "buddy_status",
+        "buddy_recent_events",
+        "buddy_set_state",
+        "buddy_set_text",
+        "buddy_look",
+        "buddy_set_led",
+        "buddy_request_approval",
+      ],
+      capabilities: ["buddy"],
     }),
   ]);
 }

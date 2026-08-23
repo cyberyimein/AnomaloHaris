@@ -181,7 +181,7 @@ describe("AgentSessionProjection", () => {
           query: "Anomalo",
           results: [{ title: "Result", url: "https://example.com" }],
           skill_action: "activate",
-          artifacts: [{ name: "chart.png", url: "/api/artifacts/python/chart.png" }],
+          artifacts: [{ name: "chart.png", url: "https://example.com/chart.png" }],
         },
       }),
     );
@@ -195,7 +195,7 @@ describe("AgentSessionProjection", () => {
       content: "result",
     });
     expect(projection.state.conversationTurns.value.at(-1).artifacts).toEqual([
-      { name: "chart.png", url: "/api/artifacts/python/chart.png" },
+      { name: "chart.png", url: "https://example.com/chart.png" },
     ]);
     expect(onRefresh).toHaveBeenCalledWith(["skills", "tools"]);
     expect(onRefresh).toHaveBeenLastCalledWith(["tools", "skills", "mcp"]);

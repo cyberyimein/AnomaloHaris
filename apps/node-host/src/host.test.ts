@@ -138,14 +138,7 @@ describe("Node Host", () => {
     });
     expect(override.statusCode).toBe(400);
     expect(override.json()).toMatchObject({ error_code: "preset_model_override_forbidden" });
-    const compat = await app.inject({
-      method: "POST",
-      url: "/api/agents/anomalo%401/chat/stream",
-      payload: { session_id: "compat-session", message: "hello from legacy route" },
-    });
-    expect(compat.statusCode).toBe(200);
-    expect(compat.headers["x-anomalo-agent-id"]).toBe("anomalo@1");
-    expect(compat.body).toContain('"type":"run.finished"');
+    expect((await app.inject({ method: "GET", url: "/api/agents" })).statusCode).toBe(404);
     const mismatch = await app.inject({
       method: "POST",
       url: "/api/chat",

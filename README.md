@@ -1,17 +1,17 @@
-# Anomalo
+# AnomaloHaris
 
-Anomalo is a local Node.js/TypeScript AI compute center. It exposes versioned Preset Models, OpenAI-compatible calls, native run events, and a Vue control panel so other local agents can share one provider and tool runtime.
+AnomaloHaris is a local Node.js/TypeScript AI compute center. It exposes versioned Preset Models, OpenAI-compatible calls, native run events, and a Vue control panel so other local agents can share one provider and tool runtime.
 
 > [!IMPORTANT]
-> Anomalo is an experimental personal project, not a hardened multi-user service. Keep it on a trusted network unless you add authentication and deployment controls appropriate for your environment.
+> AnomaloHaris is an experimental personal project, not a hardened multi-user service. Keep it on a trusted network unless you add authentication and deployment controls appropriate for your environment.
 
 ## Why this project exists
 
-Anomalo has three primary goals:
+AnomaloHaris has three primary goals:
 
 1. **Learn and track modern agent-harness techniques.** The project is a hands-on laboratory for streaming agent runtimes, tool calling, context assembly, prompt profiles, memory, skills, MCP, sandboxed execution, and human approval flows. Its purpose is to turn new agent patterns into working code that can be inspected and understood.
 2. **Keep hardware integrations optional.** Buddy, audio, and vision are not part of the Node Host core. If retained, they must be installed as explicit capability plugins or run as external services.
-3. **Keep the system extensible for focused research agents.** Domain-specific workflows should live in dedicated agents and services rather than expanding Anomalo's core control panel.
+3. **Keep the system extensible for focused research agents.** Domain-specific workflows should live in dedicated agents and services rather than expanding AnomaloHaris's core control panel.
 
 These goals share one runtime: agent-harness experiments can be tested through the browser, embodied through StackChan, and applied to a concrete research domain instead of remaining isolated demos.
 
@@ -22,7 +22,7 @@ These goals share one runtime: agent-harness experiments can be tested through t
 - Loads prompt profiles, `AGENTS.md` memory, skills, and MCP catalogs at runtime.
 - Provides a Vue dashboard for chat, context inspection, Preset Models, and plugin capability status.
 - Loads explicitly allowlisted Pi-like Node plugins in the Host or isolated child processes.
-- Includes OpenAI-compatible and Anomalo-native APIs with usage, idempotency, and management routes.
+- Includes OpenAI-compatible and AnomaloHaris-native APIs with usage, idempotency, and management routes.
 - Keeps hardware protocol notes and optional plugin seams outside the Node production image.
 
 ## Repository layout
@@ -31,14 +31,15 @@ These goals share one runtime: agent-harness experiments can be tested through t
 .
 ├── apps/node-host/  Node.js Host, AgentCore, Provider, Session, and PluginHost
 ├── packages/        contracts and shared TypeScript packages
-├── agent-backend/   runtime resources, deployment files, and the committed frontend bundle
-├── buddy-backend/   optional Buddy plugin reference (not part of Node production)
+├── runtime-bundle/   runtime resources, deployment files, and the committed frontend bundle
+├── apps/buddy-service/ Node.js Buddy device service, Hook Relay, and approvals
+├── buddy-backend/   firmware/protocol reference only
 ├── frontend/        Vue 3 and Vite source
 ├── .env.example     Shared runtime configuration template
 └── docs/            architecture, migration, and optional-capability design docs
 ```
 
-The production frontend build is committed under `agent-backend/app/frontend/` so the Node Host can serve the application without a separate frontend process. The production Docker image contains only Node artifacts and trusted resource files.
+The production frontend build is committed under `runtime-bundle/app/frontend/` so the Node Host can serve the application without a separate frontend process. The production Docker image contains only Node artifacts and trusted resource files.
 
 ## Requirements
 
@@ -52,7 +53,7 @@ Clone the repository and create your local configuration:
 
 ```bash
 git clone <your-fork-or-repository-url>
-cd Anomalo
+cd AnomaloHaris
 cp .env.example .env
 ```
 
@@ -71,7 +72,7 @@ node apps/node-host/dist/main.js
 
 Open <http://127.0.0.1:8000>.
 
-Without `OPENROUTER_API_KEY`, Anomalo uses a deterministic mock response. Add an OpenRouter key to the untracked `.env` file to enable model calls:
+Without `OPENROUTER_API_KEY`, AnomaloHaris uses a deterministic mock response. Add an OpenRouter key to the untracked `.env` file to enable model calls:
 
 ```dotenv
 OPENROUTER_API_KEY=your-key-here
@@ -103,7 +104,7 @@ To refresh the frontend bundle committed for the Node Host:
 npm --prefix frontend run build
 ```
 
-The build replaces `agent-backend/app/frontend/`; review and commit the generated asset changes together with the source changes.
+The build replaces `runtime-bundle/app/frontend/`; review and commit the generated asset changes together with the source changes.
 
 ## Configuration
 
@@ -123,8 +124,11 @@ All runtime configuration comes from the root `.env`. The most commonly used var
 | `ANOMALO_ADMIN_TOKEN` | Authorizes remote management requests | unset |
 | `ANOMALO_SESSION_SCHEMA` | Session adapter schema | `v2` |
 | `ANOMALO_PI_EXTENSIONS_ENABLED` | Enable the configured trusted Pi extensions | `false` |
-| `ANOMALO_PLUGIN_CONFIG` | Explicit plugin allowlist | `./agent-backend/config/plugins.yaml` |
+| `ANOMALO_PLUGIN_CONFIG` | Explicit plugin allowlist | `./runtime-bundle/config/plugins.yaml` |
 | `ANOMALO_PLUGIN_TIMEOUT_MS` | Plugin hook/tool timeout | `30000` |
+| `ANOMALO_BUDDY_SERVICE_URL` | Optional Buddy backend URL used by `buddy-bridge` | `http://127.0.0.1:8765` |
+| `ANOMALO_BUDDY_SERVICE_TOKEN` | Token forwarded only to the allowlisted Buddy child plugin | unset |
+| `ANOMALO_BUDDY_REQUEST_TIMEOUT_MS` | Buddy bridge request timeout | `1500` |
 | `ANOMALO_AGENT_PROMPT_PROFILE` | Default prompt profile | `agent` |
 | `WEB_TOOLS_ENABLED` | Publishes DuckDuckGo search and Markdown fetch tools | `true` |
 | `ANOMALO_DATA_DIR` | Persistent SQLite data directory | `./data` |
@@ -134,17 +138,35 @@ See [`.env.example`](.env.example) for the complete template. Empty optional val
 ### Optional capability plugins
 
 The Node Host deliberately does not expose built-in Buddy, audio, or vision
-routes. A capability plugin must be explicitly installed and allowlisted, may
-declare metadata such as `buddy` or `vision`, and owns its transport/tool
-implementation. Deprecated capabilities should remain disabled instead of
-being reintroduced into the Host core.
+routes. Buddy runs as an independent optional Node service in
+`apps/buddy-service/`; the Node Host uses the explicitly allowlisted
+`@anomalo/buddy-bridge` plugin and the `runtime-bundle/skills/buddy` Skill.
+Audio, vision, camera, and media processing remain outside this integration.
+
+Start the Buddy service separately when a device is available:
+
+```bash
+npm run build --workspace @anomalo/buddy-service
+npm run start --workspace @anomalo/buddy-service
+```
+
+Set `ANOMALO_PI_EXTENSIONS_ENABLED=true` in the Node Host and keep the Buddy
+service on loopback for local development. Public Buddy deployments require
+separate `BUDDY_SERVICE_TOKEN` and `BUDDY_HOOK_TOKEN` values. The Node service
+owns Call Buddy transport, Hook Relay state, and approvals; the Agent Host only
+owns the versioned bridge plugin.
+
+The service auto-connects on startup. Without a serial port it opens a local
+Buddy TCP listener on `127.0.0.1:8766`; set `BUDDY_TCP_HOST` and
+`BUDDY_TCP_CLIENT_IP` explicitly for a remote device. A non-loopback TCP
+listener is rejected unless the client IP allowlist is configured.
 
 ## Agent runtime
 
-Anomalo assembles each model request from:
+AnomaloHaris assembles each model request from:
 
-1. A prompt profile from `agent-backend/config/prompts.yaml`.
-2. Optional personal memory from `agent-backend/config/AGENTS.md`.
+1. A prompt profile from `runtime-bundle/config/prompts.yaml`.
+2. Optional personal memory from `runtime-bundle/config/AGENTS.md`.
 3. Activated skills and MCP server instructions.
 4. Session history and available tool schemas.
 
@@ -170,7 +192,7 @@ the client returns `browser.tool.result` with the matching `session_id`, `run_id
 `BROWSER_TOOL_TIMEOUT_SECONDS`.
 
 HTTP callers can request a structured final answer with the OpenAI-compatible
-`response_format` field. The tool-calling loop remains streamed internally; Anomalo runs a
+`response_format` field. The tool-calling loop remains streamed internally; AnomaloHaris runs a
 non-streaming finalizer, validates its response, and returns the parsed value in `output`.
 
 ```json
@@ -250,23 +272,33 @@ curl -X POST http://localhost:8000/v1/chat/completions \
 ```
 
 Use `POST /api/preset-models/{name}/versions/{version}/runs/stream` for native NDJSON events.
-The legacy `POST /api/agents/{id-or-name}/chat` aliases remain only for compatibility and resolve
-to a versioned Preset Model. Put an authenticated reverse proxy in front of any non-local deployment.
+The old `/api/agents` aliases were removed after the Preset Model migration. Use an explicit
+versioned Preset Model reference or the default `/api/chat` convenience route. Put an authenticated
+reverse proxy in front of any non-local deployment.
+
+To replace records from the retired Preset Agent database, run a dry run first and then repeat with
+`--apply`:
+
+```bash
+npm --workspace @anomalo/node-host run migrate:preset-models -- --source data/preset-agents.sqlite3
+npm --workspace @anomalo/node-host run migrate:preset-models -- --source data/preset-agents.sqlite3 --apply
+```
 
 ### Prompt profiles and memory
 
-Edit `agent-backend/config/prompts.yaml` to add or update system prompt profiles. The file is read for each run, so prompt changes do not require a server restart.
+Edit `runtime-bundle/config/prompts.yaml` to add or update system prompt profiles. The file is read for each run, so prompt changes do not require a server restart.
 
-The development UI can upload an `AGENTS.md` file as local agent memory. It is stored at `agent-backend/config/AGENTS.md`, which is intentionally ignored by Git because it may contain personal information.
+The development UI can upload an `AGENTS.md` file as local agent memory. It is stored at `runtime-bundle/config/AGENTS.md`, which is intentionally ignored by Git because it may contain personal information.
 
 ### Skills
 
-Node Host skills live under `agent-backend/skills/`. Each skill contains a `SKILL.md` file with
-YAML frontmatter and instructions. Buddy plugin skills and executable hardware integrations are
-not loaded by the Node runtime; a capability plugin owns them explicitly.
+Node Host skills live under `runtime-bundle/skills/`. Each skill contains a `SKILL.md` file with
+YAML frontmatter and instructions. `runtime-bundle/skills/buddy` documents the
+`buddy-bridge` tools; the executable hardware integration remains in the independent Buddy
+service and is never imported by the Node runtime.
 
 ```text
-agent-backend/skills/calculator/
+runtime-bundle/skills/calculator/
 └── SKILL.md
 ```
 
@@ -274,7 +306,7 @@ Skills are activated per session and included in the run context snapshot.
 
 ### MCP catalog
 
-Node Host reads `agent-backend/config/mcp_servers.yaml` and the corresponding markdown
+Node Host reads `runtime-bundle/config/mcp_servers.yaml` and the corresponding markdown
 instructions, exposes the catalog through `/api/mcp`, and snapshots active instructions per run.
 Actual MCP transport/client implementations belong in an explicitly installed plugin or an
 external service; the core image does not install a Python MCP SDK or launch arbitrary MCP
@@ -292,11 +324,11 @@ remain outside the Node Host core.
 
 ## Retired Python and hardware integrations
 
-The former Python Host, audio, vision, and Codex hook runtime have been removed. Buddy protocol notes
-and an optional Python gateway reference remain under `buddy-backend/`; they are not imported by the
-Node Host, copied into the production image, or started by deployment scripts. If any capability
-returns, package it as an explicitly allowlisted plugin or external service with its own lifecycle
-and security boundary.
+The former Python Agent Host, audio, vision, and direct Node-owned Codex hook runtime have been
+removed. The active Buddy service is Node-only under `apps/buddy-service/`; the root
+`buddy-backend/` directory is retained only for firmware/protocol notes. Neither is imported by
+the Node Host or copied into the Node production image. The
+optional Node bridge is allowlisted separately and fails open when the Buddy service is absent.
 
 ## Apple Container deployment
 
@@ -305,25 +337,25 @@ artifacts plus trusted prompt, skill, and MCP resource files; it does not instal
 the legacy Buddy port. Build an OCI archive with Apple Container:
 
 ```bash
-agent-backend/scripts/build_apple_container_image.sh
+runtime-bundle/scripts/build_apple_container_image.sh
 ```
 
-The script writes the archive and metadata under the ignored `agent-backend/artifacts/container-images/` directory. Deploy with a private environment file:
+The script writes the archive and metadata under the ignored `runtime-bundle/artifacts/container-images/` directory. Deploy with a private environment file:
 
 ```bash
-cp agent-backend/deploy/anomalo.container.env.example \
-  agent-backend/deploy/anomalo.container.env
+cp runtime-bundle/deploy/anomaloharis.container.env.example \
+  runtime-bundle/deploy/anomaloharis.container.env
 
 REMOTE=user@your-host.example \
-ENV_FILE=agent-backend/deploy/anomalo.container.env \
-  agent-backend/scripts/deploy_apple_container.sh \
-  agent-backend/artifacts/container-images/anomalo-<tag>-linux-arm64.env
+ENV_FILE=runtime-bundle/deploy/anomaloharis.container.env \
+  runtime-bundle/scripts/deploy_apple_container.sh \
+  runtime-bundle/artifacts/container-images/anomaloharis-<tag>-linux-arm64.env
 ```
 
 The private deployment environment file is ignored by Git. Review both scripts and adapt the network, storage, SSH, and host-loopback settings to your machine before running them.
 Before deployment, set `ANOMALO_SERVICE_TOKEN` and the separate `ANOMALO_ADMIN_TOKEN` to different long random secrets. The production image listens on `0.0.0.0` only with explicit acknowledgement and refuses to start without both tokens; compute callers send the service token as a Bearer token, while the dashboard sends the admin token only to management routes.
 
-The deployment script mounts `REMOTE_DATA_DIR` from the deployment host to `/data` in the container. Session history and Stop/Resume checkpoints are stored in `/data/sessions.sqlite3`; Preset Models are stored in `/data/preset-models.sqlite3`; usage, idempotency reservations, and Native Run events are stored in `/data/compute.sqlite3`. Keep this directory on persistent host storage and do not delete it when replacing the container. By default it is `.anomalo/anomalo-data` under the remote user's home; set `REMOTE_STORAGE_ROOT` or `REMOTE_DATA_DIR` to an explicit host path when needed.
+The deployment script mounts `REMOTE_DATA_DIR` from the deployment host to `/data` in the container. Session history and Stop/Resume checkpoints are stored in `/data/sessions.sqlite3`; Preset Models are stored in `/data/preset-models.sqlite3`; usage, idempotency reservations, and Native Run events are stored in `/data/compute.sqlite3`. Keep this directory on persistent host storage and do not delete it when replacing the container. By default it reuses an existing `.anomalo/anomalo-data` directory, otherwise it creates `.anomaloharis/anomaloharis-data`; set `REMOTE_STORAGE_ROOT` or `REMOTE_DATA_DIR` to an explicit host path when needed.
 
 ## Tests and linting
 
@@ -337,8 +369,9 @@ npm --prefix frontend test
 ```
 
 The Node tests cover the agent lifecycle, API routes, provider tool serialization, Preset Models,
-plugin loading, browser bridge, resources, and frontend projections. Python and hardware tests
-remain historical reference checks and are not required to start the Node production image.
+plugin loading, browser bridge, resources, frontend projections, and the Buddy service/relay. The
+legacy Python and hardware files are historical reference material and are not required to start
+the Node production image.
 
 ## Security notes
 
@@ -353,7 +386,7 @@ remain historical reference checks and are not required to start the Node produc
 
 ## Project status
 
-Anomalo is developed as a personal system and may change without backward-compatibility guarantees. Issues and pull requests are welcome after the repository is published, but expect hardware- and environment-specific setup for the optional integrations.
+AnomaloHaris is developed as a personal system and may change without backward-compatibility guarantees. Issues and pull requests are welcome after the repository is published, but expect hardware- and environment-specific setup for the optional integrations.
 
 ## License
 

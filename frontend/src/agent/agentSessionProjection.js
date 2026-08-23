@@ -20,7 +20,7 @@ export function createAgentSessionProjection({
   const agentState = ref("Idle");
   const runStatus = ref("Idle");
   const runId = ref("none");
-  const promptProfile = ref("default");
+  const promptProfile = ref("agent");
   const iterationCount = ref("0");
   const stateDetail = ref("Waiting for input.");
   const runTitle = ref("Ready");
@@ -501,7 +501,7 @@ export function createAgentSessionProjection({
       2,
     );
     copyMessagesDisabled.value = messages.length === 0;
-    promptProfile.value = context?.profile || "default";
+    promptProfile.value = context?.profile || "agent";
     iterationCount.value = String(iteration || 0);
     setPromptOutput({ source: "llm.request", iteration, context, request: safeRequest });
     contextStats.value = contextStatRows(safeRequest, context, messages);

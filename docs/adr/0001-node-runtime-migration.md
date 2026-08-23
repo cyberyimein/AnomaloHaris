@@ -2,7 +2,7 @@
 
 - Status: Superseded as the final target by ADR-0002; retained as migration history
 - Date: 2026-08-22
-- Decision owners: Anomalo runtime maintainers
+- Decision owners: AnomaloHaris runtime maintainers
 
 ## Context
 

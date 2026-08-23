@@ -1,10 +1,10 @@
-# Anomalo Node.js Preset Model 算力中心开发设计
+# AnomaloHaris Node.js Preset Model 算力中心开发设计
 
 > 状态：Accepted for implementation
 >
 > 面向读者：负责实现本方案的 Luna 编码模型，以及后续审查、测试和发布人员
 >
-> 最终目标：完全使用 Node.js/TypeScript 的类 Pi 架构替换 Python 后端，并把 Anomalo 建设为其他 Agent 服务统一调用的本地 AI 算力中心
+> 最终目标：完全使用 Node.js/TypeScript 的类 Pi 架构替换 Python 后端，并把 AnomaloHaris 建设为其他 Agent 服务统一调用的本地 AI 算力中心
 >
 > 规范词：MUST 表示必须满足，SHOULD 表示默认应满足，MAY 表示可以延后
 >
@@ -23,15 +23,15 @@ Luna 必须把本文视为最终产品规格，而不是对当前 Node Host 的�
 - 类 Pi 插件加载、工具注册、生命周期 hook、权限和隔离。
 - Session、Run、Usage、Web trace 和审计持久化。
 - Web、Browser、MCP、artifact 和管理 API；Buddy、音频、视觉属于可选插件或待废弃能力，不进入 Node Host 核心。
-- 对其他本地 Agent 服务提供稳定的 OpenAI-compatible 和 Anomalo-native API。
+- 对其他本地 Agent 服务提供稳定的 OpenAI-compatible 和 AnomaloHaris-native API。
 
-最终生产运行时不得要求 Python 进程。Python 可以在迁移期作为旧实现和对照测试存在，但不能成为最终架构的 Worker、fallback Host 或隐式依赖。确实需要 Python 生态的外部能力时，Anomalo 只能把它当作独立远程服务，通过公开协议调用；它不属于 Anomalo 后端进程树，也不能拥有 Anomalo Session。
+最终生产运行时不得要求 Python 进程。Python 可以在迁移期作为旧实现和对照测试存在，但不能成为最终架构的 Worker、fallback Host 或隐式依赖。确实需要 Python 生态的外部能力时，AnomaloHaris 只能把它当作独立远程服务，通过公开协议调用；它不属于 AnomaloHaris 后端进程树，也不能拥有 AnomaloHaris Session。
 
 Luna 不得以“Node 服务可启动”“工具出现在 `/api/tools`”“mock 测试通过”作为完成标准。只有真实 Provider、真实工具调用、真实 UI、旧能力矩阵和无 Python 运行时门槛全部通过，才能切换默认后端。
 
 ## 2. 核心产品决策
 
-### 2.1 Preset Model 是 Anomalo 的对外产品单位
+### 2.1 Preset Model 是 AnomaloHaris 的对外产品单位
 
 保留 **Preset Model** 这个名称。
 
@@ -65,7 +65,7 @@ buddy-companion@2
 
 调用者不能覆盖 Preset Model 的 system prompt、插件集合、底层 Provider Model 或工具 allowlist。任何这些内容的变化都必须发布新版本。
 
-**默认 Anomalo Agent 也必须是一个 Preset Model。** 推荐内建名称：
+**默认 AnomaloHaris Agent 也必须是一个 Preset Model。** 推荐内建名称：
 
 ```text
 anomalo@1
@@ -78,13 +78,13 @@ anomalo@1
 指定调用  → 调用方明确提供的 Preset Model，例如 fomc-brief@3
 ```
 
-因此，默认 Anomalo Agent 和其他 Preset Model 共享同一个 AgentCore、PluginHost、Session、ProviderGateway 和事件协议；差别只在解析出的 Model Ref。
+因此，默认 AnomaloHaris Agent 和其他 Preset Model 共享同一个 AgentCore、PluginHost、Session、ProviderGateway 和事件协议；差别只在解析出的 Model Ref。
 
-### 2.2 Anomalo 是本地 AI 算力中心
+### 2.2 AnomaloHaris 是本地 AI 算力中心
 
-其他 Agent 服务不再分别维护 Provider key、模型选择、工具循环和 Provider 兼容逻辑，而是统一调用 Anomalo。
+其他 Agent 服务不再分别维护 Provider key、模型选择、工具循环和 Provider 兼容逻辑，而是统一调用 AnomaloHaris。
 
-Anomalo 对外负责：
+AnomaloHaris 对外负责：
 
 - 把 `name@version` 解析为不可变 Preset Model 快照。
 - 集中管理 Provider credentials 和模型路由。
@@ -97,7 +97,7 @@ Anomalo 对外负责：
 
 - 提供用户消息或消息历史。
 - 提供自己的 `client_id`、可选 `session_id` 和幂等键。
-- 处理标准响应或订阅 Anomalo 原生事件。
+- 处理标准响应或订阅 AnomaloHaris 原生事件。
 - 不假设底层 Provider、插件实现或 prompt 内容。
 
 ### 2.3 最终架构是 Node-only
@@ -167,9 +167,9 @@ Node 事件协议和 UI 必须共同以 `@anomalo/contracts` 为唯一来源，�
 
 - 完整替换 Python 后端，不丢失当前可用功能。
 - 把 Preset Model 变成一等、不可变、可版本化的产品对象。
-- 让其他本地 Agent 服务用 `name@version` 稳定调用 Anomalo。
+- 让其他本地 Agent 服务用 `name@version` 稳定调用 AnomaloHaris。
 - 提供 OpenAI-compatible API，降低其他服务的接入成本。
-- 提供 Anomalo-native API，暴露完整 run/tool/context 事件。
+- 提供 AnomaloHaris-native API，暴露完整 run/tool/context 事件。
 - 用类 Pi 插件架构组合固定能力，而不是把所有工具硬编码进 AgentCore。
 - 在 Provider Gateway 内解决不同模型的 streaming 和工具调用协议差异。
 - 让 UI、外部 API 和内部运行时共享同一套 contracts。
@@ -190,7 +190,7 @@ Node 事件协议和 UI 必须共同以 `@anomalo/contracts` 为唯一来源，�
 
 | 术语 | 定义 |
 | --- | --- |
-| Preset Model | Anomalo 发布的固定 Agent 能力包 |
+| Preset Model | AnomaloHaris 发布的固定 Agent 能力包 |
 | Preset Model Name | 稳定的小写名称，如 `fomc-brief` |
 | Preset Model Version | 每个 name 下单调递增的正整数 |
 | Model Ref | `<name>@<version>`，唯一确定一个已发布 Preset Model |
@@ -202,7 +202,7 @@ Node 事件协议和 UI 必须共同以 `@anomalo/contracts` 为唯一来源，�
 | Agent Session | 可选的持久化对话与 checkpoint 容器，固定绑定一个 Model Ref |
 | Provider Gateway | 把不同 Provider 协议规范化为 AgentCore 事件的深 Module |
 | PluginHost | 加载类 Pi 插件并处理工具与生命周期 hook 的 Module |
-| Compute Client | 调用 Anomalo 的外部 Agent 服务 |
+| Compute Client | 调用 AnomaloHaris 的外部 Agent 服务 |
 
 文档和代码中禁止使用模糊的 `model` 指代两种对象。变量和字段应明确命名为 `presetModelRef` 或 `providerModel`。
 
@@ -368,7 +368,7 @@ draft
 ```text
 ┌──────────────────────────────────────────────────────────────┐
 │ Compute Clients                                              │
-│ Other agents · CLI · OpenAI SDK · Anomalo Web UI            │
+│ Other agents · CLI · OpenAI SDK · AnomaloHaris Web UI            │
 └───────────────────────┬──────────────────────────────────────┘
                         │ HTTP/SSE/NDJSON/WebSocket
 ┌───────────────────────▼──────────────────────────────────────┐
@@ -426,7 +426,7 @@ Adapters → external SDK, network, SQLite, serial/TCP, filesystem
 迁移应逐步深化现有 workspace，不要求一次性移动全部文件。
 
 ```text
-Anomalo/
+AnomaloHaris/
 ├── apps/
 │   ├── node-host/                    # 迁移期保留路径，最终可改名 host
 │   └── web/                          # 可在稳定后由 frontend/ 迁移
@@ -826,9 +826,9 @@ POST /v1/chat/completions
 - 调用方 Provider Model override
 - 调用方 prompt/plugin override
 
-标准 API 对外只流最终 assistant 内容和 usage。内部工具细节通过 Anomalo-native API 获取，避免破坏 OpenAI SDK 兼容性。
+标准 API 对外只流最终 assistant 内容和 usage。内部工具细节通过 AnomaloHaris-native API 获取，避免破坏 OpenAI SDK 兼容性。
 
-### 13.2 Anomalo-native API
+### 13.2 AnomaloHaris-native API
 
 ```text
 GET  /api/preset-models
@@ -866,14 +866,14 @@ WS   /ws/chat/{session_id}
 
 | 入口 | Model Ref | 用途 |
 | --- | --- | --- |
-| `/api/chat*`、旧 Chat WebSocket | 可省略；省略时解析默认值 | 通用 Anomalo Agent、本地 UI、简单远程客户端 |
+| `/api/chat*`、旧 Chat WebSocket | 可省略；省略时解析默认值 | 通用 AnomaloHaris Agent、本地 UI、简单远程客户端 |
 | `/api/chat*`、旧 Chat WebSocket | 可显式传 `name@version` | 兼容期统一 transport |
 | `/v1/chat/completions` | 必须显式传 `model=name@version` | OpenAI SDK 和其他 Agent 服务 |
 | Native Preset Model Run API | 路径中必须包含 name/version | 富事件、调试和管理客户端 |
 
 因此，“不使用 Preset Model”在内部并不存在；调用者只是选择不显式指定，Host 随即解析并固定绑定默认 Preset Model。
 
-旧 `/api/agents` 和 `/api/agents/{ref}/chat*` 仍可在迁移期作为 Preset Model API 的兼容别名，但新客户端应使用 `/api/preset-models` 或 `/v1/chat/completions`。
+旧 `/api/agents` 和 `/api/agents/{ref}/chat*` 只在迁移设计中保留为历史记录，最终 Node Host 不再注册这些兼容别名；客户端应使用 `/api/preset-models` 或 `/v1/chat/completions`。
 
 ### 13.4 管理 API
 
@@ -1023,7 +1023,7 @@ usage_records:
 
 ## 16. 安全与本地部署
 
-“本地服务”不等于“无需安全边界”。Anomalo 集中持有 Provider key、浏览器、文件、设备和插件执行能力。
+“本地服务”不等于“无需安全边界”。AnomaloHaris 集中持有 Provider key、浏览器、文件、设备和插件执行能力。
 
 要求：
 
@@ -1094,7 +1094,7 @@ type ParityEntry = {
 
 迁移 CLI 必须支持 dry-run、hash、逐行错误、幂等和备份。迁移后旧 preset agent 表只读一个发布周期。
 
-现有默认 Anomalo Agent 的 prompt profile、默认 Provider Model、Core/Web 工具和运行 policy 必须先生成内建 `anomalo@1`。旧 `/api/chat` 的行为契约以该版本作为迁移基线，而不是继续保留一个 Registry 之外的特殊默认 runtime。
+现有默认 AnomaloHaris Agent 的 prompt profile、默认 Provider Model、Core/Web 工具和运行 policy 必须先生成内建 `anomalo@1`。旧 `/api/chat` 的行为契约以该版本作为迁移基线，而不是继续保留一个 Registry 之外的特殊默认 runtime。
 
 ### 18.2 动态 Skill/MCP 迁移
 
@@ -1103,7 +1103,7 @@ type ParityEntry = {
 - 常用组合迁移为独立 Preset Model version。
 - Skill 转为 resource/plugin。
 - MCP server 转为固定 MCP plugin binding。
-- 历史 Session 保存原资源状态用于回放，但新 Run 必须继续使用该 Session 固定绑定的 Model Ref。
+- 旧 Python Session 不迁移，也不作为 Node 运行时的回放输入；Node 部署以新的 Session 数据库开始。新建的 Node Session 仍必须固定绑定 Model Ref。
 
 ### 18.3 Python-only 能力
 
@@ -1212,7 +1212,7 @@ type ParityEntry = {
 
 退出条件：
 
-- 官方 OpenAI Node SDK 可以通过 Anomalo base URL 调用 Preset Model。
+- 官方 OpenAI Node SDK 可以通过 AnomaloHaris base URL 调用 Preset Model。
 - 两个独立 fixture Agent 服务使用不同 service token 调用。
 - stream/non-stream 输出一致。
 - usage 与 Provider response 对账。
@@ -1256,7 +1256,7 @@ type ParityEntry = {
 编码内容：
 
 - Node 生产镜像不包含 Python。
-- 迁移全部 Preset Model 和 Session 数据。
+- 通过显式 CLI 迁移旧 Preset Agent 为 Preset Model；旧 Session 数据不迁移，Node Session 数据库以空 schema 初始化。
 - 执行备份、dry-run、Node smoke、观察和回滚演练。
 - 删除 Python Host/Worker 启动路径和 runtime switch。
 - 更新 README、部署脚本、ADR 和运维手册。
@@ -1334,7 +1334,7 @@ type ParityEntry = {
 7. UI 展示 web tool started/finished 和来源。
 8. stop/resume。
 9. 查看 usage。
-10. retire 后旧 Session 可继续读取，新 Session 不可创建。
+10. retire 后已有 Node Session 可继续读取，新 Session 不可创建。
 
 ### 21.4 真实环境 Gate
 
@@ -1387,7 +1387,7 @@ CI 默认使用 recorded fixtures；发布前必须保存真实 Gate 的时间�
 
 - Node Host 是唯一 HTTP、SSE/NDJSON、WebSocket 和 Agent Run 所有者。
 - Preset Model 以不可变 `name@version` 发布和调用。
-- 默认 Anomalo Agent 作为明确版本的内建 Preset Model 运行；不存在 Registry 外的特殊 Agent runtime。
+- 默认 AnomaloHaris Agent 作为明确版本的内建 Preset Model 运行；不存在 Registry 外的特殊 Agent runtime。
 - 外部 Agent 服务可通过 OpenAI SDK 和 Native API 调用。
 - Provider Gateway 支持真实生产 Provider 的工具调用协议。
 - 当前信息问题会实际调用 Web 工具，而不是输出工具 markup 或凭记忆回答。
@@ -1396,7 +1396,7 @@ CI 默认使用 recorded fixtures；发布前必须保存真实 Gate 的时间�
 - Chat、Preset Model、Session、Browser、MCP、artifact（若启用）和管理能力均在 Node 实现；Buddy、audio、vision 不得被误称为 Node Host 内置能力。
 - production image 和 process tree 不含 Python。
 - 没有 Node-to-Python Host/Worker fallback。
-- Session 和旧 preset agent 数据迁移无损、幂等、可审计。
+- 旧 Preset Agent 到 Preset Model 的迁移幂等、可审计；旧 Session 数据明确不迁移，不能作为完成条件。
 - Plugin package/version/hash 固定，权限和失败可观测。
 - usage、cost、latency 和错误按 client、Model Ref、Provider 聚合。
 - 真实 Provider、浏览器、外部 Compute Client 和硬件 Gate 已通过。

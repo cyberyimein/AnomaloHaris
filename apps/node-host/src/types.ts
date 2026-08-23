@@ -176,6 +176,7 @@ export type SessionSummary = {
   messageCount: number;
   updatedAt: string;
   canResume: boolean;
+  presetModelRef?: string | undefined;
 };
 
 export type SessionListQuery = {
