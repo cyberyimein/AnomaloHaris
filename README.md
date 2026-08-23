@@ -160,6 +160,28 @@ npm run build --workspace @anomalo/buddy-service
 npm run start --workspace @anomalo/buddy-service
 ```
 
+For an Apple Container deployment, build and deploy the independent service
+on the same `anomaloharis-external` network as Anomalo. Copy
+`runtime-bundle/deploy/buddy-service.container.env.example` to the ignored
+`runtime-bundle/deploy/buddy-service.container.env`, set both service tokens
+and the device transport values, then run:
+
+```bash
+IMAGE_NAME=buddy-service \
+DOCKERFILE=runtime-bundle/docker/buddy-service/Dockerfile \
+runtime-bundle/scripts/build_apple_container_image.sh
+REMOTE=macmini \
+ENV_FILE=runtime-bundle/deploy/buddy-service.container.env \
+runtime-bundle/scripts/deploy_buddy_container.sh \
+  runtime-bundle/artifacts/container-images/buddy-service-<tag>-linux-arm64.env
+```
+
+The Anomalo env file must use the `anomaloharis-external` network gateway for
+the published Buddy port (currently `ANOMALO_BUDDY_SERVICE_URL=http://192.168.67.1:8765`;
+confirm the gateway with `container network inspect anomaloharis-external`) and
+the matching `ANOMALO_BUDDY_SERVICE_TOKEN`. The Buddy deployment publishes TCP
+`8787` for a remote device by default.
+
 Set `ANOMALO_PI_EXTENSIONS_ENABLED=true` in the Node Host and keep the Buddy
 service on loopback for local development. Public Buddy deployments require
 separate `BUDDY_SERVICE_TOKEN` and `BUDDY_HOOK_TOKEN` values. The Node service

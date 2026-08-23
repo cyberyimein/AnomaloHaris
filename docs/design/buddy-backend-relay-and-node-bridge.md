@@ -91,3 +91,14 @@ ANOMALO_PI_EXTENSIONS_ENABLED=true \
 
 没有真实设备时，`/healthz` 和插件加载仍应成功；控制工具应返回明确的
 `buddy_unavailable`，而不是伪造成功。
+
+### Apple Container 部署
+
+Buddy 服务仍然是独立容器。它必须与 Anomalo 位于同一个
+`anomaloharis-external` 网络，Node Host 使用该网络网关映射的 Buddy
+HTTP 端口访问；Apple Container 当前不提供可靠的容器名 DNS，且
+`host.docker.internal` 是 Docker 专用地址。公开监听时必须同时设置
+`BUDDY_SERVICE_TOKEN` 和 `BUDDY_HOOK_TOKEN`。远程设备使用 TCP 时，还要
+发布 Buddy 的 TCP 端口（部署脚本默认使用宿主机/容器端口 `8787`）。Apple
+Container 会将已发布端口的来源 NAT 成网络网关地址，因此容器内的
+`BUDDY_TCP_CLIENT_IP` 应设置为该网关，而不是设备在宿主局域网中的原始地址。
