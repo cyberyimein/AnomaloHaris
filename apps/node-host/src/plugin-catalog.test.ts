@@ -23,6 +23,32 @@ afterEach(() => {
 });
 
 describe("PluginCatalog", () => {
+  it("only exposes explicitly declared workflow-callable operations", () => {
+    const catalog = new PluginCatalog([createPluginManifest({
+      id: "workflow-fixture",
+      version: "1.0.0",
+      package: "workflow-fixture",
+      entry: "builtin:workflow-fixture",
+      compatibility: "L2",
+      workflowOperations: [{
+        id: "workflow-fixture.lookup",
+        version: 1,
+        workflow_callable: true,
+        description: "Read a fixture value.",
+        input_schema: { type: "object" },
+        output_schema: { type: "object" },
+        permissions: ["fixture.read"],
+        timeout_ms: 1_000,
+        idempotency: "supported",
+      }],
+    })]);
+
+    expect(catalog.listWorkflowOperations()).toEqual([
+      expect.objectContaining({ id: "workflow-fixture.lookup", plugin_id: "workflow-fixture", plugin_version: "1.0.0" }),
+    ]);
+    expect(catalog.listWorkflowOperations()).not.toContainEqual(expect.objectContaining({ id: "time_now" }));
+  });
+
   it("catalogues Buddy as an optional fixed plugin without loading it by default", () => {
     const manifest = builtinPluginCatalog().get("buddy-bridge");
 

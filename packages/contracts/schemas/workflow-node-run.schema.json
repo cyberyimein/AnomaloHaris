@@ -1,0 +1,88 @@
+{
+  "additionalProperties": false,
+  "$id": "https://anomaloharis.dev/schemas/workflow-node-run.schema.json",
+  "type": "object",
+  "required": [
+    "node_run_id",
+    "workflow_run_id",
+    "node_id",
+    "attempt",
+    "status"
+  ],
+  "properties": {
+    "node_run_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "workflow_run_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "node_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "attempt": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "status": {
+      "anyOf": [
+        {
+          "const": "pending",
+          "type": "string"
+        },
+        {
+          "const": "ready",
+          "type": "string"
+        },
+        {
+          "const": "running",
+          "type": "string"
+        },
+        {
+          "const": "succeeded",
+          "type": "string"
+        },
+        {
+          "const": "failed",
+          "type": "string"
+        },
+        {
+          "const": "skipped",
+          "type": "string"
+        },
+        {
+          "const": "stopped",
+          "type": "string"
+        }
+      ]
+    },
+    "input": {},
+    "output": {},
+    "error": {
+      "type": "object",
+      "patternProperties": {
+        "^(.*)$": {}
+      }
+    },
+    "usage": {
+      "type": "object",
+      "patternProperties": {
+        "^(.*)$": {}
+      }
+    },
+    "child_run_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "started_at": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "finished_at": {
+      "minLength": 1,
+      "type": "string"
+    }
+  }
+}

@@ -1,0 +1,288 @@
+{
+  "additionalProperties": false,
+  "type": "object",
+  "required": [
+    "valid",
+    "errors",
+    "warnings",
+    "resolved_dependencies",
+    "definition_hash",
+    "capability_manifest_hash",
+    "compiled_hash"
+  ],
+  "properties": {
+    "valid": {
+      "type": "boolean"
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "code",
+          "path",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "anyOf": [
+              {
+                "const": "WORKFLOW_INVALID_JSON",
+                "type": "string"
+              },
+              {
+                "const": "WORKFLOW_SCHEMA_INVALID",
+                "type": "string"
+              },
+              {
+                "const": "WORKFLOW_REF_INVALID",
+                "type": "string"
+              },
+              {
+                "const": "WORKFLOW_NODE_ID_DUPLICATE",
+                "type": "string"
+              },
+              {
+                "const": "WORKFLOW_ENTRY_INVALID",
+                "type": "string"
+              },
+              {
+                "const": "WORKFLOW_OUTPUT_INVALID",
+                "type": "string"
+              },
+              {
+                "const": "WORKFLOW_NODE_UNREACHABLE",
+                "type": "string"
+              },
+              {
+                "const": "WORKFLOW_CYCLE_FORBIDDEN",
+                "type": "string"
+              },
+              {
+                "const": "WORKFLOW_PORT_NOT_FOUND",
+                "type": "string"
+              },
+              {
+                "const": "WORKFLOW_PORT_MULTIPLE_INPUTS",
+                "type": "string"
+              },
+              {
+                "const": "WORKFLOW_SCHEMA_INCOMPATIBLE",
+                "type": "string"
+              },
+              {
+                "const": "WORKFLOW_NODE_TYPE_UNSUPPORTED",
+                "type": "string"
+              },
+              {
+                "const": "WORKFLOW_NODE_CONFIG_INVALID",
+                "type": "string"
+              },
+              {
+                "const": "WORKFLOW_PRESET_MODEL_NOT_FOUND",
+                "type": "string"
+              },
+              {
+                "const": "WORKFLOW_PLUGIN_OPERATION_NOT_FOUND",
+                "type": "string"
+              },
+              {
+                "const": "WORKFLOW_PLUGIN_OPERATION_FORBIDDEN",
+                "type": "string"
+              },
+              {
+                "const": "WORKFLOW_LIMIT_EXCEEDED",
+                "type": "string"
+              },
+              {
+                "const": "WORKFLOW_PERMISSION_DENIED",
+                "type": "string"
+              },
+              {
+                "const": "WORKFLOW_MANIFEST_OUTDATED",
+                "type": "string"
+              }
+            ]
+          },
+          "path": {
+            "pattern": "^(?:|(?:/[^~]*(?:~[01][^~]*)*)*)$",
+            "type": "string"
+          },
+          "node_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "message": {
+            "maxLength": 4000,
+            "type": "string"
+          }
+        }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "code",
+          "path",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "anyOf": [
+              {
+                "const": "WORKFLOW_INVALID_JSON",
+                "type": "string"
+              },
+              {
+                "const": "WORKFLOW_SCHEMA_INVALID",
+                "type": "string"
+              },
+              {
+                "const": "WORKFLOW_REF_INVALID",
+                "type": "string"
+              },
+              {
+                "const": "WORKFLOW_NODE_ID_DUPLICATE",
+                "type": "string"
+              },
+              {
+                "const": "WORKFLOW_ENTRY_INVALID",
+                "type": "string"
+              },
+              {
+                "const": "WORKFLOW_OUTPUT_INVALID",
+                "type": "string"
+              },
+              {
+                "const": "WORKFLOW_NODE_UNREACHABLE",
+                "type": "string"
+              },
+              {
+                "const": "WORKFLOW_CYCLE_FORBIDDEN",
+                "type": "string"
+              },
+              {
+                "const": "WORKFLOW_PORT_NOT_FOUND",
+                "type": "string"
+              },
+              {
+                "const": "WORKFLOW_PORT_MULTIPLE_INPUTS",
+                "type": "string"
+              },
+              {
+                "const": "WORKFLOW_SCHEMA_INCOMPATIBLE",
+                "type": "string"
+              },
+              {
+                "const": "WORKFLOW_NODE_TYPE_UNSUPPORTED",
+                "type": "string"
+              },
+              {
+                "const": "WORKFLOW_NODE_CONFIG_INVALID",
+                "type": "string"
+              },
+              {
+                "const": "WORKFLOW_PRESET_MODEL_NOT_FOUND",
+                "type": "string"
+              },
+              {
+                "const": "WORKFLOW_PLUGIN_OPERATION_NOT_FOUND",
+                "type": "string"
+              },
+              {
+                "const": "WORKFLOW_PLUGIN_OPERATION_FORBIDDEN",
+                "type": "string"
+              },
+              {
+                "const": "WORKFLOW_LIMIT_EXCEEDED",
+                "type": "string"
+              },
+              {
+                "const": "WORKFLOW_PERMISSION_DENIED",
+                "type": "string"
+              },
+              {
+                "const": "WORKFLOW_MANIFEST_OUTDATED",
+                "type": "string"
+              }
+            ]
+          },
+          "path": {
+            "pattern": "^(?:|(?:/[^~]*(?:~[01][^~]*)*)*)$",
+            "type": "string"
+          },
+          "node_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "message": {
+            "maxLength": 4000,
+            "type": "string"
+          }
+        }
+      }
+    },
+    "resolved_dependencies": {
+      "type": "array",
+      "items": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "node_id",
+          "dependency_kind",
+          "dependency_ref",
+          "dependency_hash"
+        ],
+        "properties": {
+          "node_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "dependency_kind": {
+            "anyOf": [
+              {
+                "const": "preset_model",
+                "type": "string"
+              },
+              {
+                "const": "plugin_operation",
+                "type": "string"
+              }
+            ]
+          },
+          "dependency_ref": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "dependency_hash": {
+            "pattern": "^sha256:[a-f0-9]{64}$",
+            "type": "string"
+          }
+        }
+      }
+    },
+    "definition_hash": {
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "capability_manifest_hash": {
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "compiled_hash": {
+      "anyOf": [
+        {
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  }
+}

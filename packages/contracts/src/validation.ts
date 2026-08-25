@@ -10,6 +10,19 @@ import {
   ToolResultSchema,
   WebSocketMessageSchema,
 } from "./schemas.js";
+import {
+  WorkflowCapabilityManifestSchema,
+  WorkflowDefinitionSchema,
+  WorkflowImportResultSchema,
+  WorkflowSummarySchema,
+  WorkflowValidationReportSchema,
+} from "./workflows.js";
+import {
+  ExecutionRunEventSchema,
+  ExecutionRunSchema,
+  WorkflowNodeRunSchema,
+  WorkflowRunRequestSchema,
+} from "./workflow-runs.js";
 import { OpenAIChatCompletionRequestSchema } from "./openai.js";
 import type {
   AgentEvent,
@@ -20,6 +33,13 @@ import type {
   ToolResult,
   WebSocketMessage,
 } from "./types.js";
+import type {
+  WorkflowCapabilityManifest,
+  WorkflowDefinition,
+  WorkflowImportResult,
+  WorkflowSummary,
+  WorkflowValidationReport,
+} from "./workflows.js";
 
 const ajv = new Ajv({ allErrors: true, strict: true });
 const connectionMessageValidator = ajv.compile<ConnectionMessage>(ConnectionMessageSchema);
@@ -35,6 +55,15 @@ const validators = {
   toolResult: ajv.compile<ToolResult>(ToolResultSchema),
   webSocketControlMessage: connectionMessageValidator,
   webSocketMessage: ajv.compile<WebSocketMessage>(WebSocketMessageSchema),
+  workflowCapabilityManifest: ajv.compile<WorkflowCapabilityManifest>(WorkflowCapabilityManifestSchema),
+  workflowDefinition: ajv.compile<WorkflowDefinition>(WorkflowDefinitionSchema),
+  workflowImportResult: ajv.compile<WorkflowImportResult>(WorkflowImportResultSchema),
+  workflowSummary: ajv.compile<WorkflowSummary>(WorkflowSummarySchema),
+  workflowValidationReport: ajv.compile<WorkflowValidationReport>(WorkflowValidationReportSchema),
+  executionRunEvent: ajv.compile(ExecutionRunEventSchema),
+  executionRun: ajv.compile(ExecutionRunSchema),
+  workflowNodeRun: ajv.compile(WorkflowNodeRunSchema),
+  workflowRunRequest: ajv.compile(WorkflowRunRequestSchema),
 };
 
 export type ContractName = keyof typeof validators;
@@ -56,6 +85,14 @@ export function validateAgentEvent(value: unknown): value is AgentEvent {
 
 export function validateWebSocketMessage(value: unknown): value is WebSocketMessage {
   return validators.webSocketMessage(value);
+}
+
+export function validateWorkflowDefinition(value: unknown): value is WorkflowDefinition {
+  return validators.workflowDefinition(value);
+}
+
+export function validateWorkflowCapabilityManifest(value: unknown): value is WorkflowCapabilityManifest {
+  return validators.workflowCapabilityManifest(value);
 }
 
 export function normalizeAgentEvent(value: unknown): AgentEvent {

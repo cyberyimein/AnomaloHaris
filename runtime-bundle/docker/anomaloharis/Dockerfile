@@ -8,6 +8,7 @@ COPY package.json package-lock.json tsconfig.base.json ./
 COPY frontend/package.json ./frontend/package.json
 COPY packages/contracts/package.json packages/contracts/tsconfig.json ./packages/contracts/
 COPY apps/node-host/package.json apps/node-host/tsconfig.json ./apps/node-host/
+COPY apps/workflow-runtime/package.json apps/workflow-runtime/tsconfig.json ./apps/workflow-runtime/
 COPY apps/buddy-bridge/package.json apps/buddy-bridge/tsconfig.json ./apps/buddy-bridge/
 COPY apps/buddy-service/package.json apps/buddy-service/tsconfig.json ./apps/buddy-service/
 
@@ -15,11 +16,13 @@ RUN npm ci --ignore-scripts
 
 COPY packages/contracts ./packages/contracts
 COPY apps/node-host ./apps/node-host
+COPY apps/workflow-runtime ./apps/workflow-runtime
 COPY apps/buddy-bridge ./apps/buddy-bridge
 COPY frontend ./frontend
 COPY runtime-bundle/config ./runtime-bundle/config
 COPY runtime-bundle/skills ./runtime-bundle/skills
 RUN npm run build --workspace @anomaloharis/contracts \
+    && npm run build --workspace @anomaloharis/workflow-runtime \
     && npm run build --workspace @anomaloharis/node-host \
     && npm run build --workspace @anomaloharis/buddy-bridge \
     && npm run build --workspace frontend
@@ -42,6 +45,8 @@ COPY --from=frontend /src/package.json ./package.json
 COPY --from=frontend /src/node_modules ./node_modules
 COPY --from=frontend /src/apps/node-host/package.json ./apps/node-host/package.json
 COPY --from=frontend /src/apps/node-host/dist ./apps/node-host/dist
+COPY --from=frontend /src/apps/workflow-runtime/package.json ./apps/workflow-runtime/package.json
+COPY --from=frontend /src/apps/workflow-runtime/dist ./apps/workflow-runtime/dist
 COPY --from=frontend /src/apps/buddy-bridge/package.json ./apps/buddy-bridge/package.json
 COPY --from=frontend /src/apps/buddy-bridge/dist ./apps/buddy-bridge/dist
 COPY --from=frontend /src/apps/buddy-service/package.json ./apps/buddy-service/package.json

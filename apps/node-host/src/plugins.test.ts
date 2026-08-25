@@ -121,6 +121,39 @@ describe("PiPluginHost", () => {
     expect((await host.dispatch({ type: "session_start", context: { pluginId: "host" } }, scope)).metadata).toEqual({ first: true });
   });
 
+  it("executes only an explicitly declared workflow operation", async () => {
+    const entry = writeFixture(`
+      export default {
+        capabilities: [{ id: "calendar.create", kind: "service", version: 1, workflow_callable: true, description: "Create", input_schema: { type: "object" }, output_schema: { type: "object" }, permissions: ["calendar.write"], timeout_ms: 1000, idempotency: "required" }],
+        operations: { "calendar.create@1": (input) => ({ accepted: input.title }) },
+        tools: [{ name: "calendar.create", description: "Tool with a similar name", parameters: { type: "object" }, source: "fixture" }],
+        callTool() { throw new Error("tool fallback must not run"); }
+      };
+    `);
+    const catalog = new PluginCatalog([createPluginManifest({
+      id: "workflow-plugin",
+      version: "1.0.0",
+      package: "@local/workflow-plugin",
+      entry,
+      compatibility: "L2",
+    })]);
+    const host = new PiPluginHost({ backend: new InProcessPluginBackend(), catalog });
+    await host.load({ plugins: [{ id: "workflow-plugin", entry, compatibility: "L2" }] });
+    const operation = catalog.listWorkflowOperations()[0]!;
+    await expect(host.callWorkflowOperation(
+      { id: operation.id, version: operation.version, pluginId: operation.plugin_id, pluginVersion: operation.plugin_version, packageHash: operation.package_hash, permissions: operation.permissions, authorizedPermissions: ["workflow:run"] },
+      { title: "meeting" },
+      { pluginId: operation.plugin_id, runId: "workflow-run", clientId: "urus" },
+      new AbortController().signal,
+    )).rejects.toThrow("workflow_operation_permission_denied");
+    await expect(host.callWorkflowOperation(
+      { id: operation.id, version: operation.version, pluginId: operation.plugin_id, pluginVersion: operation.plugin_version, packageHash: operation.package_hash, permissions: operation.permissions, authorizedPermissions: ["calendar.write"] },
+      { title: "meeting" },
+      { pluginId: operation.plugin_id, runId: "workflow-run", clientId: "urus" },
+      new AbortController().signal,
+    )).resolves.toEqual({ accepted: "meeting" });
+  });
+
   it("keeps optional hardware and media capabilities inside the plugin boundary", async () => {
     const entry = writeFixture(`
       export default {

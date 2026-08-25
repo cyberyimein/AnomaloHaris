@@ -1,0 +1,43 @@
+{
+  "$id": "https://anomaloharis.dev/schemas/execution-target.schema.json",
+  "anyOf": [
+    {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "kind",
+        "ref"
+      ],
+      "properties": {
+        "kind": {
+          "const": "preset_model",
+          "type": "string"
+        },
+        "ref": {
+          "pattern": "^[a-z][a-z0-9._-]{0,63}@[1-9][0-9]{0,8}$",
+          "minLength": 3,
+          "type": "string"
+        }
+      }
+    },
+    {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "kind",
+        "ref"
+      ],
+      "properties": {
+        "kind": {
+          "const": "workflow",
+          "type": "string"
+        },
+        "ref": {
+          "pattern": "^[a-z][a-z0-9-]{0,63}@[1-9][0-9]{0,8}$",
+          "minLength": 3,
+          "type": "string"
+        }
+      }
+    }
+  ]
+}

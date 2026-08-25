@@ -17,17 +17,21 @@ export class RunController {
 
   constructor(private readonly core: AgentCore, private readonly ids: IdFactory = randomIds) {}
 
-  async *start(request: StartRunRequest): AsyncIterable<AgentEvent> {
+  async *start(request: StartRunRequest, parentSignal?: AbortSignal): AsyncIterable<AgentEvent> {
     if (this.active.has(request.sessionId)) {
       yield errorEvent(request.sessionId, request.runId ?? this.ids.runId(), "run_already_active", "A run is already active for this session.");
       return;
     }
     const runId = request.runId ?? this.ids.runId();
     const abort = new AbortController();
+    const onParentAbort = () => abort.abort(parentSignal?.reason);
+    if (parentSignal?.aborted) onParentAbort();
+    else parentSignal?.addEventListener("abort", onParentAbort, { once: true });
     this.active.set(request.sessionId, { runId, abort });
     try {
       yield* this.core.execute({ ...request, runId }, abort.signal);
     } finally {
+      parentSignal?.removeEventListener("abort", onParentAbort);
       const current = this.active.get(request.sessionId);
       if (current?.runId === runId) this.active.delete(request.sessionId);
     }

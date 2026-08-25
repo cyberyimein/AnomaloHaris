@@ -1,0 +1,122 @@
+{
+  "additionalProperties": false,
+  "$id": "https://anomaloharis.dev/schemas/execution-run.schema.json",
+  "type": "object",
+  "required": [
+    "run_id",
+    "runtime_kind",
+    "target_ref",
+    "target_hash",
+    "runtime_adapter_version",
+    "runtime_adapter_hash",
+    "client_id",
+    "status",
+    "input",
+    "created_at"
+  ],
+  "properties": {
+    "run_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "parent_run_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "runtime_kind": {
+      "anyOf": [
+        {
+          "const": "preset_model",
+          "type": "string"
+        },
+        {
+          "const": "workflow",
+          "type": "string"
+        }
+      ]
+    },
+    "target_ref": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "target_hash": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "runtime_adapter_version": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "runtime_adapter_hash": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "client_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "status": {
+      "anyOf": [
+        {
+          "const": "queued",
+          "type": "string"
+        },
+        {
+          "const": "running",
+          "type": "string"
+        },
+        {
+          "const": "succeeded",
+          "type": "string"
+        },
+        {
+          "const": "failed",
+          "type": "string"
+        },
+        {
+          "const": "stopping",
+          "type": "string"
+        },
+        {
+          "const": "stopped",
+          "type": "string"
+        }
+      ]
+    },
+    "input": {},
+    "output": {},
+    "error": {
+      "type": "object",
+      "patternProperties": {
+        "^(.*)$": {}
+      }
+    },
+    "idempotency_key": {
+      "minLength": 1,
+      "maxLength": 255,
+      "type": "string"
+    },
+    "usage": {
+      "type": "object",
+      "patternProperties": {
+        "^(.*)$": {}
+      }
+    },
+    "created_at": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "started_at": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "finished_at": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "stopped_at": {
+      "minLength": 1,
+      "type": "string"
+    }
+  }
+}

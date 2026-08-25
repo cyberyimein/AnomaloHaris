@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { canonicalizeEnvironmentName, legacyNamingAdapter, type ToolCall, type ToolDefinition, type ToolResult } from "@anomaloharis/contracts";
+import { canonicalizeEnvironmentName, legacyNamingAdapter, type JsonSchema, type ToolCall, type ToolDefinition, type ToolResult } from "@anomaloharis/contracts";
 
 import type { ModelMessage, ToolContext } from "./types.js";
 import { type PluginLock, PluginCatalog } from "./plugin-catalog.js";
@@ -11,6 +11,18 @@ import { type PluginLock, PluginCatalog } from "./plugin-catalog.js";
 export type PluginCompatibility = "L1" | "L2" | "L3" | "L4" | "L5";
 
 export type PluginPermission = "tools.register" | "lifecycle.context" | "lifecycle.run" | "commands.register";
+
+export type WorkflowCallableOperation = {
+  id: string;
+  version: number;
+  workflow_callable: true;
+  description: string;
+  input_schema: JsonSchema;
+  output_schema: JsonSchema;
+  permissions: readonly string[];
+  timeout_ms: number;
+  idempotency: "required" | "supported" | "none";
+};
 
 export type PluginSpec = {
   id: string;
@@ -91,15 +103,38 @@ export type PluginToolHandler = (
   signal: AbortSignal,
 ) => ToolResult | Promise<ToolResult>;
 
+export type PluginOperationContext = {
+  pluginId: string;
+  runId: string;
+  parentRunId?: string;
+  clientId?: string;
+  permissions?: readonly string[];
+  idempotencyKey?: string;
+};
+
+export type PluginOperationHandler = (
+  input: unknown,
+  context: PluginOperationContext,
+  signal: AbortSignal,
+) => unknown | Promise<unknown>;
+
 export type PluginCapabilityDeclaration = {
   id: string;
   kind: "tool" | "service";
   description?: string;
+  version?: number;
+  workflow_callable?: boolean;
+  input_schema?: JsonSchema;
+  output_schema?: JsonSchema;
+  permissions?: readonly string[];
+  timeout_ms?: number;
+  idempotency?: "required" | "supported" | "none";
 };
 
 export type PluginApi = {
   registerTool(definition: ToolDefinition, handler: PluginToolHandler): void;
   registerCapability(definition: PluginCapabilityDeclaration): void;
+  registerOperation(id: string, version: number, handler: PluginOperationHandler): void;
   on(event: PluginEvent["type"], hook: PluginHook): void;
 };
 
@@ -108,6 +143,7 @@ export type PiExtension = {
   compatibility?: PluginCompatibility;
   tools?: readonly ToolDefinition[];
   capabilities?: readonly PluginCapabilityDeclaration[];
+  operations?: Record<string, PluginOperationHandler>;
   callTool?: PluginToolHandler;
   hooks?: Partial<Record<PluginEvent["type"], PluginHook>>;
   setup?: (api: PluginApi) => void | Promise<void>;
@@ -140,6 +176,13 @@ export interface PluginHost {
   unload(pluginId: string): Promise<void>;
   tools(context: PluginContext, scope?: PluginExecutionScope): Promise<ToolDefinition[]>;
   callTool(call: ToolCall, context: ToolContext, signal: AbortSignal, scope?: PluginExecutionScope): Promise<ToolResult>;
+  callWorkflowOperation(
+    operation: { id: string; version: number; packageHash: string; pluginId: string; pluginVersion: string; permissions?: readonly string[]; authorizedPermissions?: readonly string[]; timeoutMs?: number },
+    input: unknown,
+    context: PluginOperationContext,
+    signal: AbortSignal,
+    scope?: PluginExecutionScope,
+  ): Promise<unknown>;
   dispatch(event: PluginEvent, scope?: PluginExecutionScope): Promise<PluginEventResult>;
   status(scope?: PluginExecutionScope): PluginStatus[];
 }
@@ -150,6 +193,7 @@ export interface PluginBackend {
   tools(handle: PluginBackendHandle, context: PluginContext, timeoutMs: number): Promise<ToolDefinition[]>;
   capabilities(handle: PluginBackendHandle, timeoutMs: number): Promise<PluginCapabilityDeclaration[]>;
   callTool(handle: PluginBackendHandle, call: ToolCall, context: ToolContext, signal: AbortSignal, timeoutMs: number): Promise<ToolResult>;
+  callOperation(handle: PluginBackendHandle, id: string, version: number, input: unknown, context: PluginOperationContext, signal: AbortSignal, timeoutMs: number): Promise<unknown>;
   dispatch(handle: PluginBackendHandle, event: PluginEvent, timeoutMs: number): Promise<PluginEventResult | undefined>;
 }
 
@@ -159,9 +203,12 @@ export type PluginBackendHandle = {
   extension?: PiExtension;
   _tools?: Map<string, { definition: ToolDefinition; handler?: PluginToolHandler }>;
   _capabilities?: PluginCapabilityDeclaration[];
+  _operations?: Map<string, PluginOperationHandler>;
   child?: ChildProcess;
-  request?: (method: string, payload: Record<string, unknown>, timeoutMs: number) => Promise<unknown>;
+  request?: (method: string, payload: Record<string, unknown>, timeoutMs: number) => PluginChildRequest;
 };
+
+type PluginChildRequest = Promise<unknown> & { cancel?: () => void };
 
 type LoadedPlugin = {
   status: PluginStatus;
@@ -246,7 +293,15 @@ export class PiPluginHost implements PluginHost {
           ...capabilities.map((capability) => capability.id),
         ])].sort();
         if (this.catalog) {
-          const refreshed = this.catalog.refreshRuntimeMetadata(spec.id, status.tools, status.capabilities);
+          const workflowOperations = capabilities
+            .filter(isWorkflowCallableCapability)
+            .map((capability) => capabilityToWorkflowOperation(capability));
+          const refreshed = this.catalog.refreshRuntimeMetadata(
+            spec.id,
+            status.tools,
+            status.capabilities,
+            workflowOperations.length > 0 ? workflowOperations : undefined,
+          );
           spec.packageHash = refreshed.packageHash;
           spec.manifestHash = refreshed.manifestHash;
           status.packageHash = refreshed.packageHash;
@@ -337,6 +392,47 @@ export class PiPluginHost implements PluginHost {
     return { name: call.name, ok: false, content: `Plugin tool not found: ${call.name}`, data: { error_code: "tool_not_found" } };
   }
 
+  async callWorkflowOperation(
+    operation: { id: string; version: number; packageHash: string; pluginId: string; pluginVersion: string; permissions?: readonly string[]; authorizedPermissions?: readonly string[]; timeoutMs?: number },
+    input: unknown,
+    context: PluginOperationContext,
+    signal: AbortSignal,
+    scope?: PluginExecutionScope,
+  ): Promise<unknown> {
+    const plugin = this.loaded.get(operation.pluginId);
+    if (!plugin || !plugin.handle || !plugin.status.loaded || plugin.status.circuitOpen || !pluginInScope(plugin, scope)) {
+      throw new Error(plugin?.status.circuitOpen ? "plugin_circuit_open" : "workflow_plugin_unavailable");
+    }
+    const lock = scope?.locks?.find((candidate) => candidate.id === operation.pluginId);
+    if (plugin.spec.version !== operation.pluginVersion || !sameHash(plugin.spec.packageHash ?? "", operation.packageHash) || (lock && (!sameHash(lock.packageHash, operation.packageHash) || !sameHash(plugin.spec.packageHash ?? "", lock.packageHash) || !sameHash(plugin.spec.manifestHash ?? "", lock.manifestHash)))) {
+      throw new Error("plugin_hash_mismatch");
+    }
+    const operationTimeout = Math.max(1, operation.timeoutMs ?? this.timeoutMs);
+    const capabilities = await withTimeout(this.backend.capabilities(plugin.handle, operationTimeout), operationTimeout, `plugin capabilities ${operation.pluginId}`);
+    const declaration = capabilities.find((candidate) => (
+      candidate.workflow_callable === true
+      && candidate.id === operation.id
+      && candidate.version === operation.version
+    ));
+    if (!declaration) throw new Error("workflow_operation_not_declared");
+    const declaredPermissions = [...(declaration.permissions ?? [])].sort();
+    if (operation.permissions && !sameStringSet(operation.permissions, declaredPermissions)) throw new Error("workflow_operation_metadata_mismatch");
+    if (operation.authorizedPermissions && declaredPermissions.some((permission) => !hasPermission(operation.authorizedPermissions!, permission))) {
+      throw new Error("workflow_operation_permission_denied");
+    }
+    const effectiveContext: PluginOperationContext = { ...context, permissions: declaredPermissions };
+    try {
+      return await withTimeout(
+        this.backend.callOperation(plugin.handle, operation.id, operation.version, input, effectiveContext, signal, operationTimeout),
+        operationTimeout,
+        `plugin operation ${operation.pluginId}.${operation.id}@${operation.version}`,
+      );
+    } catch (error) {
+      this.recordFailure(plugin, error);
+      throw error;
+    }
+  }
+
   async dispatch(event: PluginEvent, scope?: PluginExecutionScope): Promise<PluginEventResult> {
     let result: PluginEventResult = {};
     for (const plugin of this.loaded.values()) {
@@ -407,6 +503,11 @@ function pluginInScope(plugin: LoadedPlugin, scope: PluginExecutionScope | undef
     && plugin.spec.manifestHash === lock.manifestHash;
 }
 
+function sameHash(left: string, right: string): boolean {
+  const normalize = (value: string) => value.startsWith("sha256:") ? value : `sha256:${value}`;
+  return normalize(left) === normalize(right);
+}
+
 export class InProcessPluginBackend implements PluginBackend {
   async load(spec: PluginSpec, _timeoutMs: number): Promise<PluginBackendHandle> {
     if (!spec.entry && !spec.package) throw new Error("Plugin requires an explicit package or entry.");
@@ -415,10 +516,12 @@ export class InProcessPluginBackend implements PluginBackend {
     const exported = (imported.default ?? imported.plugin ?? imported) as PiExtension | ((api: PluginApi) => PiExtension | void | Promise<PiExtension | void>);
     const registeredTools = new Map<string, { definition: ToolDefinition; handler: PluginToolHandler }>();
     const registeredCapabilities = new Map<string, PluginCapabilityDeclaration>();
+    const registeredOperations = new Map<string, PluginOperationHandler>();
     const registeredHooks = new Map<PluginEvent["type"], PluginHook>();
     const api: PluginApi = {
       registerTool: (definition, handler) => registeredTools.set(definition.name, { definition, handler }),
       registerCapability: (definition) => registeredCapabilities.set(definition.id, definition),
+      registerOperation: (id, version, handler) => registeredOperations.set(`${id}@${version}`, handler),
       on: (event, hook) => registeredHooks.set(event, hook),
     };
     const extension = (typeof exported === "function" ? await exported(api) : exported) ?? {};
@@ -432,12 +535,15 @@ export class InProcessPluginBackend implements PluginBackend {
     const capabilities = new Map<string, PluginCapabilityDeclaration>();
     for (const capability of extension.capabilities ?? []) capabilities.set(capability.id, capability);
     for (const [id, capability] of registeredCapabilities) capabilities.set(id, capability);
+    const operations = new Map<string, PluginOperationHandler>(Object.entries(extension.operations ?? {}));
+    for (const [id, handler] of registeredOperations) operations.set(id, handler);
     return {
       id: spec.id,
       spec,
       extension: { ...extension, hooks: Object.fromEntries(registeredHooks) },
       _tools: tools,
       _capabilities: [...capabilities.values()],
+      _operations: operations,
     };
   }
 
@@ -456,6 +562,12 @@ export class InProcessPluginBackend implements PluginBackend {
     const handler = tool?.handler ?? handle.extension?.callTool;
     if (!handler) return { name: call.name, ok: false, content: `Plugin has no handler for ${call.name}.`, data: { error_code: "tool_not_implemented" } };
     return normalizeToolResult(await handler(call, context, signal), call.name);
+  }
+
+  async callOperation(handle: PluginBackendHandle, id: string, version: number, input: unknown, context: PluginOperationContext, signal: AbortSignal, _timeoutMs: number): Promise<unknown> {
+    const handler = handle._operations?.get(`${id}@${version}`);
+    if (!handler) throw new Error(`Plugin operation is not implemented: ${id}@${version}`);
+    return handler(input, context, signal);
   }
 
   async dispatch(handle: PluginBackendHandle, event: PluginEvent, _timeoutMs: number): Promise<PluginEventResult | undefined> {
@@ -519,6 +631,11 @@ export class ChildProcessPluginBackend implements PluginBackend {
   async callTool(handle: PluginBackendHandle, call: ToolCall, context: ToolContext, signal: AbortSignal, timeoutMs: number): Promise<ToolResult> {
     const result = await abortableRequest(handle.request, "callTool", { call, context }, timeoutMs, signal);
     return normalizeToolResult((result as { result: ToolResult }).result, call.name);
+  }
+
+  async callOperation(handle: PluginBackendHandle, id: string, version: number, input: unknown, context: PluginOperationContext, signal: AbortSignal, timeoutMs: number): Promise<unknown> {
+    const result = await abortableRequest(handle.request, "callOperation", { id, version, input, context }, timeoutMs, signal);
+    return (result as { result?: unknown } | undefined)?.result;
   }
 
   async dispatch(handle: PluginBackendHandle, event: PluginEvent, timeoutMs: number): Promise<PluginEventResult | undefined> {
@@ -602,6 +719,59 @@ function normalizeToolResult(result: ToolResult, name: string): ToolResult {
   return { name, ok: result.ok, content: result.content, data: result.data ?? {} };
 }
 
+function isWorkflowCallableCapability(capability: PluginCapabilityDeclaration): capability is PluginCapabilityDeclaration & {
+  version: number;
+  workflow_callable: true;
+  description: string;
+  input_schema: JsonSchema;
+  output_schema: JsonSchema;
+  permissions: readonly string[];
+  timeout_ms: number;
+  idempotency: "required" | "supported" | "none";
+} {
+  return capability.workflow_callable === true
+    && typeof capability.version === "number" && Number.isSafeInteger(capability.version) && capability.version > 0
+    && typeof capability.description === "string"
+    && capability.input_schema !== undefined
+    && capability.output_schema !== undefined
+    && Array.isArray(capability.permissions)
+    && typeof capability.timeout_ms === "number" && Number.isSafeInteger(capability.timeout_ms) && capability.timeout_ms > 0
+    && capability.idempotency !== undefined;
+}
+
+function capabilityToWorkflowOperation(capability: PluginCapabilityDeclaration & {
+  version: number;
+  workflow_callable: true;
+  description: string;
+  input_schema: JsonSchema;
+  output_schema: JsonSchema;
+  permissions: readonly string[];
+  timeout_ms: number;
+  idempotency: "required" | "supported" | "none";
+}): WorkflowCallableOperation {
+  return {
+    id: capability.id,
+    version: capability.version,
+    workflow_callable: true,
+    description: capability.description,
+    input_schema: structuredClone(capability.input_schema),
+    output_schema: structuredClone(capability.output_schema),
+    permissions: [...capability.permissions].sort(),
+    timeout_ms: capability.timeout_ms,
+    idempotency: capability.idempotency,
+  };
+}
+
+function hasPermission(granted: readonly string[], required: string): boolean {
+  return granted.includes("*") || granted.includes(required);
+}
+
+function sameStringSet(left: readonly string[], right: readonly string[]): boolean {
+  const a = [...new Set(left)].sort();
+  const b = [...new Set(right)].sort();
+  return a.length === b.length && a.every((value, index) => value === b[index]);
+}
+
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   try {
@@ -616,9 +786,9 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: str
   }
 }
 
-function createChildRequester(child: ChildProcess): (method: string, payload: Record<string, unknown>, timeoutMs: number) => Promise<unknown> {
+function createChildRequester(child: ChildProcess): (method: string, payload: Record<string, unknown>, timeoutMs: number) => PluginChildRequest {
   let nextId = 1;
-  const pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
+  const pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout; cancel: (message?: string) => void }>();
   child.on("message", (message: unknown) => {
     if (!message || typeof message !== "object") return;
     const value = message as { id?: unknown; ok?: unknown; result?: unknown; error?: unknown };
@@ -638,21 +808,35 @@ function createChildRequester(child: ChildProcess): (method: string, payload: Re
       entry.reject(new Error("Plugin child exited."));
     }
   });
-  return (method, payload, timeoutMs) => new Promise((resolve, reject) => {
+  return (method, payload, timeoutMs) => {
     const id = nextId++;
-    const timer = setTimeout(() => {
-      pending.delete(id);
-      reject(new Error(`Plugin request timed out: ${method}`));
-    }, timeoutMs);
-    pending.set(id, { resolve, reject, timer });
+    let timer: NodeJS.Timeout;
+    let rejectRequest!: (error: Error) => void;
+    const promise = new Promise<unknown>((resolve, reject) => {
+      rejectRequest = reject;
+      const cancel = (message = "Plugin child request cancelled.") => {
+        const entry = pending.get(id);
+        if (!entry) return;
+        pending.delete(id);
+        clearTimeout(entry.timer);
+        entry.reject(new Error(message));
+        child.send({ id: nextId++, method: "cancel", payload: { request_id: id } }, () => undefined);
+      };
+      timer = setTimeout(() => cancel(`Plugin request timed out: ${method}`), timeoutMs);
+      pending.set(id, { resolve, reject, timer, cancel });
+    });
+    const request = Object.assign(promise, { cancel: () => pending.get(id)?.cancel() });
     child.send({ id, method, payload }, (error) => {
       if (error) {
+        const entry = pending.get(id);
+        if (!entry) return;
         pending.delete(id);
-        clearTimeout(timer);
-        reject(error);
+        clearTimeout(entry.timer);
+        rejectRequest(error);
       }
     });
-  });
+    return request;
+  };
 }
 
 async function abortableRequest(
@@ -665,11 +849,15 @@ async function abortableRequest(
   if (!request) throw new Error("Plugin child request channel is unavailable.");
   if (signal.aborted) throw new Error("Plugin tool call cancelled.");
   const controller = new AbortController();
-  const onAbort = () => controller.abort(signal.reason);
+  const pending = request(method, payload, timeoutMs);
+  const onAbort = () => {
+    pending.cancel?.();
+    controller.abort(signal.reason);
+  };
   signal.addEventListener("abort", onAbort, { once: true });
   try {
     return await Promise.race([
-      request(method, payload, timeoutMs),
+      pending,
       new Promise<never>((_, reject) => controller.signal.addEventListener("abort", () => reject(new Error("Plugin tool call cancelled.")), { once: true })),
     ]);
   } finally {

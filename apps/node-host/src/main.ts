@@ -21,6 +21,12 @@ import { asToolAdapter, CompositeToolRuntime, CoreToolRuntime, PluginToolAdapter
 import { WebToolRuntime } from "./web.js";
 import { ServiceAuth, SqliteComputeStore, SqliteNativeRunStore } from "./compute-api.js";
 import { legacyNamingAdapter } from "@anomaloharis/contracts";
+import { WorkflowRuntime } from "@anomaloharis/workflow-runtime";
+import { WorkflowRunStore } from "@anomaloharis/workflow-runtime";
+import { AgentRuntimeAdapter } from "./agent-runtime-adapter.js";
+import { RuntimeCatalog } from "./runtime-catalog.js";
+import { RunControl } from "./run-control.js";
+import { WorkflowRuntimeAdapter } from "./workflow-runtime-adapter.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..", "..");
 const env = (name: string): string | undefined => legacyNamingAdapter.readEnv(process.env, name);
@@ -38,6 +44,7 @@ const configuredSearchMode = env("ANOMALOHARIS_SEARCH_MODE");
 const defaultSearchMode = isSearchMode(configuredSearchMode) ? configuredSearchMode : DEFAULT_SEARCH_MODE;
 const subagentModel = process.env.WEB_RESEARCH_SUBAGENT_MODEL?.trim() || DEFAULT_SUBAGENT_MODEL;
 const searchTimeoutMs = Number(process.env.SEARCH_MODE_TIMEOUT_SECONDS ?? "90") * 1000;
+const workflowRefAllowlist = (env("ANOMALOHARIS_WORKFLOW_ALLOWED_REFS") ?? "").split(",").map((ref) => ref.trim()).filter(Boolean);
 const staticDir = env("ANOMALOHARIS_FRONTEND_DIR") ?? join(repoRoot, "runtime-bundle", "app", "frontend");
 const port = Number(process.env.PORT ?? "8000");
 const requestedHost = process.env.HOST ?? "127.0.0.1";
@@ -162,6 +169,43 @@ if (extensionsEnabled) {
   if (report.errors.length > 0) console.warn(`[node-host] Plugin load report: ${JSON.stringify(report)}`);
 }
 
+const runMaxConcurrency = boundedPositiveInteger(env("ANOMALOHARIS_RUN_MAX_CONCURRENCY"), 8);
+const workflowRuntime = new WorkflowRuntime({
+  databasePath: env("ANOMALOHARIS_WORKFLOW_DB_PATH") || join(dataDir, "workflows.sqlite3"),
+  maxParallelism: runMaxConcurrency,
+  presetModels: {
+    listPublished: () => presetModels.list()
+      .filter((summary) => summary.status === "published")
+      .flatMap((summary) => {
+        try {
+          const model = presetModels.resolve(summary.ref);
+          return [{ ref: model.ref, description: model.description, compiled_hash: workflowHash(model.compiledHash), plugin_lock_hash: workflowHash(model.pluginLockHash) }];
+        } catch {
+          return [];
+        }
+      }),
+    resolve: (ref) => {
+      try {
+        const model = presetModels.resolve(ref);
+        return model.status === "published"
+          ? { ref: model.ref, description: model.description, compiled_hash: workflowHash(model.compiledHash), plugin_lock_hash: workflowHash(model.pluginLockHash) }
+          : undefined;
+      } catch {
+        return undefined;
+      }
+    },
+  },
+  pluginOperations: {
+    listWorkflowOperations: () => pluginCatalog.listWorkflowOperations()
+      .filter((operation) => plugins.status().some((status) => status.id === operation.plugin_id && status.loaded && !status.circuitOpen))
+      .map(workflowOperationCapability),
+    resolveWorkflowOperation: (id, version) => pluginCatalog.listWorkflowOperations()
+      .filter((operation) => operation.id === id && operation.version === version)
+      .map(workflowOperationCapability)
+      .find((operation) => plugins.status().some((status) => status.id === operation.plugin_id && status.loaded && !status.circuitOpen)),
+  },
+});
+
 class PresetModelAdapter implements ModelAdapter {
   readonly model: string;
   private readonly adapters = new Map<string, ModelAdapter>();
@@ -281,9 +325,31 @@ const core = new AgentCore({
   plugins,
 });
 const controller = new RunController(core);
+const workflowRunStore = new WorkflowRunStore(workflowRuntime.registry.db);
+const runtimeCatalog = new RuntimeCatalog();
+const agentRuntimeAdapter = new AgentRuntimeAdapter({ registry: presetModels, controller });
+let runControl!: RunControl;
+const workflowRuntimeAdapter = new WorkflowRuntimeAdapter({
+  runtime: workflowRuntime,
+  store: workflowRunStore,
+  plugins,
+  agentExecution: {
+    startAgentChild: (parentRunId, target, request) => {
+      const handle = runControl.startAgentChild(parentRunId, target, request);
+      return { runId: handle.runId, events: handle };
+    },
+    stopChildren: (parentRunId, reason) => runControl.stopChildren(parentRunId, reason),
+  },
+  acquireHostSlot: (signal) => runControl.acquireHostSlot(signal),
+});
+runtimeCatalog.register(agentRuntimeAdapter);
+runtimeCatalog.register(workflowRuntimeAdapter);
+runControl = new RunControl(workflowRuntime.registry.db, runtimeCatalog, {
+  maxConcurrency: runMaxConcurrency,
+});
+await runControl.recover();
 const managementToken = env("ANOMALOHARIS_ADMIN_TOKEN");
 const app = await buildNodeHost({
-  controller,
   sessions,
   model: modelName,
   presetModels,
@@ -299,11 +365,15 @@ const app = await buildNodeHost({
   subagentModel,
   pythonSandbox,
   ...(managementToken ? { managementToken } : {}),
+  workflowManagement: workflowRuntime,
+  runControl,
+  ...(workflowRefAllowlist.length > 0 ? { workflowRefAllowlist } : {}),
   compute: {
     auth: serviceAuth,
     usage: computeStore,
     idempotency: computeStore,
     nativeRuns: new SqliteNativeRunStore(computeStore.db),
+    runControl,
   },
   logger: env("ANOMALOHARIS_ENV") !== "test",
 });
@@ -318,6 +388,32 @@ async function shutdown(): Promise<void> {
   presetModels.close();
   computeStore.close();
   await app.close();
+  workflowRuntime.close();
+}
+
+function workflowOperationCapability(operation: ReturnType<typeof pluginCatalog.listWorkflowOperations>[number]) {
+  return {
+    id: operation.id,
+    version: operation.version,
+    plugin_id: operation.plugin_id,
+    plugin_version: operation.plugin_version,
+    package_hash: operation.package_hash.startsWith("sha256:") ? operation.package_hash : `sha256:${operation.package_hash}`,
+    description: operation.description,
+    input_schema: structuredClone(operation.input_schema),
+    output_schema: structuredClone(operation.output_schema),
+    permissions: [...operation.permissions].sort(),
+    timeout_ms: operation.timeout_ms,
+    idempotency: operation.idempotency,
+  } as const;
+}
+
+function workflowHash(value: string): `sha256:${string}` {
+  return value.startsWith("sha256:") ? value as `sha256:${string}` : `sha256:${value}`;
+}
+
+function boundedPositiveInteger(value: string | undefined, fallback: number): number {
+  const parsed = Number(value ?? fallback);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
 }
 
 process.once("SIGINT", () => void shutdown());
@@ -328,10 +424,10 @@ function parseServiceClients(raw: string | undefined, fallbackToken: string | un
     try {
       const parsed = JSON.parse(raw) as unknown;
       if (Array.isArray(parsed)) {
-        return parsed.filter((item): item is { id: string; token: string; scopes?: string[] } => (
+        return parsed.filter((item): item is { id: string; token: string; scopes?: string[]; workflow_refs?: string[] } => (
           Boolean(item) && typeof item === "object" && typeof (item as Record<string, unknown>).id === "string"
           && typeof (item as Record<string, unknown>).token === "string"
-        )).map((item) => ({ id: item.id, token: item.token, scopes: item.scopes ?? ["compute:models", "compute:invoke", "compute:read"] }));
+        )).map((item) => ({ id: item.id, token: item.token, scopes: item.scopes ?? ["compute:models", "compute:invoke", "compute:read"], ...(item.workflow_refs ? { workflowRefs: item.workflow_refs } : {}) }));
       }
     } catch (error) {
       console.warn(`[node-host] Ignoring invalid ANOMALOHARIS_SERVICE_TOKENS JSON: ${error instanceof Error ? error.message : String(error)}`);

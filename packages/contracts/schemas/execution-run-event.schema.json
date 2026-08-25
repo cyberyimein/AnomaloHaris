@@ -1,0 +1,64 @@
+{
+  "additionalProperties": false,
+  "$id": "https://anomaloharis.dev/schemas/execution-run-event.schema.json",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "run_id",
+    "runtime_kind",
+    "target_ref",
+    "sequence",
+    "timestamp",
+    "type",
+    "data"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "type": "number"
+    },
+    "run_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "parent_run_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "runtime_kind": {
+      "anyOf": [
+        {
+          "const": "preset_model",
+          "type": "string"
+        },
+        {
+          "const": "workflow",
+          "type": "string"
+        }
+      ]
+    },
+    "target_ref": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "sequence": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "timestamp": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "type": {
+      "pattern": "^[a-z][a-z0-9_.-]+$",
+      "minLength": 1,
+      "type": "string"
+    },
+    "data": {
+      "type": "object",
+      "patternProperties": {
+        "^(.*)$": {}
+      }
+    }
+  }
+}

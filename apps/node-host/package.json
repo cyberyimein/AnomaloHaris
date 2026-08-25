@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@anomaloharis/contracts": "0.1.0",
+    "@anomaloharis/workflow-runtime": "0.1.0",
     "@fastify/static": "^10.1.3",
     "@fastify/websocket": "^11.3.0",
     "ajv": "^8.17.1",

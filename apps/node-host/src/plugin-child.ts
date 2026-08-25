@@ -2,6 +2,7 @@ import { InProcessPluginBackend, type PluginBackendHandle, type PluginSpec } fro
 
 const backend = new InProcessPluginBackend();
 let handle: PluginBackendHandle | undefined;
+const activeCallControllers = new Map<number, AbortController>();
 
 process.on("message", (message: unknown) => {
   void handleMessage(message);
@@ -35,13 +36,19 @@ async function handleMessage(message: unknown): Promise<void> {
       case "callTool":
         if (!handle) throw new Error("Plugin is not loaded.");
         result = {
-          result: await backend.callTool(
-            handle,
-            payload.call as never,
-            payload.context as never,
-            new AbortController().signal,
-            30_000,
-          ),
+          result: await runCancellable(id, (signal) => backend.callTool(handle!, payload.call as never, payload.context as never, signal, 30_000)),
+        };
+        break;
+      case "cancel": {
+        const requestId = Number(payload.request_id);
+        activeCallControllers.get(requestId)?.abort("cancelled");
+        result = { cancelled: true };
+        break;
+      }
+      case "callOperation":
+        if (!handle) throw new Error("Plugin is not loaded.");
+        result = {
+          result: await runCancellable(id, (signal) => backend.callOperation(handle!, String(payload.id), Number(payload.version), payload.input, payload.context as never, signal, 30_000)),
         };
         break;
       case "dispatch":
@@ -54,6 +61,16 @@ async function handleMessage(message: unknown): Promise<void> {
     process.send({ id, ok: true, result });
   } catch (error) {
     process.send({ id, ok: false, error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+async function runCancellable<T>(requestId: number, operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const controller = new AbortController();
+  activeCallControllers.set(requestId, controller);
+  try {
+    return await operation(controller.signal);
+  } finally {
+    activeCallControllers.delete(requestId);
   }
 }
 

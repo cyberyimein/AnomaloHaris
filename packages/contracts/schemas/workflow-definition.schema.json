@@ -1,0 +1,251 @@
+{
+  "additionalProperties": false,
+  "$id": "https://anomaloharis.dev/schemas/workflow-definition.schema.json",
+  "type": "object",
+  "required": [
+    "api_version",
+    "kind",
+    "metadata",
+    "spec"
+  ],
+  "properties": {
+    "api_version": {
+      "const": "anomaloharis.dev/workflow/v1",
+      "type": "string"
+    },
+    "kind": {
+      "const": "Workflow",
+      "type": "string"
+    },
+    "metadata": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "name",
+        "version",
+        "description"
+      ],
+      "properties": {
+        "name": {
+          "pattern": "^[a-z][a-z0-9-]{0,63}$",
+          "minLength": 1,
+          "type": "string"
+        },
+        "version": {
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "description": {
+          "maxLength": 4000,
+          "type": "string"
+        },
+        "labels": {
+          "type": "object",
+          "patternProperties": {
+            "^(.*)$": {
+              "maxLength": 512,
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "spec": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "input_schema",
+        "output_schema",
+        "nodes",
+        "edges"
+      ],
+      "properties": {
+        "input_schema": {
+          "type": "object",
+          "patternProperties": {
+            "^(.*)$": {}
+          }
+        },
+        "output_schema": {
+          "type": "object",
+          "patternProperties": {
+            "^(.*)$": {}
+          }
+        },
+        "nodes": {
+          "minItems": 1,
+          "maxItems": 100,
+          "type": "array",
+          "items": {
+            "additionalProperties": false,
+            "type": "object",
+            "required": [
+              "id",
+              "type",
+              "type_version",
+              "config"
+            ],
+            "properties": {
+              "id": {
+                "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": {
+                "anyOf": [
+                  {
+                    "const": "input",
+                    "type": "string"
+                  },
+                  {
+                    "const": "output",
+                    "type": "string"
+                  },
+                  {
+                    "const": "preset_model",
+                    "type": "string"
+                  },
+                  {
+                    "const": "condition",
+                    "type": "string"
+                  },
+                  {
+                    "const": "parallel",
+                    "type": "string"
+                  },
+                  {
+                    "const": "join",
+                    "type": "string"
+                  },
+                  {
+                    "const": "plugin_operation",
+                    "type": "string"
+                  }
+                ]
+              },
+              "type_version": {
+                "minimum": 1,
+                "maximum": 100,
+                "type": "integer"
+              },
+              "config": {
+                "type": "object",
+                "patternProperties": {
+                  "^(.*)$": {}
+                }
+              },
+              "retry": {
+                "additionalProperties": false,
+                "type": "object",
+                "required": [
+                  "max_attempts",
+                  "backoff_ms"
+                ],
+                "properties": {
+                  "max_attempts": {
+                    "minimum": 1,
+                    "maximum": 10,
+                    "type": "integer"
+                  },
+                  "backoff_ms": {
+                    "minimum": 0,
+                    "maximum": 60000,
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "edges": {
+          "maxItems": 400,
+          "type": "array",
+          "items": {
+            "additionalProperties": false,
+            "type": "object",
+            "required": [
+              "from",
+              "to"
+            ],
+            "properties": {
+              "from": {
+                "additionalProperties": false,
+                "type": "object",
+                "required": [
+                  "node",
+                  "port"
+                ],
+                "properties": {
+                  "node": {
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "port": {
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                }
+              },
+              "to": {
+                "additionalProperties": false,
+                "type": "object",
+                "required": [
+                  "node",
+                  "port"
+                ],
+                "properties": {
+                  "node": {
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "port": {
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "policy": {
+          "additionalProperties": false,
+          "type": "object",
+          "properties": {
+            "timeout_seconds": {
+              "minimum": 1,
+              "maximum": 86400,
+              "type": "integer"
+            },
+            "max_parallelism": {
+              "minimum": 1,
+              "maximum": 64,
+              "type": "integer"
+            },
+            "failure_mode": {
+              "const": "fail_fast",
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "compatibility": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "authored_against_manifest_hash"
+      ],
+      "properties": {
+        "authored_against_manifest_hash": {
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "type": "string"
+        }
+      }
+    }
+  }
+}

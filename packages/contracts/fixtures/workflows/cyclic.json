@@ -1,0 +1,25 @@
+{
+  "api_version": "anomaloharis.dev/workflow/v1",
+  "kind": "Workflow",
+  "metadata": {
+    "name": "cyclic-review",
+    "version": 1,
+    "description": "Invalid cycle fixture."
+  },
+  "spec": {
+    "input_schema": { "type": "object" },
+    "output_schema": { "type": "object" },
+    "nodes": [
+      { "id": "input", "type": "input", "type_version": 1, "config": {} },
+      { "id": "first", "type": "parallel", "type_version": 1, "config": {} },
+      { "id": "second", "type": "join", "type_version": 1, "config": {} },
+      { "id": "output", "type": "output", "type_version": 1, "config": {} }
+    ],
+    "edges": [
+      { "from": { "node": "input", "port": "data" }, "to": { "node": "first", "port": "input" } },
+      { "from": { "node": "first", "port": "output" }, "to": { "node": "second", "port": "input" } },
+      { "from": { "node": "second", "port": "output" }, "to": { "node": "first", "port": "input" } },
+      { "from": { "node": "second", "port": "output" }, "to": { "node": "output", "port": "result" } }
+    ]
+  }
+}

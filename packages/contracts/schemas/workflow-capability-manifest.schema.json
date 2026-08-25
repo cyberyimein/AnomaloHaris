@@ -1,0 +1,359 @@
+{
+  "additionalProperties": false,
+  "$id": "https://anomaloharis.dev/schemas/workflow-capability-manifest.schema.json",
+  "type": "object",
+  "required": [
+    "api_version",
+    "engine",
+    "limits",
+    "node_types",
+    "preset_models",
+    "plugin_operations",
+    "unsupported_features",
+    "generated_at",
+    "manifest_hash"
+  ],
+  "properties": {
+    "api_version": {
+      "const": "anomaloharis.dev/workflow-capabilities/v1",
+      "type": "string"
+    },
+    "engine": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "runtime_id",
+        "runtime_version",
+        "adapter_version",
+        "package_hash",
+        "definition_api_version"
+      ],
+      "properties": {
+        "runtime_id": {
+          "const": "workflow-runtime",
+          "type": "string"
+        },
+        "runtime_version": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "adapter_version": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "package_hash": {
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "definition_api_version": {
+          "const": "anomaloharis.dev/workflow/v1",
+          "type": "string"
+        }
+      }
+    },
+    "limits": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "graph",
+        "max_nodes",
+        "max_edges",
+        "max_parallelism",
+        "max_duration_seconds"
+      ],
+      "properties": {
+        "graph": {
+          "const": "dag",
+          "type": "string"
+        },
+        "max_nodes": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max_edges": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_parallelism": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max_duration_seconds": {
+          "minimum": 1,
+          "type": "integer"
+        }
+      }
+    },
+    "node_types": {
+      "type": "array",
+      "items": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "type",
+          "type_version",
+          "description",
+          "config_schema",
+          "inputs",
+          "outputs"
+        ],
+        "properties": {
+          "type": {
+            "anyOf": [
+              {
+                "const": "input",
+                "type": "string"
+              },
+              {
+                "const": "output",
+                "type": "string"
+              },
+              {
+                "const": "preset_model",
+                "type": "string"
+              },
+              {
+                "const": "condition",
+                "type": "string"
+              },
+              {
+                "const": "parallel",
+                "type": "string"
+              },
+              {
+                "const": "join",
+                "type": "string"
+              },
+              {
+                "const": "plugin_operation",
+                "type": "string"
+              }
+            ]
+          },
+          "type_version": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "description": {
+            "maxLength": 4000,
+            "type": "string"
+          },
+          "config_schema": {
+            "type": "object",
+            "patternProperties": {
+              "^(.*)$": {}
+            }
+          },
+          "inputs": {
+            "type": "array",
+            "items": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "name",
+                "schema"
+              ],
+              "properties": {
+                "name": {
+                  "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "schema": {
+                  "type": "object",
+                  "patternProperties": {
+                    "^(.*)$": {}
+                  }
+                },
+                "cardinality": {
+                  "anyOf": [
+                    {
+                      "const": "single",
+                      "type": "string"
+                    },
+                    {
+                      "const": "many",
+                      "type": "string"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "outputs": {
+            "type": "array",
+            "items": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "name",
+                "schema"
+              ],
+              "properties": {
+                "name": {
+                  "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "schema": {
+                  "type": "object",
+                  "patternProperties": {
+                    "^(.*)$": {}
+                  }
+                },
+                "cardinality": {
+                  "anyOf": [
+                    {
+                      "const": "single",
+                      "type": "string"
+                    },
+                    {
+                      "const": "many",
+                      "type": "string"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "preset_models": {
+      "type": "array",
+      "items": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "ref",
+          "description",
+          "compiled_hash",
+          "plugin_lock_hash"
+        ],
+        "properties": {
+          "ref": {
+            "pattern": "^[a-z][a-z0-9-]{0,63}@[1-9][0-9]{0,8}$",
+            "minLength": 3,
+            "type": "string"
+          },
+          "description": {
+            "maxLength": 4000,
+            "type": "string"
+          },
+          "compiled_hash": {
+            "pattern": "^sha256:[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "plugin_lock_hash": {
+            "pattern": "^sha256:[a-f0-9]{64}$",
+            "type": "string"
+          }
+        }
+      }
+    },
+    "plugin_operations": {
+      "type": "array",
+      "items": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "version",
+          "plugin_id",
+          "plugin_version",
+          "package_hash",
+          "description",
+          "input_schema",
+          "output_schema",
+          "permissions",
+          "timeout_ms",
+          "idempotency"
+        ],
+        "properties": {
+          "id": {
+            "pattern": "^[a-z][a-z0-9._-]{0,127}$",
+            "minLength": 1,
+            "type": "string"
+          },
+          "version": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "plugin_id": {
+            "pattern": "^[a-z][a-z0-9._-]{0,63}$",
+            "minLength": 1,
+            "type": "string"
+          },
+          "plugin_version": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "package_hash": {
+            "pattern": "^sha256:[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "description": {
+            "maxLength": 4000,
+            "type": "string"
+          },
+          "input_schema": {
+            "type": "object",
+            "patternProperties": {
+              "^(.*)$": {}
+            }
+          },
+          "output_schema": {
+            "type": "object",
+            "patternProperties": {
+              "^(.*)$": {}
+            }
+          },
+          "permissions": {
+            "maxItems": 64,
+            "type": "array",
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "timeout_ms": {
+            "minimum": 1,
+            "maximum": 86400000,
+            "type": "integer"
+          },
+          "idempotency": {
+            "anyOf": [
+              {
+                "const": "required",
+                "type": "string"
+              },
+              {
+                "const": "supported",
+                "type": "string"
+              },
+              {
+                "const": "none",
+                "type": "string"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "unsupported_features": {
+      "type": "array",
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "generated_at": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "manifest_hash": {
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "type": "string"
+    }
+  }
+}

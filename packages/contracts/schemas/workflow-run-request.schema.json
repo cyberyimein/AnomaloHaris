@@ -1,0 +1,22 @@
+{
+  "additionalProperties": false,
+  "$id": "https://anomaloharis.dev/schemas/workflow-run-request.schema.json",
+  "type": "object",
+  "required": [
+    "input"
+  ],
+  "properties": {
+    "input": {},
+    "idempotency_key": {
+      "minLength": 1,
+      "maxLength": 255,
+      "type": "string"
+    },
+    "metadata": {
+      "type": "object",
+      "patternProperties": {
+        "^(.*)$": {}
+      }
+    }
+  }
+}

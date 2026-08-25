@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -17,18 +18,55 @@ import { builtinPluginCatalog, type PluginCatalog } from "./plugin-catalog.js";
 import type { PluginHost } from "./plugins.js";
 import { PythonSandboxRuntime, PYTHON_SANDBOX_TOOL_NAME } from "./python-sandbox.js";
 import type { SessionCheckpoint } from "./types.js";
+import { WorkflowRuntime, type WorkflowManagement } from "@anomaloharis/workflow-runtime";
+import { AgentRuntimeAdapter } from "./agent-runtime-adapter.js";
+import { RunControl } from "./run-control.js";
+import { RuntimeCatalog } from "./runtime-catalog.js";
 
 const apps: Array<{ close(): Promise<void> }> = [];
 const tempDirectories: string[] = [];
 const registries: SqlitePresetModelRegistry[] = [];
+const workflowRuntimes: WorkflowRuntime[] = [];
+const databases: DatabaseSync[] = [];
 
 afterEach(async () => {
   for (const app of apps.splice(0)) await app.close();
   for (const registry of registries.splice(0)) registry.close();
+  for (const runtime of workflowRuntimes.splice(0)) runtime.close();
+  for (const database of databases.splice(0)) database.close();
   for (const directory of tempDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
 describe("Node Host", () => {
+  it("exposes the Workflow management seam without exposing run routes", async () => {
+    const runtime = new WorkflowRuntime();
+    workflowRuntimes.push(runtime);
+    const app = await makeApp([], undefined, undefined, undefined, undefined, "admin-secret", undefined, "anomaloharis@1", undefined, undefined, undefined, runtime);
+    apps.push(app);
+
+    expect((await app.inject({ method: "GET", url: "/api/manage/workflow-capabilities" })).statusCode).toBe(403);
+    const headers = { "x-anomaloharis-admin-token": "admin-secret" };
+    const capabilities = await app.inject({ method: "GET", url: "/api/manage/workflow-capabilities", headers });
+    expect(capabilities.statusCode).toBe(200);
+    expect(capabilities.json().engine.runtime_id).toBe("workflow-runtime");
+
+    const definition = simpleWorkflowDefinition();
+    const validation = await app.inject({ method: "POST", url: "/api/manage/workflows/validate", headers, payload: definition });
+    expect(validation.statusCode).toBe(200);
+    expect(validation.json().validation.valid).toBe(true);
+
+    const imported = await app.inject({ method: "POST", url: "/api/manage/workflows/import", headers, payload: definition });
+    expect(imported.statusCode).toBe(201);
+    expect(imported.json().workflow.status).toBe("draft");
+    expect((await app.inject({ method: "GET", url: "/api/workflows/simple@1/runs" })).statusCode).toBe(404);
+
+    const published = await app.inject({ method: "POST", url: "/api/manage/workflows/simple/versions/1/publish", headers });
+    expect(published.statusCode).toBe(200);
+    const exported = await app.inject({ method: "GET", url: "/api/manage/workflows/simple/versions/1/export", headers });
+    expect(exported.statusCode).toBe(200);
+    expect(exported.headers["content-disposition"]).toContain("simple-v1.json");
+  });
+
   it("serves health, chat, session, and NDJSON endpoints", async () => {
     const app = await makeApp([
       [{ type: "text.delta", text: "hello from node" }, { type: "done" }],
@@ -407,16 +445,29 @@ async function makeApp(
   pluginCatalog?: PluginCatalog,
   buddy?: BuddyDashboardClient,
   pythonSandbox?: PythonSandboxRuntime,
+  workflowManagement?: WorkflowManagement,
 ) {
   const tools = new DeterministicToolRuntime([]);
   const model = new ReplayModelAdapter(steps);
   const sessions = sessionAdapter ?? new InMemorySessionAdapter();
   const core = new AgentCore({ model, tools, sessions });
+  const controller = new RunController(core);
+  const effectiveRegistry = presetModels ?? new SqlitePresetModelRegistry(":memory:");
+  if (!presetModels) {
+    effectiveRegistry.ensureBuiltinDefault({ model: "replay-model" });
+    registries.push(effectiveRegistry);
+  }
+  const database = new DatabaseSync(":memory:");
+  databases.push(database);
+  const catalog = new RuntimeCatalog();
+  catalog.register(new AgentRuntimeAdapter({ registry: effectiveRegistry, controller }));
+  const runControl = new RunControl(database, catalog);
   return buildNodeHost({
-    controller: new RunController(core),
     sessions,
     model: "replay-model",
-    ...(presetModels ? { presetModels, defaultPresetModel } : {}),
+    presetModels: effectiveRegistry,
+    defaultPresetModel,
+    runControl,
     tools,
     ...(staticDir ? { staticDir } : {}),
     ...(resources ? { resources } : {}),
@@ -425,7 +476,25 @@ async function makeApp(
     ...(buddy ? { buddy } : {}),
     ...(pythonSandbox ? { pythonSandbox } : {}),
     ...(managementToken ? { managementToken } : {}),
+    ...(workflowManagement ? { workflowManagement } : {}),
   });
+}
+
+function simpleWorkflowDefinition() {
+  return {
+    api_version: "anomaloharis.dev/workflow/v1",
+    kind: "Workflow",
+    metadata: { name: "simple", version: 1, description: "A simple management fixture." },
+    spec: {
+      input_schema: { type: "object", properties: { message: { type: "string" } }, additionalProperties: false },
+      output_schema: { type: "object", properties: { message: { type: "string" } }, additionalProperties: false },
+      nodes: [
+        { id: "input", type: "input", type_version: 1, config: {} },
+        { id: "output", type: "output", type_version: 1, config: {} },
+      ],
+      edges: [{ from: { node: "input", port: "data" }, to: { node: "output", port: "result" } }],
+    },
+  };
 }
 
 async function waitFor(predicate: () => boolean): Promise<void> {

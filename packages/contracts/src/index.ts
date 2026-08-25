@@ -19,6 +19,43 @@ export {
   WebSocketMessageSchema,
 } from "./schemas.js";
 export {
+  WorkflowApiVersionSchema,
+  WorkflowCapabilityApiVersionSchema,
+  WorkflowCapabilityManifestSchema,
+  WorkflowDefinitionSchema,
+  WorkflowEdgeSchema,
+  WorkflowEndpointSchema,
+  WorkflowImportResultSchema,
+  WorkflowNameSchema,
+  WorkflowNodeSchema,
+  WorkflowNodeTypeCapabilitySchema,
+  WorkflowNodeTypeSchema,
+  WorkflowPluginOperationCapabilitySchema,
+  WorkflowPolicySchema,
+  WorkflowPortSchema,
+  WorkflowPresetModelCapabilitySchema,
+  WorkflowRefSchema,
+  WorkflowResolvedDependencySchema,
+  WorkflowSummarySchema,
+  WorkflowValidationErrorCodeSchema,
+  WorkflowValidationIssueSchema,
+  WorkflowValidationReportSchema,
+  canonicalWorkflowJson,
+  canonicalizeWorkflowDefinition,
+  workflowRefOf,
+} from "./workflows.js";
+export {
+  ExecutionRunEventSchema,
+  ExecutionRunSchema,
+  ExecutionRuntimeKindSchema,
+  ExecutionRunStatusSchema,
+  ExecutionTargetSchema,
+  StopReasonSchema,
+  WorkflowNodeRunSchema,
+  WorkflowNodeRunStatusSchema,
+  WorkflowRunRequestSchema,
+} from "./workflow-runs.js";
+export {
   OpenAIChatCompletionRequestSchema,
   OpenAIChatCompletionChunkSchema,
   OpenAIChatCompletionResponseSchema,
@@ -60,6 +97,36 @@ export type {
   WebSocketMessage,
 } from "./types.js";
 export type {
+  JsonSchema,
+  WorkflowCapabilityManifest,
+  WorkflowDefinition,
+  WorkflowEdge,
+  WorkflowImportResult,
+  WorkflowName,
+  WorkflowNode,
+  WorkflowNodeType,
+  WorkflowNodeTypeCapability,
+  WorkflowPluginOperationCapability,
+  WorkflowPresetModelCapability,
+  WorkflowRef,
+  WorkflowResolvedDependency,
+  WorkflowSummary,
+  WorkflowValidationErrorCode,
+  WorkflowValidationIssue,
+  WorkflowValidationReport,
+} from "./workflows.js";
+export type {
+  ExecutionRun,
+  ExecutionRunEvent,
+  ExecutionRunStatus,
+  ExecutionRuntimeKind,
+  ExecutionTarget,
+  StopReason,
+  WorkflowNodeRun,
+  WorkflowNodeRunStatus,
+  WorkflowRunRequest,
+} from "./workflow-runs.js";
+export type {
   OpenAIChatCompletionRequest,
   OpenAIChatCompletionChunk,
   OpenAIChatCompletionResponse,
@@ -75,5 +142,7 @@ export {
   validateAgentEvent,
   validateContract,
   validateWebSocketMessage,
+  validateWorkflowCapabilityManifest,
+  validateWorkflowDefinition,
 } from "./validation.js";
 export type { ContractName, ContractValidation } from "./validation.js";

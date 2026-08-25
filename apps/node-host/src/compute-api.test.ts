@@ -1,8 +1,13 @@
+import { DatabaseSync } from "node:sqlite";
+
 import { afterEach, describe, expect, it } from "vitest";
 
 import { AgentCore } from "./core.js";
 import { InMemoryIdempotencyRepository, InMemoryUsageRepository, ServiceAuth, SqliteComputeStore, SqliteNativeRunStore } from "./compute-api.js";
 import { RunController } from "./controller.js";
+import { AgentRuntimeAdapter } from "./agent-runtime-adapter.js";
+import { RuntimeCatalog } from "./runtime-catalog.js";
+import { RunControl } from "./run-control.js";
 import { ReplayModelAdapter, type ReplayStep } from "./model.js";
 import { SqlitePresetModelRegistry } from "./preset-models.js";
 import { InMemorySessionAdapter } from "./session.js";
@@ -12,16 +17,19 @@ import { builtinPluginCatalog } from "./plugin-catalog.js";
 
 const apps: Array<{ close(): Promise<void> }> = [];
 const registries: SqlitePresetModelRegistry[] = [];
+const databases: DatabaseSync[] = [];
 
 afterEach(async () => {
   for (const app of apps.splice(0)) await app.close();
   for (const registry of registries.splice(0)) registry.close();
+  for (const database of databases.splice(0)) database.close();
 });
 
 describe("OpenAI-compatible compute API", () => {
   it("accepts the legacy service-token header through the naming adapter", () => {
     const auth = new ServiceAuth({ clients: [{ id: "legacy-client", token: "legacy-token" }] });
     expect(auth.authenticate({ "x-anomalo-service-token": "legacy-token" }).id).toBe("legacy-client"); // naming-compat
+    expect(() => auth.authenticate({ "x-anomalo-service-token": "legacy-token" }, "workflow:run")).toThrow("missing scope workflow:run"); // naming-compat
   });
 
   it("lists published preset models and returns standard non-streaming completions", async () => {
@@ -180,6 +188,113 @@ describe("OpenAI-compatible compute API", () => {
     expect(response.body.split("\n").filter(Boolean).map((line) => JSON.parse(line).type)).toContain("run.finished");
   });
 
+  it("keeps unified native invocations portable and preserves idempotency across the native route", async () => {
+    const database = new DatabaseSync(":memory:");
+    databases.push(database);
+    const app = await makeUnifiedApp([[{ type: "text.delta", text: "native" }, { type: "done" }]], database);
+    apps.push(app);
+
+    const request = {
+      method: "POST" as const,
+      url: "/api/preset-models/luna/versions/1/runs",
+      headers: { authorization: "Bearer luna-token", "idempotency-key": "native-same" },
+      payload: { message: "run", session_id: "native-session" },
+    };
+    const first = await app.inject(request);
+    expect(first.statusCode).toBe(200);
+    expect(first.json()).toMatchObject({ session_id: "native-session", events: expect.arrayContaining([expect.objectContaining({ type: "run.finished" })]) });
+
+    const stored = database.prepare("SELECT input_json FROM execution_runs WHERE run_id = ?").get(first.json().run_id) as { input_json: string };
+    expect(JSON.parse(stored.input_json)).toEqual({ message: "run", resume: false, session_id: "native-session" });
+
+    const replay = await app.inject(request);
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json().run_id).toBe(first.json().run_id);
+
+    const view = await app.inject({ method: "GET", url: `/api/runs/${first.json().run_id}`, headers: { authorization: "Bearer luna-token" } });
+    expect(view.json()).toMatchObject({ session_id: "native-session", events: expect.arrayContaining([expect.objectContaining({ type: "run.finished" })]) });
+    expect(view.json().run).toBeUndefined();
+
+    const events = await app.inject({ method: "GET", url: `/api/runs/${first.json().run_id}/events`, headers: { authorization: "Bearer luna-token" } });
+    expect(events.json().events.at(-1).type).toBe("run.finished");
+  });
+
+  it("resumes a unified Preset Model Run through RunControl", async () => {
+    const database = new DatabaseSync(":memory:");
+    databases.push(database);
+    const registry = new SqlitePresetModelRegistry(":memory:");
+    registries.push(registry);
+    registry.createDraft({
+      name: "resume-model",
+      version: 1,
+      description: "Resume fixture",
+      provider: { adapter: "openai-compatible", model: "resume-provider", tool_protocol: "auto" },
+      plugins: { fixed: [] },
+    });
+    registry.publish("resume-model@1");
+    const model = registry.resolve("resume-model@1");
+    const sessions = new InMemorySessionAdapter();
+    await sessions.checkpoint({
+      runId: "old-run",
+      sessionId: "resume-session",
+      reason: "run_timeout",
+      iteration: 0,
+      state: {
+        promptProfile: "agent",
+        originalUserContent: "resume this",
+        currentUserMessage: { role: "user", content: "resume this" },
+        assistantText: "",
+        pendingToolCalls: [],
+        completedToolCallIds: [],
+        loopMessages: [],
+        bootstrapContext: [],
+        model: model.providerModel,
+        presetModelRef: model.ref,
+        compiledHash: model.compiledHash,
+        policy: model.policy,
+        searchMode: model.policy.searchMode ?? "diy",
+      },
+      createdAt: "2026-08-25T00:00:00.000Z",
+      updatedAt: "2026-08-25T00:00:00.000Z",
+    });
+    const controller = new RunController(new AgentCore({
+      model: new ReplayModelAdapter([[{ type: "text.delta", text: "resumed" }, { type: "done" }]], { completions: ["resumed"] }),
+      tools: new DeterministicToolRuntime([]),
+      sessions,
+    }));
+    const agentAdapter = new AgentRuntimeAdapter({ registry, controller });
+    const catalog = new RuntimeCatalog();
+    catalog.register(agentAdapter);
+    const control = new RunControl(database, catalog);
+    const target = agentAdapter.resolve(model.ref);
+    const previousInput = { agent_input: { sessionId: "resume-session", runId: "old-run", message: "resume this", resume: false } };
+    database.prepare(`
+      INSERT INTO execution_runs(run_id, runtime_kind, target_ref, target_hash, runtime_adapter_version, runtime_adapter_hash, client_id, status, input_json, request_hash, created_at, finished_at, stopped_at)
+      VALUES (?, 'preset_model', ?, ?, ?, ?, ?, 'stopped', ?, ?, ?, ?, ?)
+    `).run("old-run", model.ref, target.hash, agentAdapter.version, agentAdapter.packageHash, "resume-client", JSON.stringify(previousInput), "sha256:old-request", "2026-08-25T00:00:00.000Z", "2026-08-25T00:00:01.000Z", "2026-08-25T00:00:01.000Z");
+    const app = await buildNodeHost({
+      sessions,
+      model: model.providerModel,
+      presetModels: registry,
+      defaultPresetModel: model.ref,
+      runControl: control,
+      compute: {
+        auth: new ServiceAuth({ clients: [{ id: "resume-client", token: "resume-token" }] }),
+        nativeRuns: new SqliteNativeRunStore(database),
+        runControl: control,
+      },
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/runs/old-run/resume",
+      headers: { authorization: "Bearer resume-token" },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ resumed_from_run_id: "old-run", model: "resume-model@1", events: expect.arrayContaining([expect.objectContaining({ type: "run.succeeded" })]) });
+  });
+
   it("persists usage and idempotency records in the compute store", async () => {
     const store = new SqliteComputeStore(":memory:");
     await store.begin({
@@ -271,19 +386,61 @@ async function makeApp(
   registry.publish("luna@1");
   const sessions = new InMemorySessionAdapter();
   const core = new AgentCore({ model: new ReplayModelAdapter(steps), tools: new DeterministicToolRuntime([]), sessions });
+  const controller = new RunController(core);
+  const database = new DatabaseSync(":memory:");
+  databases.push(database);
+  const catalog = new RuntimeCatalog();
+  catalog.register(new AgentRuntimeAdapter({ registry, controller }));
+  const runControl = new RunControl(database, catalog);
   const app = await buildNodeHost({
-    controller: new RunController(core),
     sessions,
     model: "luna-provider",
     presetModels: registry,
     defaultPresetModel: "luna@1",
+    runControl,
     compute: {
       auth: new ServiceAuth({ clients: [{ id: "luna-client", token: "luna-token" }] }),
       usage,
       idempotency,
+      runControl,
     },
   });
   return app;
+}
+
+async function makeUnifiedApp(steps: ReplayStep[], database: DatabaseSync) {
+  const registry = new SqlitePresetModelRegistry(":memory:");
+  registries.push(registry);
+  registry.createDraft({
+    name: "luna",
+    version: 1,
+    description: "Coding preset",
+    provider: { adapter: "openai-compatible", model: "luna-provider", tool_protocol: "auto" },
+    plugins: { fixed: [] },
+  });
+  registry.publish("luna@1");
+  const sessions = new InMemorySessionAdapter();
+  const controller = new RunController(new AgentCore({ model: new ReplayModelAdapter(steps), tools: new DeterministicToolRuntime([]), sessions }));
+  const agentAdapter = new AgentRuntimeAdapter({ registry, controller });
+  const catalog = new RuntimeCatalog();
+  catalog.register(agentAdapter);
+  const runControl = new RunControl(database, catalog);
+  const store = new SqliteComputeStore(":memory:", { database });
+  const nativeRuns = new SqliteNativeRunStore(database);
+  return buildNodeHost({
+    sessions,
+    model: "luna-provider",
+    presetModels: registry,
+    defaultPresetModel: "luna@1",
+    runControl,
+    compute: {
+      auth: new ServiceAuth({ clients: [{ id: "luna-client", token: "luna-token" }] }),
+      usage: store,
+      idempotency: store,
+      nativeRuns,
+      runControl,
+    },
+  });
 }
 
 async function makeUrusApp(steps: ReplayStep[]) {
@@ -299,14 +456,21 @@ async function makeUrusApp(steps: ReplayStep[]) {
     asToolAdapter("time-tools", 100, new TimeZoneToolRuntime()),
   ]);
   const core = new AgentCore({ model: new ReplayModelAdapter(steps, { completions: ["{}"] }), tools, sessions });
+  const controller = new RunController(core);
+  const database = new DatabaseSync(":memory:");
+  databases.push(database);
+  const catalog = new RuntimeCatalog();
+  catalog.register(new AgentRuntimeAdapter({ registry, controller }));
+  const runControl = new RunControl(database, catalog);
   return buildNodeHost({
-    controller: new RunController(core),
     sessions,
     model: "fixture-urus-provider",
     presetModels: registry,
     defaultPresetModel: "scheduled-event-investigator@1",
+    runControl,
     compute: {
       auth: new ServiceAuth({ clients: [{ id: "urus-client", token: "urus-token" }] }),
+      runControl,
     },
   });
 }

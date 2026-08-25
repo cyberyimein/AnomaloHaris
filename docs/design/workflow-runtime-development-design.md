@@ -698,6 +698,7 @@ CREATE TABLE workflow_node_runs (
   input_json TEXT,
   output_json TEXT,
   error_json TEXT,
+  usage_json TEXT,
   child_run_id TEXT,
   started_at TEXT,
   finished_at TEXT,
@@ -1006,7 +1007,7 @@ Stage 0 是 Workflow 开发的强制前置 Gate，不计入后续两个功能阶
 
 #### Stage 0 实施记录（2026-08-25）
 
-Stage 0 的代码切片已经落地，Workflow contracts、Workflow Runtime package、数据库表、路由和 UI 仍保持冻结，等待本 Gate 通过后再开始：
+Stage 0 的命名切片已经落地；Workflow contracts、Workflow Runtime package、数据库表、路由和 UI 在本 Gate 通过后按后续 Phase 1/Phase 2 记录继续实现：
 
 - **0.1 已完成**：新增 `docs/adr/0003-anomaloharis-canonical-naming.md`、`CONTEXT.md` 和 `npm run check:naming`；检查脚本扫描 tracked/non-ignored working-tree 文件，并只允许兼容 Adapter、迁移脚本/测试和历史文档保留旧标识。
 - **0.2 已完成**：workspace package、imports、Schema URI、Header 输出、环境模板、Docker/deployment、前端文案、Urus 文档路径和 runtime resource 已切换到 canonical 命名；`LegacyNamingAdapter` 集中处理旧 env/header/ref 输入，canonical 值优先；部署脚本仅保留旧数据目录和旧镜像 metadata 的只读发现兼容。
@@ -1151,6 +1152,18 @@ npm test --workspace anomaloharis-frontend
 - 所有现有 workspace tests/build 通过。
 - 本阶段不存在可访问的 Workflow run route，避免“管理完成即被误认为执行完成”。
 
+#### Phase 1 实施记录（`feat/agent-workflow-runtime-phase1-2`，2026-08-25）
+
+当前分支已完成 Phase 1 的代码切片；Phase 2 在同一分支继续实现，执行面代码已落地但仍需完成真实 Provider、浏览器 E2E 和 Urus 集成 Gate：
+
+- **1.1 已完成**：`@anomaloharis/contracts` 新增 Workflow Definition、Capability Manifest、Validation Report、Summary、Import Result Schema、canonical hash 辅助函数和 valid/invalid fixtures；contracts 的 Ajv registry 与导出 Schema 已覆盖新合同。
+- **1.2 已完成**：新增 `@anomaloharis/workflow-runtime`，包含 `workflow-runtime` identity、SQLite Registry、draft import/list/get/export/delete、publish/retire 生命周期、dependency locks 和重启后 hash 稳定性。
+- **1.3 已完成（管理面范围）**：Runtime 内置 V1 Node Type Catalog、无副作用 Validator、DAG/端口/可达性/Schema/精确 Preset Model 与 workflow-callable Plugin Operation 校验、Compiled Snapshot；PluginHost capability declaration 增加显式 `workflow_callable` operation 合同，旧 capability 默认不可编排。
+- **1.4 已完成**：Node Host 通过独立 `WorkflowManagement` Seam 注册全部 Phase 1 管理路由，使用统一管理 token/error envelope 语义；Runtime 未配置时返回 `workflow_unavailable`，未注册任何执行路由。
+- **1.5 已完成（管理 UI）**：新增 Workflows Tab、Manifest/Definition 下载、文件或粘贴导入、后端校验报告展示、draft/publish/retire/delete 和 Definition 详情；UI 没有复制后端图校验规则。
+
+本阶段管理面验证：contracts 7 tests、Workflow Runtime 3 tests、Node Host 90 tests、Buddy bridge 4 tests、Buddy service 16 tests、frontend 41 tests、canonical naming Gate 和三个 TypeScript typecheck 均通过。真实浏览器 E2E 与 Phase 2 执行面不在这段 Phase 1 记录中提前宣称完成。
+
 ### Phase 2：版本化执行、节点调度和运行观测闭环
 
 目标：调用方可以按精确 `workflow-name@version` 提交数据，Runner 复用现有 Agent/Plugin 执行链完成 DAG，并获得持久化事件、结果、取消和审计。
@@ -1280,6 +1293,20 @@ npm test --workspace anomaloharis-frontend
 - stop、timeout、fail_fast、idempotency、Host restart 都有持久化验证。
 - Run 和 Node Run 可以从 UI 与 Interface 追踪到 child Agent Run。
 - 现有 Preset Model、chat、stream、PluginHost 和 frontend E2E 无回归。
+
+#### Phase 2 实施记录（`feat/agent-workflow-runtime-phase1-2`，2026-08-25）
+
+本分支已完成 Phase 2 的第一轮可运行切片：
+
+- **2.1 已完成**：新增统一 `execution_runs`、`execution_run_events`、`workflow_runs`、`workflow_node_runs` 持久化模型；`RunControl` 独占顶层身份、状态转换、事件 sequence、幂等、stop、Host restart recovery、全局执行容量和 usage 聚合；Agent 与 Workflow 通过带 version/package hash/capability/health 的 Runtime Adapter 接入同一运行控制面。普通 chat、stream、WebSocket、OpenAI-compatible 和 Preset Model run/resume 的新运行均强制经过 Run Control，旧 `native_runs` 仅保留只读历史兼容。
+- **2.2 已完成**：`WorkflowRunner` 按编译后的稳定拓扑顺序调度 input/output/condition/parallel/join，执行 Host/Workflow 较小并发上限、fail-fast、skip、stop、retry 和边界 Schema 校验；节点状态和 attempt 持久化。retry 只接受节点 Adapter 明确标记为 retryable 的错误，缺失 Preset Model/Plugin Operation Adapter 时稳定失败，不存在生产 fake fallback。
+- **2.3 已完成（fake Provider 集成范围）**：`preset_model` 节点通过 Agent Runtime Adapter 创建带 `parent_run_id` 的 child Agent Run，锁定 Preset Model compiled hash，结构化输出、child id、失败和停止结果投影回 Workflow Node Run。
+- **2.4 已完成**：Plugin Operation 只允许调用显式 `workflow_callable` 声明且匹配 operation/version/package hash 的实现；执行前后 Schema 校验，传递权限声明、幂等键、AbortSignal 和超时，不回退到同名工具。
+- **2.5 已完成（运行 Interface/UI 基础范围）**：新增 exact `name@version` 的 Workflow run、NDJSON stream、Run 查询、after-sequence 事件回放和 stop 路由；增加 service-token workflow scope/ref allowlist；Workflow Tab 支持 published Workflow 测试运行、节点事件时间线、停止、结果和错误展示。
+
+本切片自动化验证覆盖：统一 Run Control 状态/幂等/回放/恢复、DAG condition + parallel/join、Preset Model child run、显式 Plugin Operation、Workflow run API/service auth、contracts、Workflow Runtime、Node Host、Buddy bridge/service、frontend tests，以及 contracts/Workflow Runtime/Node Host/frontend build/typecheck。以下仍属于 Phase 2 Gate 的外部验证，不在本记录中虚报完成：真实 Provider tool-call Workflow、真实浏览器 E2E、Urus service-token 端到端调用和部署环境重启演练。
+
+开发完成前架构审查补充验证：stop 只在 Runtime Adapter 与活动 child/plugin 执行收敛后提交顶层终态；ChildRunControl 从父 Workflow Run 派生 client id 并只允许收紧权限；Runtime Adapter identity 随 Run 持久化并在 queued recovery 时校验；`npm run check:runtime-architecture` 静态阻止 AgentCore 反向依赖 Workflow Runtime，以及 Host/compute 绕过 Run Control 直接启动 AgentCore。
 
 ## 16. 建议提交顺序
 

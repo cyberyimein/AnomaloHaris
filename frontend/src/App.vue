@@ -39,6 +39,14 @@
           </button>
           <button
             class="nav-tab"
+            :class="{ active: activeView === 'workflows' }"
+            type="button"
+            @click="setActiveView('workflows')"
+          >
+            Workflows
+          </button>
+          <button
+            class="nav-tab"
             :class="{ active: activeView === 'dashboard' }"
             type="button"
             @click="setActiveView('dashboard')"
@@ -96,6 +104,17 @@
             title="Refresh Buddy dashboard"
             aria-label="Refresh Buddy dashboard"
             @click="refreshBuddyDashboard"
+          >
+            <RefreshCw :size="17" />
+            <span>Refresh</span>
+          </button>
+          <button
+            v-else-if="activeView === 'workflows'"
+            class="toolbar-button"
+            type="button"
+            title="Refresh workflows"
+            aria-label="Refresh workflows"
+            @click="refreshWorkflows"
           >
             <RefreshCw :size="17" />
             <span>Refresh</span>
@@ -304,6 +323,13 @@
       <PresetAgents
         v-else-if="activeView === 'preset-agents'"
         ref="presetAgentsEl"
+        :management="managementAccess"
+        @save-management-token="saveManagementToken"
+      />
+
+      <Workflows
+        v-else-if="activeView === 'workflows'"
+        ref="workflowsEl"
         :management="managementAccess"
         @save-management-token="saveManagementToken"
       />
@@ -1057,6 +1083,7 @@ import { createBuddyDashboardController } from "./dashboard/buddyDashboardContro
 import { createManagementAccess } from "./management/managementAccess";
 import { createSearchModeController } from "./management/searchModeController";
 import PresetAgents from "./preset-agents/PresetAgents.vue";
+import Workflows from "./workflows/Workflows.vue";
 
 const SEND_SHORTCUT = "Alt+Enter";
 const sendShortcutTooltip = SEND_SHORTCUT;
@@ -1067,11 +1094,13 @@ const historyOpen = ref(false);
 const composerActionsOpen = ref(false);
 const activeView = ref("agent");
 const presetAgentsEl = ref(null);
+const workflowsEl = ref(null);
 const capabilityDashboardEl = ref(null);
 const managementAccess = createManagementAccess();
 const { input: managementTokenInput } = managementAccess.state;
 const fetchJson = managementAccess.requestJson;
 const refreshDashboard = () => capabilityDashboardEl.value?.refresh();
+const refreshWorkflows = () => workflowsEl.value?.refresh();
 const buddyDashboard = createBuddyDashboardController({
   requestJson: fetchJson,
   markAccessError: managementAccess.markError,
@@ -1389,6 +1418,9 @@ function saveManagementToken() {
   if (activeView.value === "preset-agents") {
     void presetAgentsEl.value?.refresh();
   }
+  if (activeView.value === "workflows") {
+    void workflowsEl.value?.refresh();
+  }
 }
 
 function clearManagementToken() {
@@ -1401,6 +1433,9 @@ function clearManagementToken() {
   }
   if (activeView.value === "buddy") {
     void refreshBuddyDashboard();
+  }
+  if (activeView.value === "workflows") {
+    void workflowsEl.value?.refresh();
   }
 }
 

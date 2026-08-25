@@ -14,10 +14,10 @@ import {
   type SessionId,
 } from "@anomaloharis/contracts";
 
-import { RunController, type StartRunRequest } from "./controller.js";
+import type { StartRunRequest } from "./controller.js";
 import { type BrowserRegistration, BrowserToolBridge } from "./browser.js";
 import { BuddyDashboardError, type BuddyDashboardClient } from "./buddy-dashboard.js";
-import { registerComputeRoutes, type ComputeApiOptions } from "./compute-api.js";
+import { projectNativeEvent, registerComputeRoutes, type ComputeApiOptions } from "./compute-api.js";
 import { randomIds } from "./ids.js";
 import { DEFAULT_PRESET_MODEL_REF, type CompiledPresetModel, SqlitePresetModelRegistry } from "./preset-models.js";
 import type { SessionRepository } from "./session.js";
@@ -28,9 +28,11 @@ import type { PluginCatalog } from "./plugin-catalog.js";
 import type { PluginHost } from "./plugins.js";
 import { DEFAULT_SUBAGENT_MODEL, isSearchMode } from "./retrieval.js";
 import { PYTHON_SANDBOX_TOOL_NAME, type PythonSandboxRuntime } from "./python-sandbox.js";
+import { registerWorkflowManagementRoutes } from "./workflow-api.js";
+import type { WorkflowManagement } from "@anomaloharis/workflow-runtime";
+import type { RunControl } from "./run-control.js";
 
 export type NodeHostOptions = {
-  controller: RunController;
   sessions: SessionRepository;
   model: string;
   presetModels?: SqlitePresetModelRegistry;
@@ -39,7 +41,7 @@ export type NodeHostOptions = {
   logger?: boolean;
   browserBridge?: BrowserToolBridge;
   tools?: ToolRuntime;
-  compute?: Omit<ComputeApiOptions, "registry" | "controller" | "sessions">;
+  compute?: Omit<ComputeApiOptions, "registry" | "sessions">;
   resources?: FileResourceLoader;
   managementToken?: string;
   plugins?: PluginHost;
@@ -48,10 +50,14 @@ export type NodeHostOptions = {
   providerCredits?: () => Promise<unknown>;
   subagentModel?: string;
   pythonSandbox?: PythonSandboxRuntime;
+  workflowManagement?: WorkflowManagement;
+  runControl: RunControl;
+  workflowRefAllowlist?: readonly string[];
 };
 
 export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyInstance> {
   const app = fastify({ logger: options.logger ?? false });
+  const activeAgentRuns = new Map<SessionId, string>();
   await app.register(fastifyWebsocket);
 
   app.get("/health", async () => ({
@@ -66,6 +72,15 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
     model: options.model,
     default_preset_model: options.defaultPresetModel,
   }));
+
+  registerWorkflowManagementRoutes(app, {
+    ...(options.workflowManagement ? { management: options.workflowManagement } : {}),
+    ...(options.managementToken ? { managementToken: options.managementToken } : {}),
+    runControl: options.runControl,
+    ...(options.compute?.auth ? { serviceAuth: options.compute.auth } : {}),
+    ...(options.workflowRefAllowlist ? { workflowRefAllowlist: options.workflowRefAllowlist } : {}),
+    ...(options.compute?.nativeRuns ? { nativeRuns: options.compute.nativeRuns } : {}),
+  });
 
   app.get("/api/prompts", async (_request, reply) => {
     if (!options.resources) return reply.code(404).send({ error: "Resource loader is not configured." });
@@ -111,7 +126,7 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
 
   app.patch<{ Params: { sessionId: string }; Body: unknown }>("/api/sessions/:sessionId/search-mode", async (request, reply) => {
     const sessionId = request.params.sessionId as SessionId;
-    if (options.controller.hasActiveRun(sessionId)) return reply.code(409).send({ error: "Stop the active run before changing search mode.", error_code: "run_already_active" });
+    if (activeAgentRuns.has(sessionId)) return reply.code(409).send({ error: "Stop the active run before changing search mode.", error_code: "run_already_active" });
     const snapshot = await options.sessions.open(sessionId);
     if (snapshot.checkpoint) return reply.code(409).send({ error: "Clear or resume the checkpoint before changing search mode.", error_code: "search_mode_checkpoint_active" });
     const mode = asObject(request.body).mode;
@@ -239,8 +254,8 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
     registerComputeRoutes(app, {
       ...options.compute,
       registry: options.presetModels,
-      controller: options.controller,
       sessions: options.sessions,
+      runControl: options.runControl,
     });
   }
 
@@ -461,7 +476,7 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
     } catch (error) {
       return sendHostError(reply, error);
     }
-    const events = await collectRun(options.controller, input);
+    const events = await collectRun(options.runControl, input, activeAgentRuns);
     return reply.send(summarizeRun(events, input.sessionId));
   });
 
@@ -482,7 +497,7 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
     reply.raw.setHeader("X-AnomaloHaris-Session-Id", input.sessionId);
     if (input.presetModelRef) reply.raw.setHeader("X-AnomaloHaris-Agent-Id", input.presetModelRef);
     try {
-      for await (const event of options.controller.start(input)) {
+      for await (const event of startAgentRun(options.runControl, input, activeAgentRuns)) {
         if (!reply.raw.destroyed) reply.raw.write(`${JSON.stringify(event)}\n`);
       }
     } finally {
@@ -495,7 +510,10 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
     const sessionId = typeof body.session_id === "string" ? body.session_id as SessionId : undefined;
     if (!sessionId) return reply.code(400).send({ error: "session_id is required." });
     const reason = body.reason === "disconnect" ? "disconnect" : "user_stop";
-    return reply.send(await options.controller.stop(sessionId, reason));
+    const runId = activeAgentRuns.get(sessionId);
+    if (!runId) return reply.send({ stopped: false, reason: "no_active_run" });
+    const result = await options.runControl.stop(runId, reason);
+    return reply.send({ ...result, reason });
   });
 
   app.get<{ Params: { sessionId: string } }>("/ws/chat/:sessionId", { websocket: true }, (socket, request) => {
@@ -538,7 +556,7 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
         return;
       }
       activeTask = (async () => {
-        for await (const event of options.controller.start(input)) send(event);
+        for await (const event of startAgentRun(options.runControl, input, activeAgentRuns)) send(event);
       })().catch((error: unknown) => {
         sendError(error instanceof Error ? error.message : String(error), "model_failed");
       }).finally(() => {
@@ -552,12 +570,14 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
     socket.on("close", () => {
       closed = true;
       if (browserRegistration) options.browserBridge?.unregister(browserRegistration);
-      if (activeTask) void options.controller.stop(sessionId, "disconnect");
+      const runId = activeAgentRuns.get(sessionId);
+      if (runId) void options.runControl.stop(runId, "disconnect");
     });
     socket.on("error", () => {
       closed = true;
       if (browserRegistration) options.browserBridge?.unregister(browserRegistration, "socket_error");
-      if (activeTask) void options.controller.stop(sessionId, "disconnect");
+      const runId = activeAgentRuns.get(sessionId);
+      if (runId) void options.runControl.stop(runId, "disconnect");
     });
     void sendState().catch((error: unknown) => sendError(error instanceof Error ? error.message : String(error)));
 
@@ -598,7 +618,12 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
             sendError("No active run to stop.", "no_active_run");
             return;
           }
-          await options.controller.stop(sessionId, "user_stop");
+          const runId = activeAgentRuns.get(sessionId);
+          if (!runId) {
+            sendError("No active run to stop.", "no_active_run");
+            return;
+          }
+          await options.runControl.stop(runId, "user_stop");
           return;
         case "run.resume":
           void start(toStartRunRequest({ ...message, session_id: sessionId, message: null, resume: true }, options));
@@ -889,10 +914,28 @@ function readStringArray(value: unknown): string[] {
   return [...new Set(value.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean))];
 }
 
-async function collectRun(controller: RunController, input: StartRunRequest): Promise<AgentEvent[]> {
+async function collectRun(runControl: RunControl, input: StartRunRequest, activeRuns: Map<SessionId, string>): Promise<AgentEvent[]> {
   const events: AgentEvent[] = [];
-  for await (const event of controller.start(input)) events.push(event);
+  for await (const event of startAgentRun(runControl, input, activeRuns)) events.push(event);
   return events;
+}
+
+async function* startAgentRun(runControl: RunControl, input: StartRunRequest, activeRuns: Map<SessionId, string>): AsyncIterable<AgentEvent> {
+  if (!input.presetModelRef) throw new Error("preset_model_ref_required");
+  const handle = runControl.start(
+    { kind: "preset_model", ref: input.presetModelRef },
+    { clientId: "local", input: { agent_input: input } },
+  );
+  activeRuns.set(input.sessionId, handle.runId);
+  try {
+    const projection = { run_id: handle.runId, input: { agent_input: input } };
+    for await (const event of handle) {
+      const projected = projectNativeEvent(projection, event);
+      if (projected) yield projected;
+    }
+  } finally {
+    if (activeRuns.get(input.sessionId) === handle.runId) activeRuns.delete(input.sessionId);
+  }
 }
 
 function summarizeRun(events: AgentEvent[], sessionId: SessionId): Record<string, unknown> {

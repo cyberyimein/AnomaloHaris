@@ -3,7 +3,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type { PluginCompatibility, PluginPermission, PluginSpec } from "./plugins.js";
+import type { PluginCompatibility, PluginPermission, PluginSpec, WorkflowCallableOperation } from "./plugins.js";
 
 const REPOSITORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 
@@ -21,6 +21,7 @@ export type PluginManifest = {
   permissions: readonly PluginPermission[];
   toolNames?: readonly string[];
   capabilities?: readonly string[];
+  workflowOperations?: readonly WorkflowCallableOperation[];
   required?: boolean;
   /** Local source root used only to re-hash an installed development plugin. */
   packageRoot?: string;
@@ -36,6 +37,7 @@ export type PluginLock = {
   compatibility: PluginCompatibility;
   permissions: readonly PluginPermission[];
   capabilities?: readonly string[];
+  workflowOperations?: readonly WorkflowCallableOperation[];
   packageHash: string;
   manifestHash: string;
 };
@@ -60,7 +62,7 @@ export class PluginCatalog {
     this.entries.set(manifest.id, structuredClone(manifest));
   }
 
-  refreshRuntimeMetadata(id: string, toolNames: readonly string[], capabilities: readonly string[]): PluginManifest {
+  refreshRuntimeMetadata(id: string, toolNames: readonly string[], capabilities: readonly string[], workflowOperations?: readonly WorkflowCallableOperation[]): PluginManifest {
     const current = this.entries.get(id);
     if (!current) throw new Error(`plugin_not_allowlisted:${id}`);
     const refreshed = createPluginManifest({
@@ -72,6 +74,7 @@ export class PluginCatalog {
       permissions: current.permissions,
       toolNames,
       capabilities,
+      ...(workflowOperations ? { workflowOperations } : current.workflowOperations ? { workflowOperations: current.workflowOperations } : {}),
       ...(current.required === undefined ? {} : { required: current.required }),
       ...(current.packageRoot ? { packageRoot: current.packageRoot } : {}),
     });
@@ -88,6 +91,15 @@ export class PluginCatalog {
     return [...this.entries.values()]
       .sort((a, b) => a.id.localeCompare(b.id))
       .map((manifest) => structuredClone(manifest));
+  }
+
+  listWorkflowOperations(): Array<WorkflowCallableOperation & { plugin_id: string; plugin_version: string; package_hash: string }> {
+    return this.list().flatMap((manifest) => (manifest.workflowOperations ?? []).map((operation) => ({
+      ...structuredClone(operation),
+      plugin_id: manifest.id,
+      plugin_version: manifest.version,
+      package_hash: manifest.packageHash,
+    })));
   }
 
   compile(fixedPlugins: readonly string[]): CompiledPluginGraph {
@@ -163,6 +175,7 @@ export function createPluginManifest(input: {
   permissions?: readonly PluginPermission[];
   toolNames?: readonly string[];
   capabilities?: readonly string[];
+  workflowOperations?: readonly WorkflowCallableOperation[];
   required?: boolean;
   packageRoot?: string;
 }): PluginManifest {
@@ -177,6 +190,9 @@ export function createPluginManifest(input: {
     permissions,
     toolNames: [...(input.toolNames ?? [])].sort(),
     capabilities: [...(input.capabilities ?? [])].sort(),
+    ...(input.workflowOperations && input.workflowOperations.length > 0
+      ? { workflowOperations: input.workflowOperations.map((operation) => structuredClone(operation)).sort((left, right) => `${left.id}:${left.version}`.localeCompare(`${right.id}:${right.version}`)) }
+      : {}),
     required: input.required === true,
     packageHash,
   };
@@ -185,6 +201,7 @@ export function createPluginManifest(input: {
     permissions,
     ...(manifestBody.toolNames.length > 0 ? { toolNames: manifestBody.toolNames } : {}),
     ...(manifestBody.capabilities.length > 0 ? { capabilities: manifestBody.capabilities } : {}),
+    ...(manifestBody.workflowOperations ? { workflowOperations: manifestBody.workflowOperations } : {}),
     ...(manifestBody.required ? { required: true } : {}),
     ...(input.packageRoot ? { packageRoot: input.packageRoot } : {}),
     manifestHash: hash(manifestBody),
@@ -308,6 +325,7 @@ function toLock(manifest: PluginManifest): PluginLock {
     permissions: [...manifest.permissions].sort(),
     toolNames: [...(manifest.toolNames ?? [])].sort(),
     capabilities: [...(manifest.capabilities ?? [])].sort(),
+    ...(manifest.workflowOperations && manifest.workflowOperations.length > 0 ? { workflowOperations: manifest.workflowOperations.map((operation) => structuredClone(operation)).sort((left, right) => `${left.id}:${left.version}`.localeCompare(`${right.id}:${right.version}`)) } : {}),
     required: manifest.required === true,
     packageHash,
   };
@@ -319,6 +337,7 @@ function toLock(manifest: PluginManifest): PluginLock {
     compatibility: manifest.compatibility,
     permissions: [...manifest.permissions].sort(),
     ...(manifest.capabilities && manifest.capabilities.length > 0 ? { capabilities: [...manifest.capabilities].sort() } : {}),
+    ...(manifest.workflowOperations && manifest.workflowOperations.length > 0 ? { workflowOperations: manifest.workflowOperations.map((operation) => structuredClone(operation)) } : {}),
     packageHash,
     manifestHash: hash(manifestBody),
   };

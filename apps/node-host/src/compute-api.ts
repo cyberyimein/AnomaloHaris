@@ -5,6 +5,8 @@ import { DatabaseSync } from "node:sqlite";
 
 import type {
   AgentEvent,
+  ExecutionRun,
+  ExecutionRunEvent,
   OpenAIChatCompletionRequest,
   OpenAIChatMessage,
   OpenAIModelList,
@@ -15,19 +17,21 @@ import type {
 import { legacyNamingAdapter, validateContract } from "@anomaloharis/contracts";
 import type { FastifyInstance, FastifyReply } from "fastify";
 
-import { RunController, type StartRunRequest } from "./controller.js";
+import type { StartRunRequest } from "./controller.js";
 import { randomIds } from "./ids.js";
 import type { CompiledPresetModel, SqlitePresetModelRegistry } from "./preset-models.js";
 import type { ModelMessage } from "./types.js";
 import type { SessionRepository } from "./session.js";
+import { RunControlError, type RunControl } from "./run-control.js";
 
 export type ServiceClientConfig = {
   id: string;
   token: string;
   scopes?: readonly string[];
+  workflowRefs?: readonly string[];
 };
 
-type AuthenticatedClient = { id: string; scopes: ReadonlySet<string> };
+export type AuthenticatedClient = { id: string; scopes: ReadonlySet<string>; workflowRefs?: ReadonlySet<string> };
 
 export class ComputeRequestError extends Error {
   constructor(
@@ -42,7 +46,7 @@ export class ComputeRequestError extends Error {
 }
 
 export class ServiceAuth {
-  private readonly clients: Map<string, { tokenHash: Buffer; scopes: ReadonlySet<string> }>;
+  private readonly clients: Map<string, { tokenHash: Buffer; scopes: ReadonlySet<string>; workflowRefs?: ReadonlySet<string> }>;
   private readonly required: boolean;
 
   constructor(options: { clients?: readonly ServiceClientConfig[]; required?: boolean } = {}) {
@@ -54,7 +58,8 @@ export class ServiceAuth {
       if (this.clients.has(client.id)) throw new Error(`duplicate_service_client:${client.id}`);
       this.clients.set(client.id, {
         tokenHash: tokenHash(client.token),
-        scopes: new Set(client.scopes ?? ["compute:models", "compute:invoke", "compute:read"]),
+        scopes: new Set(client.scopes ?? defaultComputeServiceScopes()),
+        ...(client.workflowRefs ? { workflowRefs: new Set(client.workflowRefs) } : {}),
       });
     }
   }
@@ -64,15 +69,15 @@ export class ServiceAuth {
     const token = raw?.startsWith("Bearer ") ? raw.slice("Bearer ".length).trim() : legacyNamingAdapter.readHeader(headers, "x-anomaloharis-service-token");
     if (!token) {
       if (this.required) throw new ComputeRequestError(401, "unauthorized", "A service token is required.");
-      return { id: "local", scopes: new Set(["compute:models", "compute:invoke", "compute:read"]) };
+      return { id: "local", scopes: new Set(defaultLocalServiceScopes()) };
     }
     const candidateHash = tokenHash(token);
     for (const [id, client] of this.clients) {
       if (client.tokenHash.length !== candidateHash.length || !timingSafeEqual(client.tokenHash, candidateHash)) continue;
-      if (scope && !client.scopes.has(scope)) {
+      if (scope && !client.scopes.has(scope) && !client.scopes.has("*")) {
         throw new ComputeRequestError(403, "forbidden", `Service client ${id} is missing scope ${scope}.`);
       }
-      return { id, scopes: client.scopes };
+      return { id, scopes: client.scopes, ...(client.workflowRefs ? { workflowRefs: client.workflowRefs } : {}) };
     }
     throw new ComputeRequestError(401, "unauthorized", "The service token is invalid.");
   }
@@ -493,12 +498,12 @@ export class SqliteNativeRunStore implements NativeRunRepository {
 
 export type ComputeApiOptions = {
   registry: SqlitePresetModelRegistry;
-  controller: RunController;
   sessions: SessionRepository;
   auth?: ServiceAuth;
   usage?: UsageRepository;
   idempotency?: IdempotencyRepository;
   nativeRuns?: NativeRunRepository;
+  runControl: RunControl;
 };
 
 export function registerComputeRoutes(app: FastifyInstance, options: ComputeApiOptions): void {
@@ -530,7 +535,7 @@ export function registerComputeRoutes(app: FastifyInstance, options: ComputeApiO
     let prepared: PreparedChat;
     try {
       const client = auth.authenticate(request.headers as Record<string, unknown>, "compute:invoke");
-      prepared = await prepareChat(request.body, client.id, request.headers as Record<string, unknown>, options, idempotency);
+      prepared = await prepareChat(request.body, client.id, [...client.scopes], request.headers as Record<string, unknown>, options, idempotency);
       if (prepared.existingResponse) {
         if (prepared.request.stream === true) return sendReplayStream(reply, prepared.existingResponse);
         return reply.send(prepared.existingResponse);
@@ -569,94 +574,67 @@ export function registerComputeRoutes(app: FastifyInstance, options: ComputeApiO
       const client = auth.authenticate(request.headers as Record<string, unknown>, "compute:invoke");
       const ref = `${request.params.name}@${request.params.version}`;
       const model = await resolveModelForSession(options.registry, ref, options.sessions, readSessionIdFromBody(request.body));
-      const input = nativeRunInput(request.body, model);
-      await bindSessionModel(options.sessions, input.sessionId, model.ref);
-      nativeRuns.start(input.runId!, input.sessionId, model.ref, client.id);
-      const events: AgentEvent[] = [];
-      try {
-        for await (const event of options.controller.start(input)) {
-          events.push(event);
-          nativeRuns.append(input.runId!, event);
-        }
-      } catch (error) {
-        events.push(nativeRunFailure(input, error));
-        nativeRuns.finish(input.runId!, events);
-        throw error;
-      }
-      nativeRuns.finish(input.runId!, events);
-      return reply.send({ run_id: input.runId, session_id: input.sessionId, model: model.ref, client_id: client.id, events });
+      const idempotencyKey = header(request.headers as Record<string, unknown>, "idempotency-key");
+      const invocation = nativeAgentInvocation(request.body, model, { clientId: client.id, ...(idempotencyKey ? { idempotencyKey } : {}) });
+      if (invocation.session_id) await bindSessionModel(options.sessions, invocation.session_id as SessionId, model.ref);
+      const handle = options.runControl.start(
+        { kind: "preset_model", ref: model.ref },
+        {
+          clientId: client.id,
+          input: invocation,
+          permissions: [...client.scopes],
+          ...(idempotencyKey ? { idempotency_key: idempotencyKey } : {}),
+        },
+      );
+      for await (const event of handle) void event;
+      const run = options.runControl.get(handle.runId);
+      const unifiedEvents = options.runControl.eventsSnapshot(run.run_id);
+      const events = projectNativeEvents(run, unifiedEvents);
+      return reply.send({ run_id: handle.runId, session_id: nativeSessionId(run), model: model.ref, client_id: client.id, events, status: nativeRunStatusForExecution(run, events) });
     } catch (error) {
       return sendComputeError(reply, error);
     }
   });
 
   app.post<{ Params: { name: string; version: string }; Body: unknown }>("/api/preset-models/:name/versions/:version/runs/stream", async (request, reply) => {
-    let input: StartRunRequest;
-    let model: CompiledPresetModel;
     try {
       const client = auth.authenticate(request.headers as Record<string, unknown>, "compute:invoke");
       const ref = `${request.params.name}@${request.params.version}`;
-      model = await resolveModelForSession(options.registry, ref, options.sessions, readSessionIdFromBody(request.body));
-      input = nativeRunInput(request.body, model);
-      await bindSessionModel(options.sessions, input.sessionId, model.ref);
-      nativeRuns.start(input.runId!, input.sessionId, model.ref, client.id);
-    } catch (error) {
-      return sendComputeError(reply, error);
-    }
-
-    reply.hijack();
-    reply.raw.statusCode = 200;
-    reply.raw.setHeader("content-type", "application/x-ndjson; charset=utf-8");
-    reply.raw.setHeader("cache-control", "no-cache, no-transform");
-    reply.raw.setHeader("x-anomaloharis-session-id", input.sessionId);
-    reply.raw.setHeader("x-anomaloharis-preset-model", model.ref);
-    const events: AgentEvent[] = [];
-    try {
-      for await (const event of options.controller.start(input)) {
-        events.push(event);
-        nativeRuns.append(input.runId!, event);
-        reply.raw.write(`${JSON.stringify(event)}\n`);
+      const model = await resolveModelForSession(options.registry, ref, options.sessions, readSessionIdFromBody(request.body));
+      const idempotencyKey = header(request.headers as Record<string, unknown>, "idempotency-key");
+      const invocation = nativeAgentInvocation(request.body, model, { clientId: client.id, ...(idempotencyKey ? { idempotencyKey } : {}) });
+      if (invocation.session_id) await bindSessionModel(options.sessions, invocation.session_id as SessionId, model.ref);
+      const handle = options.runControl.start(
+        { kind: "preset_model", ref: model.ref },
+        {
+          clientId: client.id,
+          input: invocation,
+          permissions: [...client.scopes],
+          ...(idempotencyKey ? { idempotency_key: idempotencyKey } : {}),
+        },
+      );
+      reply.hijack();
+      reply.raw.statusCode = 200;
+      reply.raw.setHeader("content-type", "application/x-ndjson; charset=utf-8");
+      reply.raw.setHeader("cache-control", "no-cache, no-transform");
+      reply.raw.setHeader("x-anomaloharis-session-id", invocation.session_id ?? `run_${handle.runId}`);
+      reply.raw.setHeader("x-anomaloharis-preset-model", model.ref);
+      const unifiedRun = options.runControl.get(handle.runId);
+      const streamedEvents: AgentEvent[] = [];
+      for await (const event of handle) {
+        const projected = projectNativeEvent(unifiedRun, event);
+        if (!projected) continue;
+        streamedEvents.push(projected);
+        reply.raw.write(`${JSON.stringify(projected)}\n`);
       }
-      nativeRuns.finish(input.runId!, events);
-    } catch (error) {
-      const failure = nativeRunFailure(input, error);
-      events.push(failure);
-      nativeRuns.finish(input.runId!, events);
-      reply.raw.write(`${JSON.stringify(failure)}\n`);
-    } finally {
+      const completedRun = options.runControl.get(handle.runId);
+      const projected = projectNativeEvents(completedRun, options.runControl.eventsSnapshot(completedRun.run_id));
+      if (!streamedEvents.some((event) => ["run.finished", "run.error", "run.stopped"].includes(event.type))) {
+        const terminal = projected.find((event) => ["run.finished", "run.error", "run.stopped"].includes(event.type));
+        if (terminal) reply.raw.write(`${JSON.stringify(terminal)}\n`);
+      }
       if (!reply.raw.writableEnded) reply.raw.end();
-    }
-    return reply;
-  });
-
-  app.get<{ Params: { runId: string } }>("/api/runs/:runId", async (request, reply) => {
-    try {
-      const client = auth.authenticate(request.headers as Record<string, unknown>, "compute:read");
-      const run = nativeRuns.get(request.params.runId);
-      assertNativeRunOwner(run, client.id);
-      return reply.send({ run_id: run.runId, session_id: run.sessionId, model: run.modelRef, events: run.events, status: run.active ? "active" : nativeRunStatus(run.events) });
-    } catch (error) {
-      return sendComputeError(reply, error);
-    }
-  });
-
-  app.get<{ Params: { runId: string } }>("/api/runs/:runId/events", async (request, reply) => {
-    try {
-      const client = auth.authenticate(request.headers as Record<string, unknown>, "compute:read");
-      const run = nativeRuns.get(request.params.runId);
-      assertNativeRunOwner(run, client.id);
-      return reply.send({ run_id: run.runId, events: run.events });
-    } catch (error) {
-      return sendComputeError(reply, error);
-    }
-  });
-
-  app.post<{ Params: { runId: string } }>("/api/runs/:runId/stop", async (request, reply) => {
-    try {
-      const client = auth.authenticate(request.headers as Record<string, unknown>, "compute:invoke");
-      const run = nativeRuns.get(request.params.runId);
-      assertNativeRunOwner(run, client.id);
-      return reply.send(await options.controller.stop(run.sessionId as SessionId, "user_stop"));
+      return reply;
     } catch (error) {
       return sendComputeError(reply, error);
     }
@@ -665,26 +643,46 @@ export function registerComputeRoutes(app: FastifyInstance, options: ComputeApiO
   app.post<{ Params: { runId: string } }>("/api/runs/:runId/resume", async (request, reply) => {
     try {
       const client = auth.authenticate(request.headers as Record<string, unknown>, "compute:invoke");
-      const previous = nativeRuns.get(request.params.runId);
-      assertNativeRunOwner(previous, client.id);
-      const model = await resolveModelForSession(options.registry, previous.modelRef, options.sessions, previous.sessionId as SessionId);
-      const input = nativeRunInput({ session_id: previous.sessionId, resume: true }, model);
-      input.runId = previous.runId as NonNullable<StartRunRequest["runId"]>;
-      await bindSessionModel(options.sessions, input.sessionId, model.ref);
-      nativeRuns.start(input.runId!, input.sessionId, model.ref, client.id);
-      const events: AgentEvent[] = [];
+      let previous: ExecutionRun | undefined;
       try {
-        for await (const event of options.controller.start(input)) {
-          events.push(event);
-          nativeRuns.append(input.runId!, event);
-        }
+        previous = options.runControl.get(request.params.runId);
       } catch (error) {
-        events.push(nativeRunFailure(input, error));
-        nativeRuns.finish(input.runId!, events);
-        throw error;
+        if (!(error instanceof RunControlError) || error.errorCode !== "run_not_found") throw error;
       }
-      nativeRuns.finish(input.runId!, events);
-      return reply.send({ run_id: input.runId, session_id: input.sessionId, model: model.ref, client_id: client.id, events });
+      let model: CompiledPresetModel;
+      let invocation: UnifiedAgentInvocation;
+      let resumedFrom = request.params.runId;
+      let legacyEnvelope = false;
+      if (previous) {
+        if (previous.runtime_kind !== "preset_model") throw new ComputeRequestError(400, "run_resume_unsupported", "Only Preset Model Runs can be resumed through this route.");
+        if (previous.client_id !== client.id && client.id !== "local") throw new ComputeRequestError(403, "forbidden", "The service client does not own this Run.");
+        invocation = unifiedResumeInvocation(previous.input, previous.run_id);
+        model = await resolveModelForSession(options.registry, previous.target_ref, options.sessions, invocation.session_id as SessionId);
+        legacyEnvelope = isLegacyAgentEnvelope(previous.input);
+      } else {
+        const legacy = nativeRuns.get(request.params.runId);
+        assertNativeRunOwner(legacy, client.id);
+        model = await resolveModelForSession(options.registry, legacy.modelRef, options.sessions, legacy.sessionId as SessionId);
+        invocation = { message: null, session_id: legacy.sessionId, resume: true };
+      }
+      await bindSessionModel(options.sessions, invocation.session_id as SessionId, model.ref);
+      const handle = options.runControl.start(
+        { kind: "preset_model", ref: model.ref },
+        {
+          clientId: client.id,
+          input: invocation,
+          permissions: [...client.scopes],
+          ...(previous ? { parentRunId: previous.run_id } : {}),
+        },
+      );
+      for await (const _event of handle) { /* drain the resumed run before returning the native response */ }
+      const run = options.runControl.get(handle.runId);
+      const unifiedEvents = options.runControl.eventsSnapshot(run.run_id);
+      if (legacyEnvelope) {
+        return reply.send({ run_id: handle.runId, session_id: nativeSessionId(run), model: model.ref, client_id: client.id, resumed_from_run_id: resumedFrom, events: unifiedEvents });
+      }
+      const events = projectNativeEvents(run, unifiedEvents);
+      return reply.send({ run_id: handle.runId, session_id: nativeSessionId(run), model: model.ref, client_id: client.id, resumed_from_run_id: resumedFrom, events, status: nativeRunStatusForExecution(run, events) });
     } catch (error) {
       return sendComputeError(reply, error);
     }
@@ -693,9 +691,21 @@ export function registerComputeRoutes(app: FastifyInstance, options: ComputeApiO
   app.get<{ Params: { runId: string } }>("/ws/runs/:runId", { websocket: true }, (socket, request) => {
     try {
       const client = auth.authenticate(request.headers as Record<string, unknown>, "compute:read");
-      const run = nativeRuns.get(request.params.runId);
-      assertNativeRunOwner(run, client.id);
-      for (const event of run.events) socket.send(JSON.stringify(event));
+      let run: ExecutionRun | undefined;
+      try {
+        run = options.runControl.get(request.params.runId);
+      } catch (error) {
+        if (!(error instanceof RunControlError) || error.errorCode !== "run_not_found") throw error;
+      }
+      if (run) {
+        if (run.runtime_kind !== "preset_model") throw new ComputeRequestError(400, "run_stream_unsupported", "Only Preset Model Runs can use the native WebSocket projection.");
+        if (run.client_id !== client.id && client.id !== "local") throw new ComputeRequestError(403, "forbidden", "The service client does not own this Run.");
+        for (const event of projectNativeEvents(run, options.runControl.eventsSnapshot(run.run_id))) socket.send(JSON.stringify(event));
+      } else {
+        const legacy = nativeRuns.get(request.params.runId);
+        assertNativeRunOwner(legacy, client.id);
+        for (const event of legacy.events) socket.send(JSON.stringify(event));
+      }
     } catch (error) {
       socket.send(JSON.stringify(computeErrorPayload(error)));
     } finally {
@@ -722,6 +732,7 @@ export function registerComputeRoutes(app: FastifyInstance, options: ComputeApiO
 type PreparedChat = {
   request: OpenAIChatCompletionRequest;
   clientId: string;
+  permissions: readonly string[];
   requestId: string;
   requestHash: string;
   idempotencyKey?: string | undefined;
@@ -736,6 +747,7 @@ type PreparedChat = {
 async function prepareChat(
   body: unknown,
   clientId: string,
+  permissions: readonly string[],
   headers: Record<string, unknown>,
   options: ComputeApiOptions,
   idempotency: IdempotencyRepository,
@@ -760,7 +772,7 @@ async function prepareChat(
   if (bodyRecord.response_format !== undefined && !model.allowResponseFormatOverride) {
     throw new ComputeRequestError(400, "preset_model_override_forbidden", "The response_format field is controlled by the Preset Model.");
   }
-  if (options.controller.hasActiveRun(sessionId)) throw new ComputeRequestError(409, "run_already_active", "A run is already active for this session.", true);
+  if (options.runControl.activeAgentRunForSession(sessionId)) throw new ComputeRequestError(409, "run_already_active", "A run is already active for this session.", true);
   await bindSessionModel(options.sessions, sessionId, model.ref);
   const requestId = `chatcmpl_${randomUUID().replaceAll("-", "")}`;
   const idempotencyKey = header(headers, "idempotency-key");
@@ -773,7 +785,7 @@ async function prepareChat(
     if (reservation.status === "pending") throw new ComputeRequestError(409, "idempotency_request_in_progress", "A request with this Idempotency-Key is still running.", true);
     if (reservation.status === "completed") {
       const existing = reservation.record;
-      return { request, clientId, requestId: String(existing.response.id ?? requestId), requestHash, idempotencyKey, model, input: {} as StartRunRequest, messages: request.messages, startedAt: createdAt, existingResponse: existing.response };
+      return { request, clientId, permissions, requestId: String(existing.response.id ?? requestId), requestHash, idempotencyKey, model, input: {} as StartRunRequest, messages: request.messages, startedAt: createdAt, existingResponse: existing.response };
     }
   }
   const messages = request.messages.map(toModelMessage);
@@ -809,6 +821,7 @@ async function prepareChat(
   return {
     request,
     clientId,
+    permissions,
     requestId,
     requestHash,
     ...(idempotencyKey ? { idempotencyKey, idempotencyReserved: true } : {}),
@@ -887,10 +900,23 @@ async function executeWithUsage(
     totalTokens: 0,
     startedAt: prepared.startedAt,
   };
-  await usage.begin(begin);
   const events: AgentEvent[] = [];
   try {
-    for await (const event of options.controller.start(prepared.input)) {
+    const handle = options.runControl.start(
+      { kind: "preset_model", ref: prepared.model.ref },
+      {
+        clientId: prepared.clientId,
+        input: { agent_input: prepared.input },
+        permissions: prepared.permissions,
+        ...(prepared.idempotencyKey ? { idempotency_key: prepared.idempotencyKey } : {}),
+      },
+    );
+    begin.runId = handle.runId;
+    await usage.begin(begin);
+    const run = options.runControl.get(handle.runId);
+    for await (const unifiedEvent of handle) {
+      const event = projectNativeEvent(run, unifiedEvent);
+      if (!event) continue;
       events.push(event);
       await onEvent?.(event);
     }
@@ -976,38 +1002,60 @@ function sendReplayStream(reply: FastifyReply, response: Record<string, unknown>
   return reply;
 }
 
-function nativeRunInput(body: unknown, model: CompiledPresetModel): StartRunRequest {
+type UnifiedAgentInvocation = {
+  message: string | null;
+  session_id?: string;
+  resume: boolean;
+  response_format?: StartRunRequest["responseFormat"];
+};
+
+function nativeAgentInvocation(body: unknown, model: CompiledPresetModel, options: { clientId: string; idempotencyKey?: string }): UnifiedAgentInvocation {
   const value = body && typeof body === "object" && !Array.isArray(body) ? body as Record<string, unknown> : {};
   const message = typeof value.message === "string" ? value.message : "";
   if (value.resume !== true && !message.trim()) throw new ComputeRequestError(400, "message_required", "Message content is required.");
-  const sessionId = typeof value.session_id === "string" && value.session_id ? value.session_id as SessionId : randomIds.sessionId();
-  const allowedToolNames = model.toolCatalog.length > 0
-    ? model.allowedToolNames ? model.allowedToolNames.filter((name) => model.toolCatalog.includes(name)) : model.toolCatalog
-    : model.allowedToolNames;
+  const explicitSessionId = typeof value.session_id === "string" && value.session_id ? value.session_id : undefined;
+  const sessionId = explicitSessionId ?? (options.idempotencyKey ? deterministicNativeSessionId(options.clientId, model.ref, options.idempotencyKey) : undefined);
   return {
-    runId: randomIds.runId(),
-    sessionId,
     message: message || null,
     resume: value.resume === true,
-    promptProfile: model.promptProfile ?? "agent",
-    model: model.providerModel,
-    presetModelRef: model.ref,
-    compiledHash: model.compiledHash,
-    toolProtocol: model.toolProtocol,
-    policy: structuredClone(model.policy),
-    allowedPluginIds: new Set(model.fixedPlugins.map((selector) => selector.split("@")[0]!)),
-    allowedPluginLocks: structuredClone(model.pluginLocks),
-    searchMode: model.policy.searchMode ?? "diy",
-    ...(model.systemPrompt === undefined ? {} : { systemPrompt: model.systemPrompt }),
-    ...(allowedToolNames ? { allowedToolNames: new Set(allowedToolNames) } : {}),
-    ...(model.bootstrapTools ? { bootstrapTools: structuredClone(model.bootstrapTools) } : {}),
-    ...(model.policy.temperature === undefined ? {} : { temperature: model.policy.temperature }),
+    ...(sessionId ? { session_id: sessionId } : {}),
     ...(value.response_format !== undefined && model.allowResponseFormatOverride
-      ? { responseFormat: structuredClone(value.response_format as StartRunRequest["responseFormat"]) }
-      : model.policy.responseFormat === undefined
-        ? {}
-        : { responseFormat: structuredClone(model.policy.responseFormat) }),
+      ? { response_format: structuredClone(value.response_format as StartRunRequest["responseFormat"]) }
+      : {}),
   };
+}
+
+function deterministicNativeSessionId(clientId: string, modelRef: string, idempotencyKey: string): string {
+  return `run_${createHash("sha256").update(`${clientId}\0${modelRef}\0${idempotencyKey}`).digest("hex").slice(0, 32)}`;
+}
+
+function unifiedResumeInvocation(input: unknown, previousRunId: string): UnifiedAgentInvocation & { message: null; session_id: string; resume: true } {
+  const root = input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : {};
+  const agentInput = root.agent_input && typeof root.agent_input === "object" && !Array.isArray(root.agent_input)
+    ? root.agent_input as Record<string, unknown>
+    : root;
+  const sessionId = typeof root.session_id === "string" && root.session_id
+    ? root.session_id
+    : typeof agentInput.session_id === "string" && agentInput.session_id
+      ? agentInput.session_id
+      : typeof agentInput.sessionId === "string" && agentInput.sessionId
+        ? agentInput.sessionId
+        : `run_${previousRunId}`;
+  if (!sessionId) {
+    throw new ComputeRequestError(409, "run_resume_unavailable", "The previous Preset Model Run does not contain a resumable session.");
+  }
+  return {
+    message: null,
+    session_id: sessionId,
+    resume: true,
+    ...(root.response_format !== undefined
+      ? { response_format: structuredClone(root.response_format as StartRunRequest["responseFormat"]) }
+      : agentInput.responseFormat === undefined ? {} : { response_format: structuredClone(agentInput.responseFormat as StartRunRequest["responseFormat"]) }),
+  };
+}
+
+function isLegacyAgentEnvelope(input: unknown): boolean {
+  return Boolean(input && typeof input === "object" && !Array.isArray(input) && (input as Record<string, unknown>).agent_input && typeof (input as Record<string, unknown>).agent_input === "object");
 }
 
 async function bindSessionModel(sessions: SessionRepository, sessionId: SessionId, ref: PresetModelRef): Promise<void> {
@@ -1111,23 +1159,60 @@ function estimateTokens(value: string): number {
   return value.trim() ? Math.max(1, Math.ceil(value.length / 4)) : 0;
 }
 
-function nativeRunStatus(events: AgentEvent[]): string {
-  const terminal = [...events].reverse().find((event) => event.type.startsWith("run."));
-  return terminal?.type.replace("run.", "") ?? "active";
+export function nativeSessionId(run: Pick<ExecutionRun, "run_id" | "input">): string {
+  const root = run.input && typeof run.input === "object" && !Array.isArray(run.input) ? run.input as Record<string, unknown> : {};
+  const legacy = root.agent_input && typeof root.agent_input === "object" && !Array.isArray(root.agent_input)
+    ? root.agent_input as Record<string, unknown>
+    : {};
+  const sessionId = [root.session_id, legacy.session_id, legacy.sessionId].find((value): value is string => typeof value === "string" && value.length > 0);
+  return sessionId ?? `run_${run.run_id}`;
 }
 
-function nativeRunFailure(input: StartRunRequest, error: unknown): AgentEvent {
-  const payload = computeErrorPayload(error).error as Record<string, unknown>;
+export function projectNativeEvent(run: Pick<ExecutionRun, "run_id" | "input">, event: ExecutionRunEvent): AgentEvent | undefined {
+  if (!event.type.startsWith("agent.")) return undefined;
+  const source = event.data ?? {};
+  const originalType = typeof source.original_type === "string" ? source.original_type : event.type.slice("agent.".length);
+  const { original_type: _originalType, ...data } = source;
   return {
-    type: "run.error",
-    session_id: input.sessionId,
-    run_id: input.runId!,
-    data: {
-      error_code: typeof payload.code === "string" ? payload.code : "model_failed",
-      error: typeof payload.message === "string" ? payload.message : "The run failed.",
-    },
-    timestamp: new Date().toISOString(),
+    schema_version: 1,
+    type: originalType as AgentEvent["type"],
+    session_id: nativeSessionId(run) as SessionId,
+    run_id: run.run_id,
+    data,
+    timestamp: event.timestamp,
   };
+}
+
+export function projectNativeEvents(run: Pick<ExecutionRun, "run_id" | "input" | "status" | "error" | "finished_at" | "created_at">, events: readonly ExecutionRunEvent[]): AgentEvent[] {
+  const projected = events.map((event) => projectNativeEvent(run, event)).filter((event): event is AgentEvent => event !== undefined);
+  const hasTerminal = projected.some((event) => ["run.finished", "run.error", "run.stopped"].includes(event.type));
+  if (!hasTerminal && run.status === "failed") {
+    projected.push({
+      schema_version: 1,
+      type: "run.error",
+      session_id: nativeSessionId(run) as SessionId,
+      run_id: run.run_id,
+      data: run.error ?? { error_code: "RUNTIME_FAILED", error: "The run failed." },
+      timestamp: run.finished_at ?? run.created_at,
+    });
+  } else if (!hasTerminal && run.status === "stopped") {
+    projected.push({ schema_version: 1, type: "run.stopped", session_id: nativeSessionId(run) as SessionId, run_id: run.run_id, data: { status: "stopped" }, timestamp: run.finished_at ?? run.created_at });
+  }
+  return projected;
+}
+
+export function nativeRunStatusForExecution(run: Pick<ExecutionRun, "status">, events: readonly AgentEvent[]): string {
+  const status = nativeRunStatus(events);
+  if (status !== "active") return status;
+  if (run.status === "succeeded") return "finished";
+  if (run.status === "failed") return "error";
+  if (run.status === "stopped") return "stopped";
+  return "active";
+}
+
+export function nativeRunStatus(events: readonly AgentEvent[]): string {
+  const terminal = [...events].reverse().find((event) => event.type.startsWith("run."));
+  return terminal?.type.replace("run.", "") ?? "active";
 }
 
 function assertNativeRunOwner(run: NativeRunRecord | undefined, clientId: string): asserts run is NativeRunRecord {
@@ -1141,6 +1226,14 @@ function ensureSqliteColumn(db: DatabaseSync, table: string, column: string, def
 
 function tokenHash(token: string): Buffer {
   return createHash("sha256").update(token).digest();
+}
+
+function defaultComputeServiceScopes(): string[] {
+  return ["compute:models", "compute:invoke", "compute:read"];
+}
+
+function defaultLocalServiceScopes(): string[] {
+  return [...defaultComputeServiceScopes(), "workflow:read", "workflow:run", "*"];
 }
 
 function header(headers: Record<string, unknown>, name: string): string | undefined {

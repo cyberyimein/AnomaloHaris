@@ -12,6 +12,20 @@ import {
   WebSocketMessageSchema,
 } from "../dist/schemas.js";
 import {
+  WorkflowCapabilityManifestSchema,
+  WorkflowDefinitionSchema,
+  WorkflowImportResultSchema,
+  WorkflowSummarySchema,
+  WorkflowValidationReportSchema,
+} from "../dist/workflows.js";
+import {
+  ExecutionRunEventSchema,
+  ExecutionRunSchema,
+  ExecutionTargetSchema,
+  WorkflowNodeRunSchema,
+  WorkflowRunRequestSchema,
+} from "../dist/workflow-runs.js";
+import {
   OpenAIChatCompletionRequestSchema,
   OpenAIChatCompletionChunkSchema,
   OpenAIChatCompletionResponseSchema,
@@ -34,6 +48,16 @@ const schemas = [
   ["tool", ToolDefinitionSchema],
   ["websocket-control-message", WebSocketControlMessageSchema],
   ["websocket-message", WebSocketMessageSchema],
+  ["workflow-capability-manifest", WorkflowCapabilityManifestSchema],
+  ["workflow-definition", WorkflowDefinitionSchema],
+  ["workflow-import-result", WorkflowImportResultSchema],
+  ["workflow-summary", WorkflowSummarySchema],
+  ["workflow-validation-report", WorkflowValidationReportSchema],
+  ["execution-run-event", ExecutionRunEventSchema],
+  ["execution-run", ExecutionRunSchema],
+  ["execution-target", ExecutionTargetSchema],
+  ["workflow-node-run", WorkflowNodeRunSchema],
+  ["workflow-run-request", WorkflowRunRequestSchema],
 ];
 
 for (const [name, schema] of schemas) {

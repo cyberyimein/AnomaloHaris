@@ -1,0 +1,90 @@
+{
+  "api_version": "anomaloharis.dev/workflow/v1",
+  "kind": "Workflow",
+  "metadata": {
+    "name": "daily-event-review",
+    "version": 1,
+    "description": "Review a scheduled event with the default Preset Model.",
+    "labels": {
+      "owner": "urus"
+    }
+  },
+  "spec": {
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": ["message"],
+      "additionalProperties": false
+    },
+    "output_schema": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": ["message"],
+      "additionalProperties": false
+    },
+    "nodes": [
+      {
+        "id": "input",
+        "type": "input",
+        "type_version": 1,
+        "config": {}
+      },
+      {
+        "id": "review",
+        "type": "preset_model",
+        "type_version": 1,
+        "config": {
+          "model_ref": "anomaloharis@1",
+          "input_mode": "message",
+          "session_mode": "isolated"
+        },
+        "retry": {
+          "max_attempts": 1,
+          "backoff_ms": 0
+        }
+      },
+      {
+        "id": "output",
+        "type": "output",
+        "type_version": 1,
+        "config": {}
+      }
+    ],
+    "edges": [
+      {
+        "from": {
+          "node": "input",
+          "port": "data"
+        },
+        "to": {
+          "node": "review",
+          "port": "input"
+        }
+      },
+      {
+        "from": {
+          "node": "review",
+          "port": "output"
+        },
+        "to": {
+          "node": "output",
+          "port": "result"
+        }
+      }
+    ],
+    "policy": {
+      "timeout_seconds": 900,
+      "max_parallelism": 4,
+      "failure_mode": "fail_fast"
+    }
+  }
+}

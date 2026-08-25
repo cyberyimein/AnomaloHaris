@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import fixtures from "../fixtures/agent-events.json";
+import validWorkflow from "../fixtures/workflows/daily-event-review.json";
 import {
   normalizeAgentEvent,
+  validateWorkflowDefinition,
   validateAgentEvent,
   validateContract,
 } from "./index.js";
@@ -82,5 +84,28 @@ describe("@anomaloharis/contracts", () => {
         source: "test",
       }).valid,
     ).toBe(true);
+  });
+
+  it("exports and validates the portable Workflow contracts", () => {
+    expect(validateWorkflowDefinition(validWorkflow)).toBe(true);
+    expect(validateContract("workflowDefinition", validWorkflow).valid).toBe(true);
+    expect(validateContract("workflowDefinition", { ...validWorkflow, kind: "NotWorkflow" }).valid).toBe(false);
+    expect(validateContract("workflowCapabilityManifest", {
+      api_version: "anomaloharis.dev/workflow-capabilities/v1",
+      engine: {
+        runtime_id: "workflow-runtime",
+        runtime_version: "1.0.0",
+        adapter_version: "1.0.0",
+        package_hash: `sha256:${"0".repeat(64)}`,
+        definition_api_version: "anomaloharis.dev/workflow/v1",
+      },
+      limits: { graph: "dag", max_nodes: 100, max_edges: 400, max_parallelism: 8, max_duration_seconds: 3600 },
+      node_types: [],
+      preset_models: [],
+      plugin_operations: [],
+      unsupported_features: ["loop"],
+      generated_at: "2026-08-25T00:00:00Z",
+      manifest_hash: `sha256:${"1".repeat(64)}`,
+    }).valid).toBe(true);
   });
 });
