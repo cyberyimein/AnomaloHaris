@@ -25,6 +25,11 @@
     "source": {
       "minLength": 1,
       "type": "string"
+    },
+    "timeout_ms": {
+      "minimum": 100,
+      "maximum": 600000,
+      "type": "integer"
     }
   }
 }

@@ -173,6 +173,7 @@ export const ToolDefinitionSchema = Type.Object(
     description: Type.String(),
     parameters: Type.Record(Type.String(), Type.Unknown()),
     source: Type.String({ minLength: 1 }),
+    timeout_ms: Type.Optional(Type.Integer({ minimum: 100, maximum: 600_000 })),
   },
   { additionalProperties: true, $id: "https://anomaloharis.dev/schemas/tool.schema.json" },
 );

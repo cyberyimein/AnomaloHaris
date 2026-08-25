@@ -52,6 +52,7 @@ export class WebToolRuntime implements ToolRuntime {
           additionalProperties: false,
         },
         source: "web",
+        timeout_ms: this.timeoutMs,
       },
       {
         name: "web_fetch",
@@ -67,6 +68,7 @@ export class WebToolRuntime implements ToolRuntime {
           additionalProperties: false,
         },
         source: "web",
+        timeout_ms: this.timeoutMs,
       },
     ];
   }
@@ -193,7 +195,7 @@ export class WebToolRuntime implements ToolRuntime {
         method: init.method ?? "GET",
         headers: nodeHeaders,
         signal: requestSignal,
-        lookup: (_hostname, _options, callback) => callback(null, resolved.address, resolved.family),
+        lookup: createPinnedLookup(resolved),
       }, (response) => {
         const chunks: Buffer[] = [];
         response.on("data", (chunk: Buffer | string) => chunks.push(Buffer.from(chunk)));
@@ -215,16 +217,40 @@ export class WebToolRuntime implements ToolRuntime {
   }
 }
 
+export function createPinnedLookup(resolved: { address: string; family: 4 | 6 }): NonNullable<http.RequestOptions["lookup"]> {
+  return (_hostname, options, callback) => {
+    if (options.all) {
+      callback(null, [{ address: resolved.address, family: resolved.family }]);
+      return;
+    }
+    callback(null, resolved.address, resolved.family);
+  };
+}
+
 function parseSearchResults(html: string): Array<{ title: string; url: string; snippet: string }> {
   const results: Array<{ title: string; url: string; snippet: string }> = [];
   const pattern = /<a[^>]*class=["'][^"']*result__a[^"']*["'][^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>[\s\S]*?(?:class=["'][^"']*result__snippet[^"']*["'][^>]*>([\s\S]*?)<\/)/gi;
   for (const match of html.matchAll(pattern)) {
-    const url = decodeHtml(match[1] ?? "");
+    const url = normalizeSearchResultUrl(match[1] ?? "");
     const title = stripHtml(match[2] ?? "");
     const snippet = stripHtml(match[3] ?? "");
     if (url && title) results.push({ title, url, snippet });
   }
   return results;
+}
+
+function normalizeSearchResultUrl(value: string): string {
+  const raw = decodeHtml(value).trim();
+  if (!raw) return "";
+  const candidate = raw.startsWith("//") ? `https:${raw}` : raw;
+  try {
+    const parsed = new URL(candidate);
+    const redirected = parsed.searchParams.get("uddg");
+    if (redirected && /^https?:$/i.test(new URL(redirected).protocol)) return new URL(redirected).href;
+    return /^https?:$/i.test(parsed.protocol) ? parsed.href : "";
+  } catch {
+    return "";
+  }
 }
 
 function stripHtml(value: string): string {

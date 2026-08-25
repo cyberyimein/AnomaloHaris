@@ -18,6 +18,7 @@ export type WebResearchSubagentOptions = {
   baseUrl: string;
   webSearch: ToolRuntime;
   timeoutMs: number;
+  toolTimeoutMs?: number;
   fetchImpl?: typeof fetch;
   maxToolIterations?: number;
   toolProtocol?: "auto" | "openai" | "dsml" | "none";
@@ -33,6 +34,7 @@ export class WebResearchSubagent {
   private readonly baseUrl: string;
   private readonly webSearch: ToolRuntime;
   private readonly timeoutMs: number;
+  private readonly toolTimeoutMs: number;
   private readonly fetchImpl: typeof fetch;
   private readonly maxToolIterations: number;
   private readonly toolProtocol: "auto" | "openai" | "dsml" | "none";
@@ -43,6 +45,7 @@ export class WebResearchSubagent {
     this.baseUrl = options.baseUrl;
     this.webSearch = options.webSearch;
     this.timeoutMs = Math.max(100, options.timeoutMs);
+    this.toolTimeoutMs = Math.max(100, options.toolTimeoutMs ?? this.timeoutMs);
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.maxToolIterations = clampInteger(options.maxToolIterations, DEFAULT_MAX_TOOL_ITERATIONS, 1, 20);
     this.toolProtocol = options.toolProtocol ?? DEFAULT_TOOL_PROTOCOL;
@@ -186,7 +189,7 @@ export class WebResearchSubagent {
       maxToolIterations: this.maxToolIterations,
       runTimeoutMs: this.timeoutMs,
       bootstrapToolTimeoutMs: Math.min(this.timeoutMs, 2_000),
-      toolTimeoutMs: this.timeoutMs,
+      toolTimeoutMs: this.toolTimeoutMs,
       structuredOutputRetryCount: 1,
       toolExecution: "sequential",
     };

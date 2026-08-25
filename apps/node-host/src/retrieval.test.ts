@@ -62,7 +62,37 @@ describe("ResponsesSearchRuntime", () => {
       model: "openai/gpt-4o-mini",
       input: "latest answer",
       tools: [{ type: "web_search_preview" }],
-      max_tool_calls: 5,
+      max_tool_calls: 1,
+    });
+  });
+
+  it("uses OpenRouter's server web search tool with one bounded search", async () => {
+    let requestBody: Record<string, unknown> | undefined;
+    const runtime = new ResponsesSearchRuntime({
+      apiKey: "test-key",
+      baseUrl: "https://openrouter.ai/api/v1",
+      fetchImpl: async (_url, init) => {
+        requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return new Response(JSON.stringify({
+          id: "openrouter-response",
+          output: [{ type: "message", content: [{ type: "output_text", text: "OpenRouter search result" }] }],
+        }), { status: 200 });
+      },
+    });
+
+    const result = await runtime.call(
+      { id: "openrouter-call", name: "web_search", arguments: { query: "OpenRouter search", count: 4 } },
+      context,
+      new AbortController().signal,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(requestBody).toMatchObject({
+      max_tool_calls: 1,
+      tools: [{
+        type: "openrouter:web_search",
+        parameters: { engine: "auto", max_results: 4, max_uses: 1, max_total_results: 4 },
+      }],
     });
   });
 
@@ -146,7 +176,8 @@ describe("ResponsesSearchRuntime", () => {
     expect(childRequest.tools[0].function.name).toBe("web_search");
     expect(childRequest.messages.some((message: { role?: string; content?: string }) => message.role === "system" && message.content?.includes("only capability is the web_search tool"))).toBe(true);
     const searchRequest = JSON.parse(String(requests.find((item) => item.url.endsWith("/responses"))?.init?.body));
-    expect(searchRequest).toMatchObject({ model: "deepseek/test", tools: [{ type: "web_search_preview" }] });
+    expect(searchRequest).toMatchObject({ model: "deepseek/test", tools: [{ type: "web_search_preview" }], max_tool_calls: 1 });
+    expect((await runtime.list({ ...context, searchMode: "subagent" }))[0]?.timeout_ms).toBe(180_000);
   });
 
   it("returns a capability error without making a request when credentials are missing", async () => {

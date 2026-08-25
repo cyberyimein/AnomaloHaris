@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { WebToolRuntime } from "./web.js";
+import { createPinnedLookup, WebToolRuntime } from "./web.js";
 import type { ToolContext } from "./types.js";
 
 const context: ToolContext = {
@@ -14,6 +14,17 @@ const context: ToolContext = {
 };
 
 describe("WebToolRuntime", () => {
+  it("returns the all-address lookup shape required by Node's HTTP client", () => {
+    const lookup = createPinnedLookup({ address: "93.184.216.34", family: 4 });
+    let result: unknown;
+
+    lookup("example.com", { all: true }, (_error, address) => {
+      result = address;
+    });
+
+    expect(result).toEqual([{ address: "93.184.216.34", family: 4 }]);
+  });
+
   it("uses a GET query for DuckDuckGo HTML search", async () => {
     let requestUrl = "";
     let requestInit: RequestInit | undefined;
@@ -41,6 +52,23 @@ describe("WebToolRuntime", () => {
       ok: true,
       data: { query: "OpenAI web", results: [{ url: "https://example.com/result", title: "Example result" }] },
     });
+  });
+
+  it("normalizes DuckDuckGo redirect links before returning search results", async () => {
+    const runtime = new WebToolRuntime({
+      fetchImpl: async () => new Response(
+        '<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Farticle&amp;rut=fixture">Example result</a><div class="result__snippet">A useful snippet.</div>',
+        { status: 200, headers: { "content-type": "text/html" } },
+      ),
+    });
+
+    const result = await runtime.call(
+      { id: "web-call", name: "web_search", arguments: { query: "OpenAI web", count: 1 } },
+      context,
+      new AbortController().signal,
+    );
+
+    expect(result).toMatchObject({ data: { results: [{ url: "https://example.com/article" }] } });
   });
 
   it("rejects local and private fetch targets before making a request", async () => {

@@ -8,14 +8,16 @@ import { DEFAULT_SEARCH_MODE, DEFAULT_SUBAGENT_MODEL, isSearchMode, type Retriev
 export { DEFAULT_SEARCH_MODE, DEFAULT_SUBAGENT_MODEL, isSearchMode, SEARCH_MODES } from "./search-mode.js";
 
 const SEARCH_TOOL_NAME = "web_search";
-const RESPONSES_SEARCH_TOOL = "web_search_preview";
 const MAX_RESPONSE_BYTES = 2_000_000;
+const DEFAULT_SEARCH_TIMEOUT_MS = 90_000;
+const MIN_SUBAGENT_TIMEOUT_MS = 180_000;
 
 export type ResponsesSearchRuntimeOptions = {
   apiKey?: string;
   baseUrl?: string;
   subagentModel?: string;
   timeoutMs?: number;
+  subagentTimeoutMs?: number;
   resolveProvider?: (context: ToolContext) => ResponsesSearchProvider | undefined;
   fetchImpl?: typeof fetch;
 };
@@ -30,6 +32,7 @@ export class ResponsesSearchRuntime implements ToolRuntime {
   private readonly baseUrl: string;
   private readonly subagentModel: string;
   private readonly timeoutMs: number;
+  private readonly subagentTimeoutMs: number;
   private readonly resolveProvider: ((context: ToolContext) => ResponsesSearchProvider | undefined) | undefined;
   private readonly fetchImpl: typeof fetch;
   private readonly subagent: WebResearchSubagent;
@@ -38,7 +41,13 @@ export class ResponsesSearchRuntime implements ToolRuntime {
     this.apiKey = options.apiKey?.trim() ?? "";
     this.baseUrl = options.baseUrl?.trim().replace(/\/+$/, "") ?? "";
     this.subagentModel = options.subagentModel?.trim() || DEFAULT_SUBAGENT_MODEL;
-    this.timeoutMs = clampInteger(options.timeoutMs, 90_000, 100, 300_000);
+    this.timeoutMs = clampInteger(options.timeoutMs, DEFAULT_SEARCH_TIMEOUT_MS, 100, 300_000);
+    this.subagentTimeoutMs = clampInteger(
+      options.subagentTimeoutMs,
+      Math.max(this.timeoutMs * 2, MIN_SUBAGENT_TIMEOUT_MS),
+      100,
+      600_000,
+    );
     this.resolveProvider = options.resolveProvider;
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.subagent = new WebResearchSubagent({
@@ -46,7 +55,8 @@ export class ResponsesSearchRuntime implements ToolRuntime {
       apiKey: this.apiKey,
       baseUrl: this.baseUrl,
       webSearch: this,
-      timeoutMs: this.timeoutMs,
+      timeoutMs: this.subagentTimeoutMs,
+      toolTimeoutMs: this.timeoutMs,
       fetchImpl: this.fetchImpl,
     });
   }
@@ -70,6 +80,7 @@ export class ResponsesSearchRuntime implements ToolRuntime {
         additionalProperties: false,
       },
       source: isNative ? "model_native_search" : "responses_api_subagent",
+      timeout_ms: isNative ? this.timeoutMs : this.subagentTimeoutMs,
     }];
   }
 
@@ -96,6 +107,7 @@ export class ResponsesSearchRuntime implements ToolRuntime {
     const apiKey = providerConfig ? providerConfig.apiKey?.trim() ?? "" : this.apiKey;
     const baseUrl = providerConfig ? providerConfig.baseUrl.trim().replace(/\/+$/, "") : this.baseUrl;
     const provider = "model_native_responses";
+    const searchTool = responsesSearchTool(baseUrl, count);
     const baseData = {
       trace_kind: "web_search",
       provider,
@@ -103,6 +115,7 @@ export class ResponsesSearchRuntime implements ToolRuntime {
       model,
       query,
       results: [],
+      search_tool_type: searchTool.type,
     };
 
     if (!apiKey) {
@@ -182,6 +195,7 @@ export class ResponsesSearchRuntime implements ToolRuntime {
       api_key_configured: Boolean(this.apiKey),
       subagent_model: this.subagentModel,
       timeout_ms: this.timeoutMs,
+      subagent_timeout_ms: this.subagentTimeoutMs,
     }];
   }
 
@@ -193,6 +207,7 @@ export class ResponsesSearchRuntime implements ToolRuntime {
     provider: ResponsesSearchProvider,
   ): Promise<Record<string, unknown>> {
     const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(this.timeoutMs)]);
+    const searchTool = responsesSearchTool(provider.baseUrl, count);
     let response: Response;
     try {
       response = await this.fetchImpl(`${provider.baseUrl.replace(/\/+$/, "")}/responses`, {
@@ -204,8 +219,8 @@ export class ResponsesSearchRuntime implements ToolRuntime {
         body: JSON.stringify({
           model,
           input: query,
-          tools: [{ type: RESPONSES_SEARCH_TOOL }],
-          max_tool_calls: Math.min(count, 5),
+          tools: [searchTool],
+          max_tool_calls: 1,
           max_output_tokens: 2_400,
         }),
         signal: requestSignal,
@@ -238,6 +253,34 @@ export class ResponsesSearchError extends Error {
   ) {
     super(message);
     this.name = "ResponsesSearchError";
+  }
+}
+
+type ResponsesSearchTool =
+  | { type: "openrouter:web_search"; parameters: { engine: "auto"; max_results: number; max_uses: 1; max_total_results: number } }
+  | { type: "web_search_preview" };
+
+function responsesSearchTool(baseUrl: string, count: number): ResponsesSearchTool {
+  if (isOpenRouterBaseUrl(baseUrl)) {
+    return {
+      type: "openrouter:web_search",
+      parameters: {
+        engine: "auto",
+        max_results: count,
+        max_uses: 1,
+        max_total_results: count,
+      },
+    };
+  }
+  return { type: "web_search_preview" };
+}
+
+function isOpenRouterBaseUrl(baseUrl: string): boolean {
+  try {
+    const hostname = new URL(baseUrl).hostname.toLowerCase();
+    return hostname === "openrouter.ai" || hostname.endsWith(".openrouter.ai");
+  } catch {
+    return false;
   }
 }
 

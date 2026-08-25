@@ -64,6 +64,38 @@ describe("AgentCore", () => {
     ]);
   });
 
+  it("honors a tool-declared timeout above the model policy timeout", async () => {
+    const tools = new DeterministicToolRuntime(
+      [{ name: "slow", description: "Slow", parameters: { type: "object" }, source: "test", timeout_ms: 80 }],
+      {
+        slow: (_arguments_, _context, signal) => new Promise((resolve, reject) => {
+          const timer = setTimeout(() => resolve({ name: "slow", ok: true, content: "finished", data: {} }), 30);
+          signal.addEventListener("abort", () => {
+            clearTimeout(timer);
+            reject(new Error("slow tool was aborted"));
+          }, { once: true });
+        }),
+      },
+    );
+    const model = new ReplayModelAdapter([
+      [{ type: "tool.calls", calls: [{ id: "slow-call", name: "slow", arguments: {} }] }],
+      [{ type: "text.delta", text: "Done." }, { type: "done" }],
+    ]);
+    const sessions = new InMemorySessionAdapter();
+    const core = new AgentCore({
+      model,
+      tools,
+      sessions,
+      policy: { ...defaultPolicy, runTimeoutMs: 500, toolTimeoutMs: 10 },
+    });
+
+    const events = [];
+    for await (const event of core.execute({ ...input, runId: "run-tool-timeout" as AgentRunInput["runId"] }, new AbortController().signal)) events.push(event);
+
+    expect(events.at(-1)?.type).toBe("run.finished");
+    expect(events.find((event) => event.type === "tool.finished")?.data.ok).toBe(true);
+  });
+
   it("enforces the tool allowlist at call time", async () => {
     const tools = new DeterministicToolRuntime(
       [{ name: "echo", description: "Echo", parameters: { type: "object" }, source: "test" }],

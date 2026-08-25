@@ -1,4 +1,4 @@
-import type { ToolCall, ToolResult } from "@anomaloharis/contracts";
+import type { ToolCall, ToolDefinition, ToolResult } from "@anomaloharis/contracts";
 
 import { systemClock, type Clock } from "./clock.js";
 import { ReplayContextBuilder, type ContextBuilder } from "./context.js";
@@ -469,7 +469,10 @@ export class AgentCore {
             };
           } else {
             try {
-              const toolSignal = AbortSignal.any([runSignal, AbortSignal.timeout(policy.toolTimeoutMs)]);
+              const toolSignal = AbortSignal.any([
+                runSignal,
+                AbortSignal.timeout(timeoutForTool(policy.toolTimeoutMs, context.tools, effectiveCall.name)),
+              ]);
               result = await this.dependencies.tools.call(effectiveCall, contextForTool, toolSignal);
             } catch (error) {
               result = { name: effectiveCall.name, ok: false, content: error instanceof Error ? error.message : String(error), data: { error_type: "ToolError" } };
@@ -701,6 +704,12 @@ function toModelRequest(input: AgentRunInput, context: BuiltContext): ModelReque
     ...(input.temperature === undefined ? {} : { temperature: input.temperature }),
     ...(input.responseFormat === undefined ? {} : { responseFormat: input.responseFormat }),
   };
+}
+
+function timeoutForTool(policyTimeoutMs: number, definitions: ToolDefinition[], name: string): number {
+  const declaredTimeoutMs = definitions.find((definition) => definition.name === name)?.timeout_ms;
+  if (typeof declaredTimeoutMs !== "number" || !Number.isFinite(declaredTimeoutMs)) return policyTimeoutMs;
+  return Math.max(policyTimeoutMs, Math.trunc(declaredTimeoutMs));
 }
 
 function llmRequestEventData(
