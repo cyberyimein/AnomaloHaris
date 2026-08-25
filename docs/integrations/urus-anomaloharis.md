@@ -25,11 +25,11 @@ general-purpose plugin capability.
 ## Request
 
 Call `POST /v1/chat/completions` with the Urus service token. The management
-token (`X-Anomalo-Admin-Token`) is not used for this integration.
+token (`X-AnomaloHaris-Admin-Token`) is not used for this integration.
 
 ```http
 POST /v1/chat/completions
-Authorization: Bearer <URUS_ANOMALO_SERVICE_TOKEN>
+Authorization: Bearer <URUS_ANOMALOHARIS_SERVICE_TOKEN>
 Content-Type: application/json
 Idempotency-Key: <unique-request-key>
 ```

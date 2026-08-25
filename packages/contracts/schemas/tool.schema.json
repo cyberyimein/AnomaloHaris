@@ -1,6 +1,6 @@
 {
   "additionalProperties": true,
-  "$id": "https://anomalo.dev/schemas/tool.schema.json",
+  "$id": "https://anomaloharis.dev/schemas/tool.schema.json",
   "type": "object",
   "required": [
     "name",

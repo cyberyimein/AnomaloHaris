@@ -1,6 +1,6 @@
 {
   "additionalProperties": true,
-  "$id": "https://anomalo.dev/schemas/preset-model-definition.schema.json",
+  "$id": "https://anomaloharis.dev/schemas/preset-model-definition.schema.json",
   "type": "object",
   "required": [
     "name",

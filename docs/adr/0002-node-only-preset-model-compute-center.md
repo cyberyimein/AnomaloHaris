@@ -4,6 +4,7 @@
 - Date: 2026-08-22
 - Decision owners: AnomaloHaris runtime maintainers
 - Supersedes: ADR-0001 as the final target architecture
+- Extended by: ADR-0004 for peer Agent/Workflow runtimes behind one Run Control
 
 ## Context
 
@@ -29,7 +30,7 @@ plugins, Provider selection, credentials, and tool-loop implementation.
 3. A Preset Model is uniquely addressed by a lowercase name and a monotonic
    integer version, serialized as `name@version`.
 4. The default AnomaloHaris Agent is itself a built-in Preset Model, initially
-   `anomalo@1`. Legacy `/api/chat`, streaming, and WebSocket routes remain useful
+   `anomaloharis@1`. Legacy `/api/chat`, streaming, and WebSocket routes remain useful
    convenience interfaces and resolve new Sessions to the configured explicit
    default Model Ref; they do not own a separate runtime.
 5. Published versions are immutable. Any prompt, plugin, Provider, or policy

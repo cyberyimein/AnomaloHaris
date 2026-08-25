@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import type { ToolCall, ToolDefinition, ToolResult } from "@anomalo/contracts";
+import { canonicalizeEnvironmentName, legacyNamingAdapter, type ToolCall, type ToolDefinition, type ToolResult } from "@anomaloharis/contracts";
 
 import type { ModelMessage, ToolContext } from "./types.js";
 import { type PluginLock, PluginCatalog } from "./plugin-catalog.js";
@@ -590,9 +590,10 @@ function parseStringList(value: string): string[] {
 function forwardedPluginEnvironment(names: readonly string[] | undefined): Record<string, string> {
   const result: Record<string, string> = {};
   for (const name of names ?? []) {
-    if (!/^ANOMALO_BUDDY_[A-Z0-9_]+$/.test(name)) continue;
-    const value = process.env[name];
-    if (value !== undefined) result[name] = value;
+    const canonicalName = canonicalizeEnvironmentName(name);
+    if (!/^ANOMALOHARIS_BUDDY_[A-Z0-9_]+$/.test(canonicalName)) continue;
+    const value = legacyNamingAdapter.readEnv(process.env, canonicalName);
+    if (value !== undefined) result[canonicalName] = value;
   }
   return result;
 }

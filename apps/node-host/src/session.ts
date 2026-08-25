@@ -1,4 +1,4 @@
-import type { EntryId, RunId, SessionId } from "@anomalo/contracts";
+import type { EntryId, RunId, SessionId } from "@anomaloharis/contracts";
 
 import type { Clock } from "./clock.js";
 import { randomIds, type IdFactory } from "./ids.js";

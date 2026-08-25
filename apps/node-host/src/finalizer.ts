@@ -1,6 +1,6 @@
 import Ajv from "ajv";
 
-import type { ResponseFormat } from "@anomalo/contracts";
+import type { ResponseFormat } from "@anomaloharis/contracts";
 
 export class StructuredOutputValidationError extends Error {
   constructor(message: string) {

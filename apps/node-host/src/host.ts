@@ -6,12 +6,13 @@ import fastify, { type FastifyInstance, type FastifyReply } from "fastify";
 import fastifyStatic from "@fastify/static";
 import fastifyWebsocket from "@fastify/websocket";
 import {
+  legacyNamingAdapter,
   validateContract,
   type AgentEvent,
   type ResponseFormat,
   type RunRequest,
   type SessionId,
-} from "@anomalo/contracts";
+} from "@anomaloharis/contracts";
 
 import { RunController, type StartRunRequest } from "./controller.js";
 import { type BrowserRegistration, BrowserToolBridge } from "./browser.js";
@@ -478,8 +479,8 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
     reply.raw.statusCode = 200;
     reply.raw.setHeader("content-type", "application/x-ndjson; charset=utf-8");
     reply.raw.setHeader("cache-control", "no-cache");
-    reply.raw.setHeader("X-Anomalo-Session-Id", input.sessionId);
-    if (input.presetModelRef) reply.raw.setHeader("X-Anomalo-Agent-Id", input.presetModelRef);
+    reply.raw.setHeader("X-AnomaloHaris-Session-Id", input.sessionId);
+    if (input.presetModelRef) reply.raw.setHeader("X-AnomaloHaris-Agent-Id", input.presetModelRef);
     try {
       for await (const event of options.controller.start(input)) {
         if (!reply.raw.destroyed) reply.raw.write(`${JSON.stringify(event)}\n`);
@@ -839,11 +840,11 @@ function hostErrorMessage(error: unknown): string {
 
 function requireManagementAccess(headers: Record<string, unknown>, configuredToken: string | undefined): void {
   if (!configuredToken) return;
-  const provided = typeof headers["x-anomalo-admin-token"] === "string" ? headers["x-anomalo-admin-token"] : "";
+  const provided = legacyNamingAdapter.readHeader(headers, "x-anomaloharis-admin-token") ?? "";
   const expectedHash = createHash("sha256").update(configuredToken).digest();
   const providedHash = createHash("sha256").update(provided).digest();
   if (!provided || !timingSafeEqual(expectedHash, providedHash)) {
-    throw new HostRequestError(403, "forbidden", "Management API requires X-Anomalo-Admin-Token.");
+    throw new HostRequestError(403, "forbidden", "Management API requires X-AnomaloHaris-Admin-Token.");
   }
 }
 

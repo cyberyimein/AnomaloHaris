@@ -2,6 +2,9 @@ import { ref } from "vue";
 
 import { parseWebSocketMessage } from "./sharedContracts";
 
+const SESSION_STORAGE_KEY = "anomaloharis.session";
+const LEGACY_SESSION_STORAGE_KEY = "anomalo.session"; // naming-compat: legacy browser session key
+
 const DEFAULT_RECONNECT_DELAY_MS = 1000;
 
 export function createAgentTransport({
@@ -125,7 +128,7 @@ export function createAgentTransport({
     socket = null;
     previousSocket?.close();
     sessionId.value = normalizedSessionId;
-    storage?.setItem("anomalo.session", sessionId.value);
+    storage?.setItem("anomaloharis.session", sessionId.value);
     connectionStatus.value = "Connecting";
     connectionClass.value = "muted";
     sendDisabled.value = true;
@@ -176,12 +179,18 @@ export function createAgentTransport({
 }
 
 function loadSessionId(storage) {
-  const existing = storage?.getItem("anomalo.session");
+  const existing = storage?.getItem(SESSION_STORAGE_KEY);
   if (existing) {
     return existing;
   }
+  const legacy = storage?.getItem(LEGACY_SESSION_STORAGE_KEY);
+  if (legacy) {
+    storage?.setItem(SESSION_STORAGE_KEY, legacy);
+    storage?.removeItem?.(LEGACY_SESSION_STORAGE_KEY);
+    return legacy;
+  }
   const generated = createSessionId();
-  storage?.setItem("anomalo.session", generated);
+  storage?.setItem(SESSION_STORAGE_KEY, generated);
   return generated;
 }
 

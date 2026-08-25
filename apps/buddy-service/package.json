@@ -1,5 +1,5 @@
 {
-  "name": "@anomalo/buddy-service",
+  "name": "@anomaloharis/buddy-service",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -20,5 +20,8 @@
   },
   "devDependencies": {
     "@types/node": "^22.13.10"
+  },
+  "dependencies": {
+    "@anomaloharis/contracts": "0.1.0"
   }
 }

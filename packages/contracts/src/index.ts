@@ -27,6 +27,13 @@ export {
   OpenAIModelSchema,
   OpenAIUsageSchema,
 } from "./openai.js";
+export {
+  LegacyNamingAdapter,
+  canonicalizeEnvironmentName,
+  canonicalizePresetModelName,
+  canonicalizePresetModelRef,
+  legacyNamingAdapter,
+} from "./legacy-naming.js";
 export type {
   AgentEvent,
   AgentEventType,

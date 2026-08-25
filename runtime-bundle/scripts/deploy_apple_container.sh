@@ -19,7 +19,7 @@ Environment:
   REMOTE_ENV_FILE         Remote env-file path. Default: REMOTE_DIR/anomaloharis.env
   REMOTE_STORAGE_ROOT     Absolute remote root for deploy files and artifacts. When set,
                           defaults REMOTE_DIR to ROOT/anomaloharis-deploy and REMOTE_DATA_DIR
-                          to ROOT/anomaloharis-data (or reuses the legacy ROOT/anomalo-data)
+                          to ROOT/anomaloharis-data (or reuses the existing legacy data directory)
   REMOTE_DIR              Remote deploy directory. Default: .anomaloharis/anomaloharis-deploy
   REMOTE_DATA_DIR         Remote data directory for SQLite and artifact persistence. Default: reuse an existing legacy path, otherwise .anomaloharis/anomaloharis-data
   CONTAINER_NAME          Remote container name. Default: anomaloharis
@@ -52,7 +52,7 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
     exit 0
 fi
 
-source_path="${1:-${ANOMALO_IMAGE_METADATA:-}}"
+source_path="${1:-${ANOMALOHARIS_IMAGE_METADATA:-${ANOMALO_IMAGE_METADATA:-}}}" # naming-compat
 [[ -n "$source_path" ]] || {
     usage
     exit 2
@@ -63,11 +63,11 @@ if [[ "$source_path" == *.env ]]; then
     # shellcheck disable=SC1090
     source "$source_path"
 else
-    ANOMALO_IMAGE_ARCHIVE="$source_path"
+    ANOMALOHARIS_IMAGE_ARCHIVE="$source_path"
 fi
 
-archive_path="${ANOMALO_IMAGE_ARCHIVE:-}"
-image_ref="${IMAGE_REF:-${ANOMALO_IMAGE_REF:-}}"
+archive_path="${ANOMALOHARIS_IMAGE_ARCHIVE:-${ANOMALO_IMAGE_ARCHIVE:-}}" # naming-compat
+image_ref="${IMAGE_REF:-${ANOMALOHARIS_IMAGE_REF:-${ANOMALO_IMAGE_REF:-}}}" # naming-compat
 [[ -n "$archive_path" ]] || fail "image archive was not provided"
 [[ -f "$archive_path" ]] || fail "image archive does not exist: $archive_path"
 [[ -n "$image_ref" ]] || fail "IMAGE_REF is required when the source is not a metadata .env file"
@@ -87,11 +87,13 @@ REMOTE_STORAGE_ROOT="${REMOTE_STORAGE_ROOT:-}"
 if [[ -n "$REMOTE_STORAGE_ROOT" ]]; then
     [[ "$REMOTE_STORAGE_ROOT" == /* ]] || fail "REMOTE_STORAGE_ROOT must be an absolute remote path"
     default_remote_dir="$REMOTE_STORAGE_ROOT/anomaloharis-deploy"
-    legacy_remote_data_dir="$REMOTE_STORAGE_ROOT/anomalo-data"
+    # Legacy path is read only for one-time data migration/reuse.
+    legacy_remote_data_dir="$REMOTE_STORAGE_ROOT/anomalo-data" # naming-compat
     default_remote_data_dir="$REMOTE_STORAGE_ROOT/anomaloharis-data"
 else
     default_remote_dir=".anomaloharis/anomaloharis-deploy"
-    legacy_remote_data_dir=".anomalo/anomalo-data"
+    # Legacy path is read only for one-time data migration/reuse.
+    legacy_remote_data_dir=".anomalo/anomalo-data" # naming-compat
     default_remote_data_dir=".anomaloharis/anomaloharis-data"
 fi
 REMOTE_DIR="${REMOTE_DIR:-$default_remote_dir}"
@@ -215,13 +217,13 @@ build_run_args() {
     if [[ -f "$remote_env_file" ]]; then
         run_args+=(--env-file "$remote_env_file")
     fi
-    run_args+=(--env "ANOMALO_SITE_URL=$site_url")
+    run_args+=(--env "ANOMALOHARIS_SITE_URL=$site_url")
     if [[ "$include_data" == "1" ]]; then
         mkdir -p "$remote_data_dir"
-        run_args+=(--env "ANOMALO_DATA_DIR=/data")
+        run_args+=(--env "ANOMALOHARIS_DATA_DIR=/data")
         run_args+=(--volume "$remote_data_dir:/data")
     else
-        run_args+=(--env "ANOMALO_DATA_DIR=/tmp/anomaloharis-data")
+        run_args+=(--env "ANOMALOHARIS_DATA_DIR=/tmp/anomaloharis-data")
     fi
     if [[ "$include_mount" == "1" ]]; then
         mkdir -p "$remote_data_dir/artifacts"
@@ -255,6 +257,7 @@ if command -v curl >/dev/null 2>&1; then
         sleep 1
     done
     echo "container started, but health check did not pass yet" >&2
+    exit 1
 fi
 
 "$container_cli" list 2>/dev/null || true

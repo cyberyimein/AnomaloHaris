@@ -19,18 +19,18 @@ COPY apps/buddy-bridge ./apps/buddy-bridge
 COPY frontend ./frontend
 COPY runtime-bundle/config ./runtime-bundle/config
 COPY runtime-bundle/skills ./runtime-bundle/skills
-RUN npm run build --workspace @anomalo/contracts \
-    && npm run build --workspace @anomalo/node-host \
-    && npm run build --workspace @anomalo/buddy-bridge \
+RUN npm run build --workspace @anomaloharis/contracts \
+    && npm run build --workspace @anomaloharis/node-host \
+    && npm run build --workspace @anomaloharis/buddy-bridge \
     && npm run build --workspace frontend
 
 FROM node:22-bookworm-slim AS runtime
 
 ENV NODE_ENV=production \
-    ANOMALO_ENV=production \
-    ANOMALO_ACKNOWLEDGE_PUBLIC_HOST=true \
-    ANOMALO_SERVICE_AUTH_REQUIRED=true \
-    ANOMALO_DATA_DIR=/data \
+    ANOMALOHARIS_ENV=production \
+    ANOMALOHARIS_ACKNOWLEDGE_PUBLIC_HOST=true \
+    ANOMALOHARIS_SERVICE_AUTH_REQUIRED=true \
+    ANOMALOHARIS_DATA_DIR=/data \
     HOST=0.0.0.0 \
     PORT=8000
 

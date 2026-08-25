@@ -1,6 +1,6 @@
 {
   "additionalProperties": true,
-  "$id": "https://anomalo.dev/schemas/llm-request-event-data.schema.json",
+  "$id": "https://anomaloharis.dev/schemas/llm-request-event-data.schema.json",
   "type": "object",
   "required": [
     "model_ref",

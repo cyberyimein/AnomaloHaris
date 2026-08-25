@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import type { EntryId, RunId, SessionId, ToolCall } from "@anomalo/contracts";
+import type { EntryId, RunId, SessionId, ToolCall } from "@anomaloharis/contracts";
 
 export interface IdFactory {
   sessionId(): SessionId;

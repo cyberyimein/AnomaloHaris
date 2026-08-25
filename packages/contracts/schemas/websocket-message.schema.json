@@ -1,9 +1,9 @@
 {
-  "$id": "https://anomalo.dev/schemas/websocket-message.schema.json",
+  "$id": "https://anomaloharis.dev/schemas/websocket-message.schema.json",
   "anyOf": [
     {
       "additionalProperties": true,
-      "$id": "https://anomalo.dev/schemas/agent-event.schema.json",
+      "$id": "https://anomaloharis.dev/schemas/agent-event.schema.json",
       "type": "object",
       "required": [
         "type",
@@ -83,7 +83,7 @@
     },
     {
       "additionalProperties": true,
-      "$id": "https://anomalo.dev/schemas/websocket-control-message.schema.json",
+      "$id": "https://anomaloharis.dev/schemas/websocket-control-message.schema.json",
       "type": "object",
       "required": [
         "type"

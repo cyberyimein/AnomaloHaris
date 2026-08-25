@@ -14,7 +14,7 @@ COPY apps/buddy-service/package.json apps/buddy-service/tsconfig.json ./apps/bud
 RUN npm ci --ignore-scripts
 
 COPY apps/buddy-service ./apps/buddy-service
-RUN npm run build --workspace @anomalo/buddy-service
+RUN npm run build --workspace @anomaloharis/buddy-service
 
 FROM node:22-bookworm-slim AS runtime
 

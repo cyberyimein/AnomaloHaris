@@ -4,16 +4,18 @@ import createBuddyBridge from "./index.js";
 
 afterEach(() => {
   vi.unstubAllGlobals();
-  delete process.env.ANOMALO_BUDDY_SERVICE_URL;
-  delete process.env.ANOMALO_BUDDY_SERVICE_TOKEN;
+  delete process.env.ANOMALOHARIS_BUDDY_SERVICE_URL;
+  delete process.env.ANOMALOHARIS_BUDDY_SERVICE_TOKEN;
+  delete process.env.ANOMALO_BUDDY_SERVICE_URL; // naming-compat
+  delete process.env.ANOMALO_BUDDY_SERVICE_TOKEN; // naming-compat
 });
 
 describe("buddy bridge plugin", () => {
   it("exposes bounded control tools and calls the Buddy service", async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ status: { connected: true } }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
-    process.env.ANOMALO_BUDDY_SERVICE_URL = "http://buddy.test";
-    process.env.ANOMALO_BUDDY_SERVICE_TOKEN = "secret";
+    process.env.ANOMALOHARIS_BUDDY_SERVICE_URL = "http://buddy.test";
+    process.env.ANOMALOHARIS_BUDDY_SERVICE_TOKEN = "secret";
     const extension = createBuddyBridge({} as never);
     const result = await extension.callTool(
       { id: "call-1", name: "buddy_set_state", arguments: { state: "coding", text: "working" } },
@@ -42,6 +44,24 @@ describe("buddy bridge plugin", () => {
     expect(result.ok).toBe(false);
     expect(result.content).toBe("device offline");
     expect(result.data).toEqual({ error_code: "buddy_unavailable" });
+  });
+
+  it("accepts legacy Buddy environment names only through the compatibility adapter", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ status: { connected: true } }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    process.env.ANOMALO_BUDDY_SERVICE_URL = "http://legacy-buddy.test"; // naming-compat
+    process.env.ANOMALO_BUDDY_SERVICE_TOKEN = "legacy-secret"; // naming-compat
+    const extension = createBuddyBridge({} as never);
+
+    await extension.callTool(
+      { id: "call-legacy", name: "buddy_status", arguments: {} },
+      { sessionId: "session-legacy", runId: "run-legacy" },
+      new AbortController().signal,
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith("http://legacy-buddy.test/v1/buddy/status", expect.objectContaining({
+      headers: expect.objectContaining({ Authorization: "Bearer legacy-secret" }),
+    }));
   });
 
   it("serializes lifecycle notifications for one session", async () => {

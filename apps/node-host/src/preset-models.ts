@@ -7,14 +7,14 @@ import type {
   PresetModelDefinition,
   PresetModelRef,
   PresetModelSummary,
-} from "@anomalo/contracts";
-import { validateContract } from "@anomalo/contracts";
+} from "@anomaloharis/contracts";
+import { canonicalizePresetModelName, canonicalizePresetModelRef, validateContract } from "@anomaloharis/contracts";
 
 import type { AgentPolicy, BootstrapToolRequest } from "./types.js";
-import type { ResponseFormat } from "@anomalo/contracts";
+import type { ResponseFormat } from "@anomaloharis/contracts";
 import { PluginCatalog, type PluginLock } from "./plugin-catalog.js";
 
-export const DEFAULT_PRESET_MODEL_REF = "anomalo@1" as PresetModelRef;
+export const DEFAULT_PRESET_MODEL_REF = "anomaloharis@1" as PresetModelRef;
 export const URUS_SCHEDULED_EVENT_PRESET_MODEL_REF = "scheduled-event-investigator@1" as PresetModelRef;
 
 export type CompiledPresetModel = {
@@ -123,14 +123,22 @@ export class SqlitePresetModelRegistry {
   private readonly now: () => string;
   private readonly catalog: PluginCatalog | undefined;
   private readonly resolvePrompt: ((profile: string) => string) | undefined;
+  private readonly allowLegacySnapshotRecompile: boolean;
 
   constructor(
     dbPath: string,
-    options: { database?: DatabaseSync; now?: () => string; catalog?: PluginCatalog; resolvePrompt?: (profile: string) => string } = {},
+    options: {
+      database?: DatabaseSync;
+      now?: () => string;
+      catalog?: PluginCatalog;
+      resolvePrompt?: (profile: string) => string;
+      allowLegacySnapshotRecompile?: boolean;
+    } = {},
   ) {
     this.now = options.now ?? (() => new Date().toISOString());
     this.catalog = options.catalog;
     this.resolvePrompt = options.resolvePrompt;
+    this.allowLegacySnapshotRecompile = options.allowLegacySnapshotRecompile === true;
     if (options.database) {
       this.db = options.database;
       this.ownsDatabase = false;
@@ -145,27 +153,28 @@ export class SqlitePresetModelRegistry {
   }
 
   createDraft(definition: PresetModelDefinition): CompiledPresetModel {
-    validateDefinition(definition);
+    const canonicalDefinition = canonicalizeDefinition(definition);
+    validateDefinition(canonicalDefinition);
     const existing = this.db.prepare(
       "SELECT 1 FROM preset_model_versions WHERE name = ? AND version = ?",
-    ).get(definition.name, definition.version);
+    ).get(canonicalDefinition.name, canonicalDefinition.version);
     if (existing) throw new Error("preset_model_version_exists");
 
     const createdAt = this.now();
-    const compiled = compileDefinition(definition, "draft", this.catalog, this.resolvePrompt);
+    const compiled = compileDefinition(canonicalDefinition, "draft", this.catalog, this.resolvePrompt);
     this.db.prepare(
       "INSERT OR IGNORE INTO preset_models(name, description, created_at, updated_at) VALUES (?, ?, ?, ?)",
-    ).run(definition.name, definition.description, createdAt, createdAt);
+    ).run(canonicalDefinition.name, canonicalDefinition.description, createdAt, createdAt);
     this.db.prepare(`
       INSERT INTO preset_model_versions(
         name, version, status, description, definition_json, compiled_snapshot_json,
         prompt_hash, plugin_lock_hash, compiled_hash, created_at
       ) VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      definition.name,
-      definition.version,
-      definition.description,
-      JSON.stringify(definition),
+      canonicalDefinition.name,
+      canonicalDefinition.version,
+      canonicalDefinition.description,
+      JSON.stringify(canonicalDefinition),
       JSON.stringify(compiled),
       compiled.promptHash,
       compiled.pluginLockHash,
@@ -261,7 +270,7 @@ export class SqlitePresetModelRegistry {
       if (!(error instanceof Error) || error.message !== "preset_model_not_found") throw error;
     }
     const definition: PresetModelDefinition = {
-      name: "anomalo",
+      name: "anomaloharis",
       version: 1,
       description: options.description ?? "The built-in AnomaloHaris Agent preset model.",
       provider: {
@@ -358,6 +367,47 @@ export class SqlitePresetModelRegistry {
     return result;
   }
 
+  /** Rebuilds every compiled snapshot after an identity or plugin namespace migration. */
+  recompileAll(options: { transactionAlreadyOpen?: boolean } = {}): { updated: string[] } {
+    const rows = this.db.prepare(`
+      SELECT name, version, status, description, definition_json, compiled_snapshot_json,
+        prompt_hash, plugin_lock_hash, compiled_hash
+      FROM preset_model_versions
+      ORDER BY name ASC, version ASC
+    `).all() as RegistryRow[];
+    const updated: string[] = [];
+    const ownsTransaction = options.transactionAlreadyOpen !== true;
+    if (ownsTransaction) this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const update = this.db.prepare(`
+        UPDATE preset_model_versions
+        SET definition_json = ?, compiled_snapshot_json = ?, prompt_hash = ?, plugin_lock_hash = ?, compiled_hash = ?
+        WHERE name = ? AND version = ?
+      `);
+      for (const row of rows) {
+        const definition = canonicalizeDefinition(JSON.parse(row.definition_json) as PresetModelDefinition);
+        const compiled = compileDefinition(definition, row.status, this.catalog, this.resolvePrompt);
+        update.run(
+          JSON.stringify(definition),
+          JSON.stringify(compiled),
+          compiled.promptHash,
+          compiled.pluginLockHash,
+          compiled.compiledHash,
+          row.name,
+          row.version,
+        );
+        this.db.prepare("DELETE FROM preset_model_plugin_locks WHERE name = ? AND version = ?").run(row.name, row.version);
+        this.persistPluginLocks(compiled);
+        updated.push(compiled.ref);
+      }
+      if (ownsTransaction) this.db.exec("COMMIT");
+    } catch (error) {
+      if (ownsTransaction) this.db.exec("ROLLBACK");
+      throw error;
+    }
+    return { updated };
+  }
+
   close(): void {
     if (this.ownsDatabase && this.db.isOpen) this.db.close();
   }
@@ -429,7 +479,7 @@ export class SqlitePresetModelRegistry {
     for (const row of rows) {
       const stored = parseCompiledSnapshot(row.compiled_snapshot_json);
       if (stored?.promptSnapshotVersion === 1) continue;
-      if (stored?.pluginLocks) this.catalog?.assertCurrent(stored.pluginLocks);
+      if (stored?.pluginLocks && !this.allowLegacySnapshotRecompile) this.catalog?.assertCurrent(stored.pluginLocks);
       const definition = JSON.parse(row.definition_json) as PresetModelDefinition;
       const compiled = compileDefinition(definition, row.status, this.catalog, this.resolvePrompt);
       update.run(
@@ -445,7 +495,7 @@ export class SqlitePresetModelRegistry {
 }
 
 export function legacyAgentToDefinition(agent: LegacyPresetAgent): PresetModelDefinition {
-  const name = agent.name.trim().toLowerCase();
+  const name = canonicalizePresetModelName(agent.name.trim().toLowerCase());
   if (!name) throw new Error("legacy_agent_name_required");
   const toolNames = [...new Set(agent.tool_names ?? [])].map((tool) => tool.trim()).filter(Boolean);
   const fixedPlugins = legacyPluginSelection(toolNames, agent.tool_sources);
@@ -748,11 +798,16 @@ function parseRef(ref: string): { name: string; version?: number | undefined } {
   const value = ref.trim().toLowerCase();
   const match = /^([a-z][a-z0-9._-]{0,63})(?:@([1-9][0-9]{0,8}))?$/.exec(value);
   if (!match) throw new Error("invalid_preset_model_ref");
-  return { name: match[1]!, ...(match[2] ? { version: Number(match[2]) } : {}) };
+  return { name: canonicalizePresetModelName(match[1]!), ...(match[2] ? { version: Number(match[2]) } : {}) };
 }
 
 function normalizeRef(ref: string): string {
-  return ref.trim().toLowerCase();
+  return canonicalizePresetModelRef(ref.trim().toLowerCase());
+}
+
+function canonicalizeDefinition(definition: PresetModelDefinition): PresetModelDefinition {
+  const name = canonicalizePresetModelName(definition.name.trim().toLowerCase());
+  return name === definition.name ? definition : { ...definition, name };
 }
 
 function hash(value: unknown): string {

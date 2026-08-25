@@ -28,7 +28,7 @@ describe("PluginCatalog", () => {
 
     expect(manifest).toMatchObject({
       id: "buddy-bridge",
-      package: "@anomalo/buddy-bridge",
+      package: "@anomaloharis/buddy-bridge",
       packageRoot: expect.stringMatching(/[\\/]apps[\\/]buddy-bridge[\\/]dist$/),
       capabilities: ["buddy"],
       toolNames: expect.arrayContaining(["buddy_status", "buddy_set_state"]),
@@ -48,7 +48,7 @@ describe("PluginCatalog", () => {
   });
 
   it("locks an on-disk plugin and blocks source drift before invocation", async () => {
-    const directory = mkdtempSync(join(process.cwd(), ".anomalo-real-plugin-"));
+    const directory = mkdtempSync(join(process.cwd(), ".anomaloharis-real-plugin-"));
     directories.push(directory);
     const entry = join(directory, "index.mjs");
     writeFileSync(entry, `export default { tools: [{ name: "real_echo", description: "Echo", parameters: { type: "object" }, source: "fixture-real" }], callTool(call) { return { name: call.name, ok: true, content: "real", data: {} }; } };`);
@@ -86,7 +86,7 @@ describe("PluginCatalog", () => {
   });
 
   it("makes preset resolution fail when a locked plugin changes", () => {
-    const directory = mkdtempSync(join(process.cwd(), ".anomalo-locked-model-"));
+    const directory = mkdtempSync(join(process.cwd(), ".anomaloharis-locked-model-"));
     directories.push(directory);
     const entry = join(directory, "index.mjs");
     writeFileSync(entry, "export default {};");

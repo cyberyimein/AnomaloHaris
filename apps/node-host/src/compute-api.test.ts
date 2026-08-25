@@ -19,6 +19,11 @@ afterEach(async () => {
 });
 
 describe("OpenAI-compatible compute API", () => {
+  it("accepts the legacy service-token header through the naming adapter", () => {
+    const auth = new ServiceAuth({ clients: [{ id: "legacy-client", token: "legacy-token" }] });
+    expect(auth.authenticate({ "x-anomalo-service-token": "legacy-token" }).id).toBe("legacy-client"); // naming-compat
+  });
+
   it("lists published preset models and returns standard non-streaming completions", async () => {
     const usage = new InMemoryUsageRepository();
     const app = await makeApp([[{ type: "text.delta", text: "hello" }, { type: "done" }]], usage);
@@ -171,7 +176,7 @@ describe("OpenAI-compatible compute API", () => {
     });
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-type"]).toContain("application/x-ndjson");
-    expect(response.headers["x-anomalo-preset-model"]).toBe("luna@1");
+    expect(response.headers["x-anomaloharis-preset-model"]).toBe("luna@1");
     expect(response.body.split("\n").filter(Boolean).map((line) => JSON.parse(line).type)).toContain("run.finished");
   });
 

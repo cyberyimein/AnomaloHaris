@@ -96,15 +96,15 @@ Node Agent Core 不直接导入 Buddy SDK、钩子脚本或视觉/音频模块�
 POST /api/copilot/hooks/{event_name}
 Content-Type: application/json
 Authorization: Bearer <hook token>
-# 兼容旧 runner：x-anomalo-admin-token: <hook token>
+# 兼容旧 runner：x-anomaloharis-admin-token: <hook token>
 ```
 
 旧实现的环境变量约定如下，仅作为恢复参考：
 
 | 变量 | 作用 | 默认值 |
 | --- | --- | --- |
-| `BUDDY_HOOK_BASE_URL` | relay 基地址 | 其次使用 `ANOMALO_BUDDY_SERVICE_URL`，再其次 `http://127.0.0.1:8765` |
-| `BUDDY_HOOK_TOKEN` | relay Hook 令牌 | 其次使用旧变量 `ANOMALO_COPILOT_HOOK_ADMIN_TOKEN` / `ANOMALO_ADMIN_TOKEN` |
+| `BUDDY_HOOK_BASE_URL` | relay 基地址 | 其次使用 `ANOMALOHARIS_BUDDY_SERVICE_URL`，再其次 `http://127.0.0.1:8765` |
+| `BUDDY_HOOK_TOKEN` | relay Hook 令牌 | 其次使用旧变量 `ANOMALOHARIS_COPILOT_HOOK_ADMIN_TOKEN` / `ANOMALOHARIS_ADMIN_TOKEN` |
 | `BUDDY_HOOK_TIMEOUT_MS` | Hook 网络超时 | 普通事件 5000ms；审批事件使用审批超时再加 5000ms |
 
 relay 返回紧凑 JSON hook effect：
@@ -158,7 +158,7 @@ Buddy 后端实现 Buddy 投影、审批超时、重连和会话状态。Node Ho
 当前删除内容：
 
 - 旧的 `buddy-backend/scripts/copilot_buddy_hook.py`；
-- 旧的直接依赖 Anomalo Host 的 hook 配置；当前配置应调用 Node 适配器；
+- 旧的直接依赖 AnomaloHaris Host 的 hook 配置；当前配置应调用 Node 适配器；
 - 音频、视觉和媒体处理运行时。
 
 恢复前必须重新确认：

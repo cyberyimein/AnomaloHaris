@@ -109,7 +109,7 @@ describe("AgentSessionProjection", () => {
 
     projection.handle(
       event("llm.request", {
-        model_ref: "anomalo@1",
+        model_ref: "anomaloharis@1",
         provider_model: "deepseek/deepseek-chat",
         iteration: 2,
         request: { message_count: 7, tool_count: 4, response_format: "text" },
@@ -168,7 +168,7 @@ describe("AgentSessionProjection", () => {
       event("tool.started", {
         tool_call_id: "search-1",
         tool: "web_search",
-        arguments: { query: "Anomalo" },
+        arguments: { query: "AnomaloHaris" },
       }),
     );
     projection.handle(
@@ -178,7 +178,7 @@ describe("AgentSessionProjection", () => {
         content: "result",
         data: {
           trace_kind: "web_search",
-          query: "Anomalo",
+          query: "AnomaloHaris",
           results: [{ title: "Result", url: "https://example.com" }],
           skill_action: "activate",
           artifacts: [{ name: "chart.png", url: "https://example.com/chart.png" }],

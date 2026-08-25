@@ -16,7 +16,7 @@ afterEach(() => {
 
 describe("FileResourceLoader", () => {
   it("captures memory, skill, and MCP resources in a run snapshot", async () => {
-    const root = mkdtempSync(join(tmpdir(), "anomalo-resources-"));
+    const root = mkdtempSync(join(tmpdir(), "anomaloharis-resources-"));
     temporary.push(root);
     mkdirSync(join(root, "skills", "skill-a"), { recursive: true });
     mkdirSync(join(root, "config", "mcp"), { recursive: true });
@@ -47,7 +47,7 @@ describe("FileResourceLoader", () => {
   });
 
   it("does not mutate an already captured snapshot when files change", async () => {
-    const root = mkdtempSync(join(tmpdir(), "anomalo-resources-stable-"));
+    const root = mkdtempSync(join(tmpdir(), "anomaloharis-resources-stable-"));
     temporary.push(root);
     writeFileSync(join(root, "AGENTS.md"), "before");
     const loader = new FileResourceLoader({ projectRoot: root });
@@ -58,7 +58,7 @@ describe("FileResourceLoader", () => {
   });
 
   it("keeps resource files frozen while refreshing active resource selection", async () => {
-    const root = mkdtempSync(join(tmpdir(), "anomalo-resources-dynamic-"));
+    const root = mkdtempSync(join(tmpdir(), "anomaloharis-resources-dynamic-"));
     temporary.push(root);
     mkdirSync(join(root, "skills", "skill-a"), { recursive: true });
     writeFileSync(join(root, "skills", "skill-a", "SKILL.md"), "# Skill A\nStable instructions.");
@@ -91,7 +91,7 @@ describe("FileResourceLoader", () => {
   });
 
   it("assembles prompt, bootstrap, memory, skills, MCP, and history in order", async () => {
-    const root = mkdtempSync(join(tmpdir(), "anomalo-resources-order-"));
+    const root = mkdtempSync(join(tmpdir(), "anomaloharis-resources-order-"));
     temporary.push(root);
     mkdirSync(join(root, "skills", "skill-a"), { recursive: true });
     mkdirSync(join(root, "config", "mcp"), { recursive: true });

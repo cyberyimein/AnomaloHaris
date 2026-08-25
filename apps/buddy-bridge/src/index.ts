@@ -1,4 +1,4 @@
-import type { ToolCall, ToolDefinition, ToolResult } from "@anomalo/contracts";
+import { legacyNamingAdapter, type ToolCall, type ToolDefinition, type ToolResult } from "@anomaloharis/contracts";
 
 type PluginContext = {
   sessionId?: string;
@@ -29,9 +29,9 @@ type BuddyExtension = {
   hooks: Record<string, (event: PluginEvent) => PluginEventResult | void | Promise<PluginEventResult | void>>;
 };
 
-const SERVICE_URL_ENV = "ANOMALO_BUDDY_SERVICE_URL";
-const SERVICE_TOKEN_ENV = "ANOMALO_BUDDY_SERVICE_TOKEN";
-const REQUEST_TIMEOUT_ENV = "ANOMALO_BUDDY_REQUEST_TIMEOUT_MS";
+const SERVICE_URL_ENV = "ANOMALOHARIS_BUDDY_SERVICE_URL";
+const SERVICE_TOKEN_ENV = "ANOMALOHARIS_BUDDY_SERVICE_TOKEN";
+const REQUEST_TIMEOUT_ENV = "ANOMALOHARIS_BUDDY_REQUEST_TIMEOUT_MS";
 const DEFAULT_SERVICE_URL = "http://127.0.0.1:8765";
 const DEFAULT_REQUEST_TIMEOUT_MS = 1_500;
 
@@ -149,9 +149,9 @@ export default function createBuddyBridge(_api: PluginApi): BuddyExtension {
 }
 
 export class BuddyServiceClient {
-  private readonly baseUrl = (process.env[SERVICE_URL_ENV] || DEFAULT_SERVICE_URL).replace(/\/$/, "");
-  private readonly token = process.env[SERVICE_TOKEN_ENV] || "";
-  private readonly timeoutMs = boundedNumber(process.env[REQUEST_TIMEOUT_ENV], DEFAULT_REQUEST_TIMEOUT_MS, 100, 30_000);
+  private readonly baseUrl = (legacyNamingAdapter.readEnv(process.env, SERVICE_URL_ENV) || DEFAULT_SERVICE_URL).replace(/\/$/, "");
+  private readonly token = legacyNamingAdapter.readEnv(process.env, SERVICE_TOKEN_ENV) || "";
+  private readonly timeoutMs = boundedNumber(legacyNamingAdapter.readEnv(process.env, REQUEST_TIMEOUT_ENV), DEFAULT_REQUEST_TIMEOUT_MS, 100, 30_000);
   private readonly eventQueues = new Map<string, Promise<void>>();
 
   async callTool(call: ToolCall, context: PluginContext, signal: AbortSignal): Promise<ToolResult> {

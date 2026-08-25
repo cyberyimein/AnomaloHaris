@@ -1,4 +1,4 @@
-import type { ToolCall, ToolDefinition, ToolResult } from "@anomalo/contracts";
+import type { ToolCall, ToolDefinition, ToolResult } from "@anomaloharis/contracts";
 
 import type { PluginExecutionScope, PluginHost } from "./plugins.js";
 import type { ToolContext } from "./types.js";

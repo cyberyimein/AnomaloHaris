@@ -1,6 +1,6 @@
 {
   "additionalProperties": true,
-  "$id": "https://anomalo.dev/schemas/openai-chat-completion-request.schema.json",
+  "$id": "https://anomaloharis.dev/schemas/openai-chat-completion-request.schema.json",
   "type": "object",
   "required": [
     "model",

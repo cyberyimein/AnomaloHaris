@@ -14,6 +14,35 @@ const context: ToolContext = {
 };
 
 describe("WebToolRuntime", () => {
+  it("uses a GET query for DuckDuckGo HTML search", async () => {
+    let requestUrl = "";
+    let requestInit: RequestInit | undefined;
+    const runtime = new WebToolRuntime({
+      fetchImpl: async (input, init) => {
+        requestUrl = String(input);
+        requestInit = init;
+        return new Response(
+          '<a class="result__a" href="https://example.com/result">Example result</a><div class="result__snippet">A useful snippet.</div>',
+          { status: 200, headers: { "content-type": "text/html" } },
+        );
+      },
+    });
+
+    const result = await runtime.call(
+      { id: "web-call", name: "web_search", arguments: { query: "OpenAI web", count: 1 } },
+      context,
+      new AbortController().signal,
+    );
+
+    expect(new URL(requestUrl).searchParams.get("q")).toBe("OpenAI web");
+    expect(requestInit?.method).toBe("GET");
+    expect(requestInit?.body).toBeUndefined();
+    expect(result).toMatchObject({
+      ok: true,
+      data: { query: "OpenAI web", results: [{ url: "https://example.com/result", title: "Example result" }] },
+    });
+  });
+
   it("rejects local and private fetch targets before making a request", async () => {
     let requests = 0;
     const runtime = new WebToolRuntime({ fetchImpl: async () => {

@@ -8,7 +8,7 @@ import type {
   ToolCall,
   ToolDefinition,
   ToolResult,
-} from "@anomalo/contracts";
+} from "@anomaloharis/contracts";
 import type { PluginLock } from "./plugin-catalog.js";
 
 export type { AgentEvent, EntryId, PresetModelRef, ResponseFormat, RunId, SessionId, ToolCall, ToolDefinition, ToolResult };

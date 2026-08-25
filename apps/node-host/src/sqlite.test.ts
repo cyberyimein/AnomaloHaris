@@ -39,7 +39,7 @@ describe("SqliteSessionAdapter", () => {
     const adapter = new SqliteSessionAdapter(":memory:", { clock });
     await adapter.open(sessionId);
     await adapter.setResources(sessionId, ["zeta", "zeta"], ["mcp-a"]);
-    await adapter.setPresetModel(sessionId, "anomalo@1");
+    await adapter.setPresetModel(sessionId, "anomaloharis@1");
     await adapter.beginRun({
       runId,
       sessionId,
@@ -109,7 +109,7 @@ describe("SqliteSessionAdapter", () => {
       { role: "assistant", content: "Hi" },
     ]);
     expect(snapshot.activeSkills).toEqual(["zeta"]);
-    expect(snapshot.metadata).toEqual({ preset_model_ref: "anomalo@1" });
+    expect(snapshot.metadata).toEqual({ preset_model_ref: "anomaloharis@1" });
     expect(snapshot.webTraces).toEqual([{ id: "trace-1", run_id: runId, content: "ok", timestamp: clock.now() }]);
     expect((await adapter.resume(sessionId)).checkpoint.state.originalUserContent).toBe("Hello");
     expect((await adapter.resume(sessionId)).checkpoint.state.toolProtocol).toBe("dsml");
@@ -123,7 +123,7 @@ describe("SqliteSessionAdapter", () => {
       sessionId,
       title: "Hello",
       canResume: true,
-      presetModelRef: "anomalo@1",
+      presetModelRef: "anomaloharis@1",
     });
 
     await adapter.finishRun({ runId, sessionId, lastEntryId: "entry-assistant" as EntryId, endedAt: clock.now() });

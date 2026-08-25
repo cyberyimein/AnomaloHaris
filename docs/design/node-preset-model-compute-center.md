@@ -9,6 +9,8 @@
 > 规范词：MUST 表示必须满足，SHOULD 表示默认应满足，MAY 表示可以延后
 >
 > 取代关系：本文取代 `docs/design/pi-inspired-node-runtime.md` 中“最终保留 Python Worker”和“达到部分 Node 能力即可切换”的目标；旧文档只保留为迁移历史和已实现模块参考
+>
+> 扩展关系：Workflow 执行由 `docs/adr/0004-peer-agent-and-workflow-runtimes.md` 和 `docs/design/workflow-runtime-development-design.md` 扩展；现有 Agent RunService 将深化为统一 Run Control，但本文的 Preset Model、AgentCore、ProviderGateway 和 PluginHost 语义保持不变
 
 ## 1. 给 Luna 的执行摘要
 
@@ -68,13 +70,13 @@ buddy-companion@2
 **默认 AnomaloHaris Agent 也必须是一个 Preset Model。** 推荐内建名称：
 
 ```text
-anomalo@1
+anomaloharis@1
 ```
 
 这里的 `Preset` 表示“在调用前已经固定能力组合”，不是“只有特殊 Agent 才使用的可选模式”。系统中不存在绕过 Preset Model Registry 的裸 Agent：
 
 ```text
-默认聊天  → 当前配置的默认 Preset Model，例如 anomalo@1
+默认聊天  → 当前配置的默认 Preset Model，例如 anomaloharis@1
 指定调用  → 调用方明确提供的 Preset Model，例如 fomc-brief@3
 ```
 
@@ -142,7 +144,7 @@ Luna 开始实现前必须承认当前 Node Host 尚不具备替换资格。
 0 prompt parts · 0 tools · unknown model
 ```
 
-Node 事件协议和 UI 必须共同以 `@anomalo/contracts` 为唯一来源，禁止任一方猜测字段。
+Node 事件协议和 UI 必须共同以 `@anomaloharis/contracts` 为唯一来源，禁止任一方猜测字段。
 
 ### 3.3 Node 公共 API 不完整
 
@@ -225,16 +227,16 @@ type PresetModelRef = `${PresetModelName}@${PresetModelVersion}`;
 5. 已发布版本不能删除，只能标记 `retired`；已有 Session 和审计记录仍可解析。
 6. `/v1` 和新的 Native Preset Model API 必须显式提供 version，不支持含义漂移的 `latest`；旧默认 chat API 是唯一允许省略 Model Ref 的便捷入口。
 7. 管理 UI MAY 提供“基于最新版创建草稿”，但调用协议仍保存具体版本。
-8. Host 配置 `ANOMALO_DEFAULT_PRESET_MODEL` MUST 保存明确的 `name@version`，默认建议为 `anomalo@1`。
+8. Host 配置 `ANOMALOHARIS_DEFAULT_PRESET_MODEL` MUST 保存明确的 `name@version`，默认建议为 `anomaloharis@1`。
 9. 修改默认 Model Ref 只影响新 Session；已存在 Session 继续绑定创建时解析出的明确版本。
 
 ### 6.2 Definition Schema
 
-规范类型放入 `@anomalo/contracts`，运行时使用 TypeBox/Ajv 校验。
+规范类型放入 `@anomaloharis/contracts`，运行时使用 TypeBox/Ajv 校验。
 
 ```ts
 type PresetModelDefinition = {
-  api_version: "anomalo.dev/v1";
+  api_version: "anomaloharis.dev/v1";
   kind: "PresetModel";
   metadata: {
     name: PresetModelName;
@@ -285,7 +287,7 @@ type PresetModelDefinition = {
 ### 6.3 示例
 
 ```yaml
-api_version: anomalo.dev/v1
+api_version: anomaloharis.dev/v1
 kind: PresetModel
 metadata:
   name: world-cup-research
@@ -306,7 +308,7 @@ spec:
       优先使用赛事组织方的官方来源，并明确区分事实与推断。
   plugins:
     - id: web
-      package: "@anomalo/plugin-web"
+      package: "@anomaloharis/plugin-web"
       version: "1.0.0"
       required: true
       permissions:
@@ -533,7 +535,7 @@ authenticate client
 
 UI、旧 `/api/chat`、Preset Model API 和 `/v1/chat/completions` 不能各自创建独立 Agent loop。
 
-旧 chat 路由未提供 Model Ref 时，`RunService` 在创建新 Session 前把它解析为 `ANOMALO_DEFAULT_PRESET_MODEL`，并把解析后的明确版本写入 Session。后续请求不能因为默认配置变化而漂移到另一个版本。
+旧 chat 路由未提供 Model Ref 时，`RunService` 在创建新 Session 前把它解析为 `ANOMALOHARIS_DEFAULT_PRESET_MODEL`，并把解析后的明确版本写入 Session。后续请求不能因为默认配置变化而漂移到另一个版本。
 
 ### 9.4 AgentCore
 
@@ -798,7 +800,7 @@ POST /v1/chat/completions
     {
       "id": "world-cup-research@1",
       "object": "model",
-      "owned_by": "anomalo",
+      "owned_by": "anomaloharis",
       "metadata": {
         "name": "world-cup-research",
         "version": 1,
@@ -855,7 +857,7 @@ WS   /ws/chat/{session_id}
 
 语义：
 
-- 请求没有 `preset_model` 时，使用 `ANOMALO_DEFAULT_PRESET_MODEL`。
+- 请求没有 `preset_model` 时，使用 `ANOMALOHARIS_DEFAULT_PRESET_MODEL`。
 - 请求 MAY 显式提供完整 `preset_model: "name@version"`；不接受只有 name 的模糊引用。
 - 新 Session 在第一次 Run 时固定绑定解析后的 Model Ref。
 - 响应和 `run.started` 必须返回实际 `model_ref`。
@@ -962,7 +964,7 @@ UI 不得把 404、schema mismatch 或缺失字段静默显示为 `0`、空列�
 
 ### 14.3 单一契约来源
 
-- 所有 event、API request/response、Definition 和错误码在 `@anomalo/contracts` 定义。
+- 所有 event、API request/response、Definition 和错误码在 `@anomaloharis/contracts` 定义。
 - Fastify 使用导出的 JSON Schema 验证。
 - 前端通过 contracts parser 消费。
 - fixture 同时运行于 Host test 和 frontend projection test。
@@ -1094,7 +1096,7 @@ type ParityEntry = {
 
 迁移 CLI 必须支持 dry-run、hash、逐行错误、幂等和备份。迁移后旧 preset agent 表只读一个发布周期。
 
-现有默认 AnomaloHaris Agent 的 prompt profile、默认 Provider Model、Core/Web 工具和运行 policy 必须先生成内建 `anomalo@1`。旧 `/api/chat` 的行为契约以该版本作为迁移基线，而不是继续保留一个 Registry 之外的特殊默认 runtime。
+现有默认 AnomaloHaris Agent 的 prompt profile、默认 Provider Model、Core/Web 工具和运行 policy 必须先生成内建 `anomaloharis@1`。旧 `/api/chat` 的行为契约以该版本作为迁移基线，而不是继续保留一个 Registry 之外的特殊默认 runtime。
 
 `subagent` 是 Web retrieval Module 的嵌套 AgentCore Implementation：它使用固定 Provider Model、临时 Session 和独立的工具轮次，但只绑定 `web_search`。它不接收父 Agent 的 PluginHost、Session history、Python、Browser、MCP、Buddy 或其他 Host 工具；父 Agent 只接收研究结果、引用和子 run metadata。
 
@@ -1175,7 +1177,7 @@ type ParityEntry = {
 - draft/validate/publish/retire 生命周期。
 - prompt/plugin/provider/policy 编译与 hash。
 - `name@version` 解析和 Session binding。
-- 从现有默认 Agent 配置生成内建 `anomalo@1`，并实现 `ANOMALO_DEFAULT_PRESET_MODEL`。
+- 从现有默认 Agent 配置生成内建 `anomaloharis@1`，并实现 `ANOMALOHARIS_DEFAULT_PRESET_MODEL`。
 - 旧 preset agent migration dry-run。
 
 退出条件：
@@ -1183,7 +1185,7 @@ type ParityEntry = {
 - published version 不可变。
 - Definition 任一运行字段变化都要求新版本。
 - 相同 `name@version` 重启后 compiled hash 一致。
-- 旧 `/api/chat` 和显式调用 `anomalo@1` 产生相同规范事件序列。
+- 旧 `/api/chat` 和显式调用 `anomaloharis@1` 产生相同规范事件序列。
 - migration fixture 无数据丢失且幂等。
 
 ### Phase 3：固定组合的 Pi-like PluginHost
@@ -1352,8 +1354,8 @@ type ParityEntry = {
 真实测试必须最小化费用，并通过显式环境开关执行：
 
 ```text
-ANOMALO_REAL_PROVIDER_TESTS=true
-ANOMALO_HARDWARE_TESTS=true
+ANOMALOHARIS_REAL_PROVIDER_TESTS=true
+ANOMALOHARIS_HARDWARE_TESTS=true
 ```
 
 CI 默认使用 recorded fixtures；发布前必须保存真实 Gate 的时间、Provider Model、Model Ref、run id 和结果摘要。

@@ -1,6 +1,6 @@
 {
   "additionalProperties": true,
-  "$id": "https://anomalo.dev/schemas/websocket-control-message.schema.json",
+  "$id": "https://anomaloharis.dev/schemas/websocket-control-message.schema.json",
   "type": "object",
   "required": [
     "type"

@@ -31,10 +31,11 @@ class FakeSocket {
 }
 
 function createStorage(sessionId = "session_existing") {
-  const values = new Map([["anomalo.session", sessionId]]);
+  const values = new Map([["anomaloharis.session", sessionId]]);
   return {
     getItem: vi.fn((key) => values.get(key) || null),
     setItem: vi.fn((key, value) => values.set(key, value)),
+    removeItem: vi.fn((key) => values.delete(key)),
   };
 }
 
@@ -54,6 +55,32 @@ afterEach(() => {
 });
 
 describe("AgentTransport", () => {
+  it("migrates an existing legacy browser session key", () => {
+    const legacySessionKey = "anomalo.session"; // naming-compat: legacy browser session fixture
+    const values = new Map([[legacySessionKey, "session_legacy"]]);
+    const storage = {
+      getItem: vi.fn((key) => values.get(key) || null),
+      setItem: vi.fn((key, value) => values.set(key, value)),
+      removeItem: vi.fn((key) => values.delete(key)),
+    };
+    const sockets = [];
+    const transport = createAgentTransport({
+      storage,
+      location: { protocol: "http:", host: "anomaloharis.test" },
+      socketFactory: (url) => {
+        const socket = new FakeSocket(url);
+        sockets.push(socket);
+        return socket;
+      },
+    });
+
+    transport.connect();
+
+    expect(sockets[0].url).toBe("ws://anomaloharis.test/ws/chat/session_legacy");
+    expect(storage.setItem).toHaveBeenCalledWith("anomaloharis.session", "session_legacy");
+    expect(storage.removeItem).toHaveBeenCalledWith(legacySessionKey);
+  });
+
   it("connects, projects messages, and sends user turns", () => {
     const sockets = [];
     const onEvent = vi.fn();
@@ -62,7 +89,7 @@ describe("AgentTransport", () => {
       onEvent,
       onState,
       storage: createStorage(),
-      location: { protocol: "http:", host: "anomalo.test" },
+      location: { protocol: "http:", host: "anomaloharis.test" },
       socketFactory: (url) => {
         const socket = new FakeSocket(url);
         sockets.push(socket);
@@ -84,7 +111,7 @@ describe("AgentTransport", () => {
     });
     sockets[0].emit("message", { data: JSON.stringify(started) });
 
-    expect(sockets[0].url).toBe("ws://anomalo.test/ws/chat/session_existing");
+    expect(sockets[0].url).toBe("ws://anomaloharis.test/ws/chat/session_existing");
     expect(transport.state.connectionStatus.value).toBe("Connected");
     expect(onState).toHaveBeenCalledWith("Idle", "Connected. Waiting for input.");
     expect(onEvent).toHaveBeenCalledWith({ type: "pong" });
@@ -120,7 +147,7 @@ describe("AgentTransport", () => {
     const transport = createAgentTransport({
       onEvent,
       storage: createStorage(),
-      location: { protocol: "https:", host: "anomalo.test" },
+      location: { protocol: "https:", host: "anomaloharis.test" },
       reconnectDelayMs: 25,
       socketFactory: (url) => {
         const socket = new FakeSocket(url);
@@ -137,7 +164,7 @@ describe("AgentTransport", () => {
     sockets[1].emit("message", { data: JSON.stringify(current) });
 
     expect(sockets).toHaveLength(2);
-    expect(sockets[1].url).toMatch(/^wss:\/\/anomalo\.test/);
+    expect(sockets[1].url).toMatch(/^wss:\/\/anomaloharis\.test/);
     expect(onEvent).toHaveBeenCalledTimes(1);
     expect(onEvent).toHaveBeenCalledWith(current);
   });
@@ -147,7 +174,7 @@ describe("AgentTransport", () => {
     const storage = createStorage();
     const transport = createAgentTransport({
       storage,
-      location: { protocol: "http:", host: "anomalo.test" },
+      location: { protocol: "http:", host: "anomaloharis.test" },
       socketFactory: (url) => {
         const socket = new FakeSocket(url);
         sockets.push(socket);
@@ -160,7 +187,7 @@ describe("AgentTransport", () => {
 
     expect(sockets[0].closed).toBe(true);
     expect(nextSessionId).toMatch(/^session_[a-f0-9]{32}$/);
-    expect(storage.setItem).toHaveBeenLastCalledWith("anomalo.session", nextSessionId);
+    expect(storage.setItem).toHaveBeenLastCalledWith("anomaloharis.session", nextSessionId);
     expect(sockets[1].url).toContain(nextSessionId);
   });
 
@@ -169,7 +196,7 @@ describe("AgentTransport", () => {
     const storage = createStorage();
     const transport = createAgentTransport({
       storage,
-      location: { protocol: "http:", host: "anomalo.test" },
+      location: { protocol: "http:", host: "anomaloharis.test" },
       socketFactory: (url) => {
         const socket = new FakeSocket(url);
         sockets.push(socket);
@@ -183,7 +210,7 @@ describe("AgentTransport", () => {
     expect(activeSessionId).toBe("session_history");
     expect(sockets[0].closed).toBe(true);
     expect(sockets[1].url).toContain("session_history");
-    expect(storage.setItem).toHaveBeenLastCalledWith("anomalo.session", "session_history");
+    expect(storage.setItem).toHaveBeenLastCalledWith("anomaloharis.session", "session_history");
     expect(transport.state.runActive.value).toBe(false);
     expect(transport.state.resumeAvailable.value).toBe(false);
   });

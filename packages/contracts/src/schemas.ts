@@ -45,7 +45,7 @@ export const AgentEventSchema = Type.Object(
     data: Type.Record(Type.String(), Type.Unknown()),
     timestamp: Type.String({ minLength: 1 }),
   },
-  { additionalProperties: true, $id: "https://anomalo.dev/schemas/agent-event.schema.json" },
+  { additionalProperties: true, $id: "https://anomaloharis.dev/schemas/agent-event.schema.json" },
 );
 
 export const RunEventEnvelopeSchema = AgentEventSchema;
@@ -63,7 +63,7 @@ export const WebSocketControlMessageSchema = Type.Object(
   },
   {
     additionalProperties: true,
-    $id: "https://anomalo.dev/schemas/websocket-control-message.schema.json",
+    $id: "https://anomaloharis.dev/schemas/websocket-control-message.schema.json",
   },
 );
 
@@ -71,7 +71,7 @@ export const ConnectionMessageSchema = WebSocketControlMessageSchema;
 
 export const WebSocketMessageSchema = Type.Union(
   [RunEventEnvelopeSchema, ConnectionMessageSchema],
-  { $id: "https://anomalo.dev/schemas/websocket-message.schema.json" },
+  { $id: "https://anomaloharis.dev/schemas/websocket-message.schema.json" },
 );
 
 export const ResponseFormatSchema = Type.Union([
@@ -104,7 +104,7 @@ export const LlmRequestEventDataSchema = Type.Object(
       compiled_hash: Type.String({ minLength: 1 }),
     }, { additionalProperties: true }),
   },
-  { additionalProperties: true, $id: "https://anomalo.dev/schemas/llm-request-event-data.schema.json" },
+  { additionalProperties: true, $id: "https://anomaloharis.dev/schemas/llm-request-event-data.schema.json" },
 );
 
 export const PresetModelRefSchema = Type.String({
@@ -141,7 +141,7 @@ export const PresetModelDefinitionSchema = Type.Object(
     policy: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
     metadata: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
   },
-  { additionalProperties: true, $id: "https://anomalo.dev/schemas/preset-model-definition.schema.json" },
+  { additionalProperties: true, $id: "https://anomaloharis.dev/schemas/preset-model-definition.schema.json" },
 );
 
 export const PresetModelSummarySchema = Type.Object({
@@ -164,7 +164,7 @@ export const RunRequestSchema = Type.Object(
     preset_model: Type.Optional(Type.Union([PresetModelRefSchema, Type.Null()])),
     response_format: Type.Optional(Type.Union([ResponseFormatSchema, Type.Null()])),
   },
-  { additionalProperties: true, $id: "https://anomalo.dev/schemas/run-request.schema.json" },
+  { additionalProperties: true, $id: "https://anomaloharis.dev/schemas/run-request.schema.json" },
 );
 
 export const ToolDefinitionSchema = Type.Object(
@@ -174,7 +174,7 @@ export const ToolDefinitionSchema = Type.Object(
     parameters: Type.Record(Type.String(), Type.Unknown()),
     source: Type.String({ minLength: 1 }),
   },
-  { additionalProperties: true, $id: "https://anomalo.dev/schemas/tool.schema.json" },
+  { additionalProperties: true, $id: "https://anomaloharis.dev/schemas/tool.schema.json" },
 );
 
 export const ToolCallSchema = Type.Object({

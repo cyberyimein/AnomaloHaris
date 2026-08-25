@@ -26,7 +26,7 @@ Environment:
   PUBLISH_DEVICE_PORT     Publish the device port. Default: 1
   START_CONTAINER_SYSTEM  Start Apple container system before deploy. Default: 1
   REMOTE_CONTAINER_CLI    Remote Apple container CLI path. Default: container
-  CONTAINER_NETWORK       Shared network with Anomalo. Default: anomaloharis-external
+  CONTAINER_NETWORK       Shared network with AnomaloHaris. Default: anomaloharis-external
 EOF
 }
 
@@ -66,8 +66,8 @@ else
     BUDDY_IMAGE_ARCHIVE="$source_path"
 fi
 
-archive_path="${BUDDY_IMAGE_ARCHIVE:-${ANOMALO_IMAGE_ARCHIVE:-}}"
-image_ref="${IMAGE_REF:-${BUDDY_IMAGE_REF:-${ANOMALO_IMAGE_REF:-}}}"
+archive_path="${BUDDY_IMAGE_ARCHIVE:-${ANOMALOHARIS_IMAGE_ARCHIVE:-${ANOMALO_IMAGE_ARCHIVE:-}}}" # naming-compat
+image_ref="${IMAGE_REF:-${BUDDY_IMAGE_REF:-${ANOMALOHARIS_IMAGE_REF:-${ANOMALO_IMAGE_REF:-}}}}" # naming-compat
 [[ -n "$archive_path" ]] || fail "image archive was not provided"
 [[ -f "$archive_path" ]] || fail "image archive does not exist: $archive_path"
 [[ -n "$image_ref" ]] || fail "IMAGE_REF is required when the source is not a metadata .env file"

@@ -329,11 +329,11 @@ fix: preserve preset model bindings across session lifecycle
 
 - 在解析默认模型之前读取已有 Session metadata。
 - 为新 Session 和已绑定 Session 使用不同 Registry resolution mode。
-- 只在 Session 尚未绑定时使用 `ANOMALO_DEFAULT_PRESET_MODEL`。
+- 只在 Session 尚未绑定时使用 `ANOMALOHARIS_DEFAULT_PRESET_MODEL`。
 - Session binding 与首个 Run record 在事务或等价原子边界中完成。
 - retired 版本只允许已有绑定 Session 调用和 resume。
 - management retire 拒绝当前默认 Ref，并返回可行动错误。
-- `ensureBuiltinDefault` 不得尝试重新 publish retired `anomalo@1`；启动时对无效默认值快速失败并给出明确运维提示。
+- `ensureBuiltinDefault` 不得尝试重新 publish retired `anomaloharis@1`；启动时对无效默认值快速失败并给出明确运维提示。
 
 测试矩阵：
 
@@ -368,7 +368,7 @@ fix: scope plugin execution to compiled model locks
 - hook 输出重新经过消息 schema、tool schema、allowed tool set 和 Host policy。
 - required 插件 unavailable 时在调用前失败；optional 插件产生 degraded event。
 - 修正同名 tool priority：只允许在当前 scope 内决议，不得由未绑定插件抢占。
-- 默认 `anomalo@1` 只绑定当前真实可工作的核心插件。
+- 默认 `anomaloharis@1` 只绑定当前真实可工作的核心插件。
 
 测试：
 
@@ -426,7 +426,7 @@ test: close node preset model production acceptance gates
 
 工作内容：
 
-- 增加受 `ANOMALO_REAL_PROVIDER_TESTS=true` 控制的真实 smoke runner。
+- 增加受 `ANOMALOHARIS_REAL_PROVIDER_TESTS=true` 控制的真实 smoke runner。
 - 使用一个 structured tool-call Preset Model 和一个 DSML Preset Model。
 - 使用 OpenAI Node SDK 调用 `/v1/chat/completions` 的 stream/non-stream。
 - 运行 Web 当前信息检索，确认工具执行而非输出 markup 或凭记忆作答。
@@ -471,8 +471,8 @@ rollback_result
 ### 7.1 每个切片必须运行
 
 ```bash
-npm test --workspace @anomalo/contracts
-npm test --workspace @anomalo/node-host
+npm test --workspace @anomaloharis/contracts
+npm test --workspace @anomaloharis/node-host
 npm test --workspace anomaloharis-frontend
 npm run build --workspaces --if-present
 git diff --check
@@ -558,7 +558,7 @@ git diff --check
 
 - Slice 1–6 全部完成。
 - Provider、policy、Session 和插件图四类核心不变量均有负面测试。
-- `anomalo@1` 和至少一个非默认 Model Ref 使用各自 Provider binding 正常运行。
+- `anomaloharis@1` 和至少一个非默认 Model Ref 使用各自 Provider binding 正常运行。
 - `host-core` 与 `web` 完整执行。
 - OpenAI API、Native API、legacy chat 对相同 Model Ref 使用相同 RunSpec。
 - UI 正确显示模型和工具调用，不再出现错误的 `unknown model`/`0 tools`。

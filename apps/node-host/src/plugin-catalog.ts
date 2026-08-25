@@ -197,7 +197,7 @@ export function builtinPluginCatalog(): PluginCatalog {
     createPluginManifest({
       id: "host-core",
       version: "1.0.0",
-      package: "@anomalo/node-host",
+      package: "@anomaloharis/node-host",
       entry: "builtin:host-core",
       compatibility: "L1",
       permissions: ["tools.register"],
@@ -206,7 +206,7 @@ export function builtinPluginCatalog(): PluginCatalog {
     createPluginManifest({
       id: "time-tools",
       version: "1.0.0",
-      package: "@anomalo/node-host",
+      package: "@anomaloharis/node-host",
       entry: "builtin:time-tools",
       compatibility: "L1",
       permissions: ["tools.register"],
@@ -215,7 +215,7 @@ export function builtinPluginCatalog(): PluginCatalog {
     createPluginManifest({
       id: "web",
       version: "1.0.0",
-      package: "@anomalo/node-host",
+      package: "@anomaloharis/node-host",
       entry: "builtin:web",
       compatibility: "L1",
       permissions: ["tools.register"],
@@ -224,7 +224,7 @@ export function builtinPluginCatalog(): PluginCatalog {
     createPluginManifest({
       id: "python-sandbox",
       version: "1.0.0",
-      package: "@anomalo/node-host",
+      package: "@anomaloharis/node-host",
       entry: "builtin:python-sandbox",
       compatibility: "L1",
       permissions: ["tools.register"],
@@ -233,7 +233,7 @@ export function builtinPluginCatalog(): PluginCatalog {
     createPluginManifest({
       id: "browser-bridge",
       version: "1.0.0",
-      package: "@anomalo/node-host",
+      package: "@anomaloharis/node-host",
       entry: "builtin:browser-bridge",
       compatibility: "L2",
       permissions: ["tools.register", "lifecycle.run"],
@@ -252,7 +252,7 @@ export function builtinPluginCatalog(): PluginCatalog {
     createPluginManifest({
       id: "pi-plugin-host",
       version: "1.0.0",
-      package: "@anomalo/node-host",
+      package: "@anomaloharis/node-host",
       entry: "builtin:pi-plugin-host",
       compatibility: "L2",
       permissions: ["tools.register", "lifecycle.context", "lifecycle.run"],
@@ -260,7 +260,7 @@ export function builtinPluginCatalog(): PluginCatalog {
     createPluginManifest({
       id: "buddy-bridge",
       version: "1.0.0",
-      package: "@anomalo/buddy-bridge",
+      package: "@anomaloharis/buddy-bridge",
       entry: ".",
       // Hash the compiled package payload. Source checkouts and production
       // images intentionally contain different workspace metadata, while

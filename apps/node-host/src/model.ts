@@ -1,4 +1,4 @@
-import type { ToolCall } from "@anomalo/contracts";
+import type { ToolCall } from "@anomaloharis/contracts";
 
 import { DsmlProtocolError, DsmlToolCallParser } from "./dsml.js";
 import type { ModelMessage, ResponseFormat, ToolDefinition } from "./types.js";

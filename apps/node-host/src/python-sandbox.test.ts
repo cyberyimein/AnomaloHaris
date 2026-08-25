@@ -75,7 +75,7 @@ describe("PythonSandboxRuntime", () => {
   });
 
   it("caches bounded artifacts outside the container and exposes a local URL", async () => {
-    const artifactsDir = mkdtempSync(join(tmpdir(), "anomalo-python-artifacts-"));
+    const artifactsDir = mkdtempSync(join(tmpdir(), "anomaloharis-python-artifacts-"));
     temporaryDirectories.push(artifactsDir);
     const runtime = new PythonSandboxRuntime({
       baseUrl: "http://fruitspy.test",
@@ -106,13 +106,13 @@ describe("PythonSandboxRuntime", () => {
     const artifactUrl = String((result.data as { artifacts: Array<{ url: string }> }).artifacts[0]?.url);
     expect(artifactUrl).toMatch(/^\/api\/artifacts\/python\/exec_2\/plot\.png\?session_id=python-session&artifact_token=.+$/);
     expect(readFileSync(join(artifactsDir, "python", "exec_2", "plot.png"))).toEqual(Buffer.from([1, 2, 3]));
-    const url = new URL(`http://anomalo.test${artifactUrl}`);
+    const url = new URL(`http://anomaloharis.test${artifactUrl}`);
     expect(runtime.readArtifact("exec_2", "plot.png", "wrong-session", url.searchParams.get("artifact_token")!)).toBeUndefined();
     expect(runtime.readArtifact("exec_2", "plot.png", "python-session", url.searchParams.get("artifact_token")!)).toMatchObject({ mediaType: "image/png" });
   });
 
   it("downgrades active or unknown artifact media types to inert downloads", async () => {
-    const artifactsDir = mkdtempSync(join(tmpdir(), "anomalo-python-artifacts-media-"));
+    const artifactsDir = mkdtempSync(join(tmpdir(), "anomaloharis-python-artifacts-media-"));
     temporaryDirectories.push(artifactsDir);
     const runtime = new PythonSandboxRuntime({
       baseUrl: "http://fruitspy.test",
@@ -138,7 +138,7 @@ describe("PythonSandboxRuntime", () => {
 
     expect(result.data).toMatchObject({ artifacts: [{ media_type: "application/octet-stream" }] });
     const artifactUrl = String((result.data as { artifacts: Array<{ url: string }> }).artifacts[0]?.url);
-    const url = new URL(`http://anomalo.test${artifactUrl}`);
+    const url = new URL(`http://anomaloharis.test${artifactUrl}`);
     expect(runtime.readArtifact("exec_media", "report.html", "python-session", url.searchParams.get("artifact_token")!)).toMatchObject({ mediaType: "application/octet-stream" });
   });
 });

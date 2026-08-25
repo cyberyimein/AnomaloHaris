@@ -1,5 +1,5 @@
 {
-  "name": "@anomalo/node-host",
+  "name": "@anomaloharis/node-host",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -8,10 +8,11 @@
     "start": "node dist/main.js",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "migrate:preset-models": "node dist/migrate-preset-models.js"
+    "migrate:preset-models": "node dist/migrate-preset-models.js",
+    "migrate:naming": "node dist/migrate-anomaloharis-naming.js"
   },
   "dependencies": {
-    "@anomalo/contracts": "0.1.0",
+    "@anomaloharis/contracts": "0.1.0",
     "@fastify/static": "^10.1.3",
     "@fastify/websocket": "^11.3.0",
     "ajv": "^8.17.1",

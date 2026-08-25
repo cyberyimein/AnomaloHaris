@@ -468,7 +468,7 @@ function loadSerialPortConstructor(): SerialPortConstructor {
     // Report the actionable installation error below.
   }
   throw new BuddyConfigurationError(
-    "Serial transport requires the optional `serialport` package. Install it with `npm install --workspace @anomalo/buddy-service serialport`.",
+    "Serial transport requires the optional `serialport` package. Install it with `npm install --workspace @anomaloharis/buddy-service serialport`.",
   );
 }
 

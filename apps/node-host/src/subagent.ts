@@ -1,4 +1,4 @@
-import type { ToolCall, ToolDefinition, ToolResult } from "@anomalo/contracts";
+import type { ToolCall, ToolDefinition, ToolResult } from "@anomaloharis/contracts";
 
 import { AgentCore } from "./core.js";
 import { ReplayContextBuilder } from "./context.js";

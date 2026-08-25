@@ -1,4 +1,4 @@
-import type { AgentEvent, RunId, SessionId } from "@anomalo/contracts";
+import type { AgentEvent, RunId, SessionId } from "@anomaloharis/contracts";
 
 import { randomIds, type IdFactory } from "./ids.js";
 import type { AgentCore } from "./core.js";

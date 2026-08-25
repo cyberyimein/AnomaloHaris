@@ -1,4 +1,4 @@
-import type { ToolCall, ToolDefinition, ToolResult } from "@anomalo/contracts";
+import type { ToolCall, ToolDefinition, ToolResult } from "@anomaloharis/contracts";
 
 import { WebResearchSubagent } from "./subagent.js";
 import type { ToolRuntime } from "./tools.js";

@@ -3,7 +3,10 @@ import { fileURLToPath, URL } from "node:url";
 import vue from "@vitejs/plugin-vue";
 import { defineConfig } from "vite";
 
-const backendUrl = process.env.ANOMALO_BACKEND_URL || "http://127.0.0.1:8000";
+const backendUrl =
+  process.env.ANOMALOHARIS_BACKEND_URL ||
+  process.env.ANOMALO_BACKEND_URL || // naming-compat: legacy Vite proxy override
+  "http://127.0.0.1:8000";
 
 export default defineConfig({
   root: ".",

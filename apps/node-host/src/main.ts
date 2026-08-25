@@ -20,27 +20,29 @@ import { RunController } from "./controller.js";
 import { asToolAdapter, CompositeToolRuntime, CoreToolRuntime, PluginToolAdapter, TimeZoneToolRuntime } from "./tools.js";
 import { WebToolRuntime } from "./web.js";
 import { ServiceAuth, SqliteComputeStore, SqliteNativeRunStore } from "./compute-api.js";
+import { legacyNamingAdapter } from "@anomaloharis/contracts";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..", "..");
-const dataDir = resolve(process.env.ANOMALO_DATA_DIR ?? join(repoRoot, "data"));
-const databasePath = process.env.ANOMALO_SESSION_DB_PATH || join(dataDir, "sessions.sqlite3");
-const presetModelDatabasePath = process.env.ANOMALO_PRESET_MODEL_DB_PATH || join(dataDir, "preset-models.sqlite3");
-const computeDatabasePath = process.env.ANOMALO_COMPUTE_DB_PATH || join(dataDir, "compute.sqlite3");
+const env = (name: string): string | undefined => legacyNamingAdapter.readEnv(process.env, name);
+const dataDir = resolve(env("ANOMALOHARIS_DATA_DIR") ?? join(repoRoot, "data"));
+const databasePath = env("ANOMALOHARIS_SESSION_DB_PATH") || join(dataDir, "sessions.sqlite3");
+const presetModelDatabasePath = env("ANOMALOHARIS_PRESET_MODEL_DB_PATH") || join(dataDir, "preset-models.sqlite3");
+const computeDatabasePath = env("ANOMALOHARIS_COMPUTE_DB_PATH") || join(dataDir, "compute.sqlite3");
 const modelName = process.env.OPENROUTER_MODEL ?? "openai/gpt-4o-mini";
-const defaultPresetModelRef = process.env.ANOMALO_DEFAULT_PRESET_MODEL || DEFAULT_PRESET_MODEL_REF;
+const defaultPresetModelRef = env("ANOMALOHARIS_DEFAULT_PRESET_MODEL") || DEFAULT_PRESET_MODEL_REF;
 const apiKey = process.env.OPENROUTER_API_KEY;
 const managementApiKey = process.env.OPENROUTER_MANAGEMENT_API_KEY;
 const baseUrl = process.env.OPENAI_BASE_URL ?? "https://openrouter.ai/api/v1";
-const artifactAccessSecret = process.env.ANOMALO_ARTIFACT_SECRET || process.env.ANOMALO_ADMIN_TOKEN;
-const configuredSearchMode = process.env.ANOMALO_SEARCH_MODE;
+const artifactAccessSecret = env("ANOMALOHARIS_ARTIFACT_SECRET") || env("ANOMALOHARIS_ADMIN_TOKEN");
+const configuredSearchMode = env("ANOMALOHARIS_SEARCH_MODE");
 const defaultSearchMode = isSearchMode(configuredSearchMode) ? configuredSearchMode : DEFAULT_SEARCH_MODE;
 const subagentModel = process.env.WEB_RESEARCH_SUBAGENT_MODEL?.trim() || DEFAULT_SUBAGENT_MODEL;
 const searchTimeoutMs = Number(process.env.SEARCH_MODE_TIMEOUT_SECONDS ?? "90") * 1000;
-const staticDir = process.env.ANOMALO_FRONTEND_DIR ?? join(repoRoot, "runtime-bundle", "app", "frontend");
+const staticDir = env("ANOMALOHARIS_FRONTEND_DIR") ?? join(repoRoot, "runtime-bundle", "app", "frontend");
 const port = Number(process.env.PORT ?? "8000");
 const requestedHost = process.env.HOST ?? "127.0.0.1";
 const isPublicHost = requestedHost !== "127.0.0.1" && requestedHost !== "::1" && requestedHost !== "localhost";
-const host = isPublicHost && process.env.ANOMALO_ACKNOWLEDGE_PUBLIC_HOST !== "true" ? "127.0.0.1" : requestedHost;
+const host = isPublicHost && env("ANOMALOHARIS_ACKNOWLEDGE_PUBLIC_HOST") !== "true" ? "127.0.0.1" : requestedHost;
 const hasPublicBinding = host === requestedHost && isPublicHost;
 const providerCredits = baseUrl.includes("openrouter.ai")
   ? async (): Promise<Record<string, unknown>> => {
@@ -82,9 +84,9 @@ const providerCredits = baseUrl.includes("openrouter.ai")
   }
   : undefined;
 
-const extensionsEnabled = process.env.ANOMALO_PI_EXTENSIONS_ENABLED === "true";
+const extensionsEnabled = env("ANOMALOHARIS_PI_EXTENSIONS_ENABLED") === "true";
 const pluginConfig = extensionsEnabled
-  ? readPluginLoadConfig(process.env.ANOMALO_PLUGIN_CONFIG ?? join(repoRoot, "runtime-bundle", "config", "plugins.yaml"))
+  ? readPluginLoadConfig(env("ANOMALOHARIS_PLUGIN_CONFIG") ?? join(repoRoot, "runtime-bundle", "config", "plugins.yaml"))
   : { plugins: [] };
 const pluginCatalog = builtinPluginCatalog();
 for (const spec of pluginConfig.plugins) {
@@ -110,21 +112,21 @@ const presetModels = new SqlitePresetModelRegistry(presetModelDatabasePath, {
   catalog: pluginCatalog,
   resolvePrompt: (profile) => resources.promptText(profile),
 });
-const serviceClients = parseServiceClients(process.env.ANOMALO_SERVICE_TOKENS, process.env.ANOMALO_SERVICE_TOKEN);
+const serviceClients = parseServiceClients(env("ANOMALOHARIS_SERVICE_TOKENS"), env("ANOMALOHARIS_SERVICE_TOKEN"));
 if (hasPublicBinding && serviceClients.length === 0) {
-  throw new Error("Public host binding requires ANOMALO_SERVICE_TOKEN or ANOMALO_SERVICE_TOKENS.");
+  throw new Error("Public host binding requires ANOMALOHARIS_SERVICE_TOKEN or ANOMALOHARIS_SERVICE_TOKENS.");
 }
-if (hasPublicBinding && !process.env.ANOMALO_ADMIN_TOKEN) {
-  throw new Error("Public host binding requires a separate ANOMALO_ADMIN_TOKEN.");
+if (hasPublicBinding && !env("ANOMALOHARIS_ADMIN_TOKEN")) {
+  throw new Error("Public host binding requires a separate ANOMALOHARIS_ADMIN_TOKEN.");
 }
 const computeStore = new SqliteComputeStore(computeDatabasePath);
 const serviceAuth = new ServiceAuth({
   clients: serviceClients,
-  required: process.env.ANOMALO_SERVICE_AUTH_REQUIRED === "true" || serviceClients.length > 0 || hasPublicBinding,
+  required: env("ANOMALOHARIS_SERVICE_AUTH_REQUIRED") === "true" || serviceClients.length > 0 || hasPublicBinding,
 });
 presetModels.ensureBuiltinDefault({
   model: modelName,
-  promptProfile: process.env.ANOMALO_AGENT_PROMPT_PROFILE ?? "agent",
+  promptProfile: env("ANOMALOHARIS_AGENT_PROMPT_PROFILE") ?? "agent",
 });
 presetModels.ensureBuiltinUrusScheduledEvent({ model: modelName });
 const defaultPresetModel = presetModels.resolve(defaultPresetModelRef);
@@ -140,16 +142,18 @@ const pythonSandbox = new PythonSandboxRuntime({
   artifactsDir: join(dataDir, "artifacts"),
   ...(artifactAccessSecret ? { artifactAccessSecret } : {}),
 });
-const buddyDashboard = process.env.ANOMALO_BUDDY_SERVICE_URL?.trim()
+const buddyServiceUrl = env("ANOMALOHARIS_BUDDY_SERVICE_URL")?.trim();
+const buddyServiceToken = env("ANOMALOHARIS_BUDDY_SERVICE_TOKEN");
+const buddyDashboard = buddyServiceUrl
   ? new BuddyDashboardClient({
-    baseUrl: process.env.ANOMALO_BUDDY_SERVICE_URL,
-    ...(process.env.ANOMALO_BUDDY_SERVICE_TOKEN ? { token: process.env.ANOMALO_BUDDY_SERVICE_TOKEN } : {}),
-    timeoutMs: Number(process.env.ANOMALO_BUDDY_REQUEST_TIMEOUT_MS ?? "1500"),
+    baseUrl: buddyServiceUrl,
+    ...(buddyServiceToken ? { token: buddyServiceToken } : {}),
+    timeoutMs: Number(env("ANOMALOHARIS_BUDDY_REQUEST_TIMEOUT_MS") ?? "1500"),
   })
   : undefined;
 
 const plugins = new PiPluginHost({
-  timeoutMs: Number(process.env.ANOMALO_PLUGIN_TIMEOUT_MS ?? "30000"),
+  timeoutMs: Number(env("ANOMALOHARIS_PLUGIN_TIMEOUT_MS") ?? "30000"),
   catalog: pluginCatalog,
   ...(extensionsEnabled ? { backend: new ChildProcessPluginBackend() } : {}),
 });
@@ -216,10 +220,10 @@ function providerConfig(
   }
   const credentialRef = model.credentialRef;
   const envPrefix = credentialRef
-    ? `ANOMALO_CREDENTIAL_${credentialRef.replace(/[^a-zA-Z0-9]/g, "_").toUpperCase()}`
+    ? `ANOMALOHARIS_CREDENTIAL_${credentialRef.replace(/[^a-zA-Z0-9]/g, "_").toUpperCase()}`
     : undefined;
-  const credentialApiKey = envPrefix ? process.env[`${envPrefix}_API_KEY`] : undefined;
-  const credentialBaseUrl = envPrefix ? process.env[`${envPrefix}_BASE_URL`] : undefined;
+  const credentialApiKey = envPrefix ? env(`${envPrefix}_API_KEY`) : undefined;
+  const credentialBaseUrl = envPrefix ? env(`${envPrefix}_BASE_URL`) : undefined;
   const apiKey = credentialApiKey ?? (credentialRef === "openrouter-primary" || !credentialRef ? options.apiKey : undefined);
   const baseUrl = credentialBaseUrl ?? options.baseUrl;
   return {
@@ -277,6 +281,7 @@ const core = new AgentCore({
   plugins,
 });
 const controller = new RunController(core);
+const managementToken = env("ANOMALOHARIS_ADMIN_TOKEN");
 const app = await buildNodeHost({
   controller,
   sessions,
@@ -293,18 +298,18 @@ const app = await buildNodeHost({
   ...(providerCredits ? { providerCredits } : {}),
   subagentModel,
   pythonSandbox,
-  ...(process.env.ANOMALO_ADMIN_TOKEN ? { managementToken: process.env.ANOMALO_ADMIN_TOKEN } : {}),
+  ...(managementToken ? { managementToken } : {}),
   compute: {
     auth: serviceAuth,
     usage: computeStore,
     idempotency: computeStore,
     nativeRuns: new SqliteNativeRunStore(computeStore.db),
   },
-  logger: process.env.ANOMALO_ENV !== "test",
+  logger: env("ANOMALOHARIS_ENV") !== "test",
 });
 
 if (host !== requestedHost) {
-  console.warn("[node-host] Refusing public bind without ANOMALO_ACKNOWLEDGE_PUBLIC_HOST=true.");
+  console.warn("[node-host] Refusing public bind without ANOMALOHARIS_ACKNOWLEDGE_PUBLIC_HOST=true.");
 }
 await app.listen({ port, host });
 
@@ -329,7 +334,7 @@ function parseServiceClients(raw: string | undefined, fallbackToken: string | un
         )).map((item) => ({ id: item.id, token: item.token, scopes: item.scopes ?? ["compute:models", "compute:invoke", "compute:read"] }));
       }
     } catch (error) {
-      console.warn(`[node-host] Ignoring invalid ANOMALO_SERVICE_TOKENS JSON: ${error instanceof Error ? error.message : String(error)}`);
+      console.warn(`[node-host] Ignoring invalid ANOMALOHARIS_SERVICE_TOKENS JSON: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   return fallbackToken ? [{ id: "default", token: fallbackToken, scopes: ["compute:models", "compute:invoke", "compute:read"] }] : [];

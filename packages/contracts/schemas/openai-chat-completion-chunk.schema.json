@@ -68,7 +68,7 @@
     },
     "usage": {
       "additionalProperties": true,
-      "$id": "https://anomalo.dev/schemas/openai-usage.schema.json",
+      "$id": "https://anomaloharis.dev/schemas/openai-usage.schema.json",
       "type": "object",
       "required": [
         "prompt_tokens",

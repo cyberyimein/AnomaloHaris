@@ -154,17 +154,17 @@ describe("PiPluginHost", () => {
   });
 
   it("reads the allowlist without discovering executable files", () => {
-    const directory = mkdtempSync(join(tmpdir(), "anomalo-plugin-config-"));
+    const directory = mkdtempSync(join(tmpdir(), "anomaloharis-plugin-config-"));
     tempDirectories.push(directory);
     const path = join(directory, "plugins.yaml");
-    writeFileSync(path, `plugins:\n  - id: sample\n    entry: ./sample.mjs\n    compatibility: L3\n    enabled: true\n    environment: [ANOMALO_BUDDY_SERVICE_URL, ANOMALO_BUDDY_SERVICE_TOKEN]\n`);
+    writeFileSync(path, `plugins:\n  - id: sample\n    entry: ./sample.mjs\n    compatibility: L3\n    enabled: true\n    environment: [ANOMALOHARIS_BUDDY_SERVICE_URL, ANOMALOHARIS_BUDDY_SERVICE_TOKEN]\n`);
     expect(readPluginLoadConfig(path)).toEqual({
       plugins: [{
         id: "sample",
         entry: "./sample.mjs",
         compatibility: "L3",
         enabled: true,
-        environment: ["ANOMALO_BUDDY_SERVICE_URL", "ANOMALO_BUDDY_SERVICE_TOKEN"],
+        environment: ["ANOMALOHARIS_BUDDY_SERVICE_URL", "ANOMALOHARIS_BUDDY_SERVICE_TOKEN"],
       }],
     });
   });

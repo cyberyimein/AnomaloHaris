@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import sharedFixtures from "@anomalo/contracts/fixtures/agent-events.json";
+import sharedFixtures from "@anomaloharis/contracts/fixtures/agent-events.json";
 import { createAgentSessionProjection } from "./agentSessionProjection";
 
 describe("shared Node event fixture projection", () => {

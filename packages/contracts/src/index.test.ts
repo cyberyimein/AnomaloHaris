@@ -7,7 +7,7 @@ import {
   validateContract,
 } from "./index.js";
 
-describe("@anomalo/contracts", () => {
+describe("@anomaloharis/contracts", () => {
   it("validates the versioned golden event fixtures", () => {
     for (const event of fixtures.normal_text) {
       expect(validateAgentEvent(event)).toBe(true);
@@ -54,11 +54,11 @@ describe("@anomalo/contracts", () => {
       validateContract("runRequest", { message: "hello", resume: false }).valid,
     ).toBe(true);
     expect(
-      validateContract("runRequest", { message: "hello", preset_model: "anomalo@1" }).valid,
+      validateContract("runRequest", { message: "hello", preset_model: "anomaloharis@1" }).valid,
     ).toBe(true);
     expect(
       validateContract("presetModelDefinition", {
-        name: "anomalo",
+        name: "anomaloharis",
         version: 1,
         description: "Default",
         provider: { adapter: "openai-compatible", model: "test", tool_protocol: "auto" },
@@ -67,7 +67,7 @@ describe("@anomalo/contracts", () => {
     ).toBe(true);
     expect(
       validateContract("llmRequestEventData", {
-        model_ref: "anomalo@1",
+        model_ref: "anomaloharis@1",
         provider_model: "test",
         iteration: 1,
         request: { message_count: 2, tool_count: 1, response_format: "text" },

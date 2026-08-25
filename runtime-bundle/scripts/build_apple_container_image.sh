@@ -105,11 +105,11 @@ echo "Saving $IMAGE_REF to $ARCHIVE_PATH"
 "$CONTAINER_CLI" "${save_args[@]}"
 
 {
-    write_env_value ANOMALO_IMAGE_REF "$IMAGE_REF"
-    write_env_value ANOMALO_IMAGE_ARCHIVE "$ARCHIVE_PATH"
-    write_env_value ANOMALO_IMAGE_PLATFORM "$PLATFORM"
-    write_env_value ANOMALO_IMAGE_DOCKERFILE "$DOCKERFILE"
-    write_env_value ANOMALO_IMAGE_CREATED_AT "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    write_env_value ANOMALOHARIS_IMAGE_REF "$IMAGE_REF"
+    write_env_value ANOMALOHARIS_IMAGE_ARCHIVE "$ARCHIVE_PATH"
+    write_env_value ANOMALOHARIS_IMAGE_PLATFORM "$PLATFORM"
+    write_env_value ANOMALOHARIS_IMAGE_DOCKERFILE "$DOCKERFILE"
+    write_env_value ANOMALOHARIS_IMAGE_CREATED_AT "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 } >"$METADATA_PATH"
 
 echo "Wrote metadata to $METADATA_PATH"

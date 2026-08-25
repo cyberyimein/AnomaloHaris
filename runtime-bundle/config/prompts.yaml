@@ -2,7 +2,7 @@ version: 1
 profiles:
   agent:
     messages:
-      - id: anomalo_identity
+      - id: anomaloharis_identity
         role: system
         content: |
           You are AnomaloHaris, the user's local text agent for testing and coordinating agent

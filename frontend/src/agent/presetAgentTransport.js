@@ -78,7 +78,7 @@ export function createPresetAgentTransport({
         throw new Error(payload.detail || payload.error || `Preset model request failed (${response.status}).`);
       }
 
-      const responseSessionId = response.headers?.get("X-Anomalo-Session-Id");
+      const responseSessionId = response.headers?.get("X-AnomaloHaris-Session-Id");
       if (responseSessionId) {
         switchSession(responseSessionId);
       }

@@ -2,7 +2,7 @@ import { dirname } from "node:path";
 import { mkdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 
-import type { EntryId, RunId, SessionId } from "@anomalo/contracts";
+import type { EntryId, RunId, SessionId } from "@anomaloharis/contracts";
 
 import { systemClock, type Clock } from "./clock.js";
 import { randomIds, type IdFactory } from "./ids.js";

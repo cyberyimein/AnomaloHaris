@@ -36,13 +36,13 @@ export const OpenAIChatCompletionRequestSchema = Type.Object({
   provider: Type.Optional(Type.Unknown()),
   prompt: Type.Optional(Type.Unknown()),
   plugins: Type.Optional(Type.Unknown()),
-}, { additionalProperties: true, $id: "https://anomalo.dev/schemas/openai-chat-completion-request.schema.json" });
+}, { additionalProperties: true, $id: "https://anomaloharis.dev/schemas/openai-chat-completion-request.schema.json" });
 
 export const OpenAIUsageSchema = Type.Object({
   prompt_tokens: Type.Integer({ minimum: 0 }),
   completion_tokens: Type.Integer({ minimum: 0 }),
   total_tokens: Type.Integer({ minimum: 0 }),
-}, { additionalProperties: true, $id: "https://anomalo.dev/schemas/openai-usage.schema.json" });
+}, { additionalProperties: true, $id: "https://anomaloharis.dev/schemas/openai-usage.schema.json" });
 
 export const OpenAIChatCompletionResponseSchema = Type.Object({
   id: Type.String({ minLength: 1 }),

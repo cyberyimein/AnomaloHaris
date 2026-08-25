@@ -1,6 +1,6 @@
 {
   "additionalProperties": true,
-  "$id": "https://anomalo.dev/schemas/agent-event.schema.json",
+  "$id": "https://anomaloharis.dev/schemas/agent-event.schema.json",
   "type": "object",
   "required": [
     "type",

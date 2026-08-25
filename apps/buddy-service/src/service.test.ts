@@ -117,7 +117,7 @@ describe("BuddyService", () => {
     const resolved = settingsFromEnv({
       BUDDY_HOST: "0.0.0.0",
       BUDDY_SERVICE_TOKEN: "service-secret",
-      ANOMALO_ADMIN_TOKEN: "legacy-hook-secret",
+      ANOMALO_ADMIN_TOKEN: "legacy-hook-secret", // naming-compat
       BUDDY_AUTO_CONNECT: "false",
     });
 

@@ -1,4 +1,4 @@
-import { normalizeAgentEvent, normalizeWebSocketMessage } from "@anomalo/contracts";
+import { normalizeAgentEvent, normalizeWebSocketMessage } from "@anomaloharis/contracts";
 
 export function parseAgentEvent(value) {
   return normalizeAgentEvent(value);

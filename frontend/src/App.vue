@@ -672,7 +672,7 @@
             >
               <input
                 type="radio"
-                name="anomalo-search-mode"
+                name="anomaloharis-search-mode"
                 :value="option.id"
                 :checked="displayedSearchMode === option.id"
                 :disabled="chatRunActive || searchModeSaveInFlight || presetMode"

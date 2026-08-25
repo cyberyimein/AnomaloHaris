@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { legacyNamingAdapter } from "@anomaloharis/contracts";
 import { FileResourceLoader } from "./resources.js";
 import { builtinPluginCatalog } from "./plugin-catalog.js";
 import { SqlitePresetModelRegistry, type LegacyPresetAgent } from "./preset-models.js";
@@ -10,7 +11,7 @@ import type { BootstrapToolRequest } from "./types.js";
 
 const args = new Set(process.argv.slice(2));
 const sourcePath = flagValue("--source");
-const targetPath = flagValue("--target") ?? process.env.ANOMALO_PRESET_MODEL_DB_PATH ?? defaultTargetPath();
+const targetPath = flagValue("--target") ?? legacyNamingAdapter.readEnv(process.env, "ANOMALOHARIS_PRESET_MODEL_DB_PATH") ?? defaultTargetPath();
 
 if (!sourcePath || !targetPath) {
   console.error("Usage: npm run migrate:preset-models -- --source <preset-agents.sqlite3> [--target <preset-models.sqlite3>] [--apply]");

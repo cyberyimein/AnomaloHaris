@@ -1,5 +1,5 @@
 {
-  "name": "@anomalo/buddy-bridge",
+  "name": "@anomaloharis/buddy-bridge",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -18,6 +18,6 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@anomalo/contracts": "0.1.0"
+    "@anomaloharis/contracts": "0.1.0"
   }
 }

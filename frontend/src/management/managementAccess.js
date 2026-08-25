@@ -1,10 +1,19 @@
 import { computed, ref } from "vue";
 
+const ADMIN_TOKEN_STORAGE_KEY = "anomaloharis.adminToken";
+const LEGACY_ADMIN_TOKEN_STORAGE_KEY = "anomalo.adminToken"; // naming-compat: legacy browser admin token key
+
 export function createManagementAccess({
   fetchImpl = globalThis.fetch,
   storage = globalThis.localStorage,
 } = {}) {
-  const token = ref(storage?.getItem("anomalo.adminToken") || "");
+  const canonicalToken = storage?.getItem(ADMIN_TOKEN_STORAGE_KEY) || "";
+  const legacyToken = canonicalToken ? "" : storage?.getItem(LEGACY_ADMIN_TOKEN_STORAGE_KEY) || "";
+  const token = ref(canonicalToken || legacyToken);
+  if (!canonicalToken && legacyToken) {
+    storage?.setItem(ADMIN_TOKEN_STORAGE_KEY, legacyToken);
+    storage?.removeItem?.(LEGACY_ADMIN_TOKEN_STORAGE_KEY);
+  }
   const input = ref(token.value);
   const accessRequired = ref(false);
 
@@ -18,16 +27,18 @@ export function createManagementAccess({
     if (token.value) {
       return "Stored only in this browser and sent with management requests.";
     }
-    return "Only required when the backend has ANOMALO_ADMIN_TOKEN configured.";
+    return "Only required when the backend has ANOMALOHARIS_ADMIN_TOKEN configured.";
   });
 
   function save() {
     token.value = input.value.trim();
     accessRequired.value = false;
     if (token.value) {
-      storage?.setItem("anomalo.adminToken", token.value);
+      storage?.setItem(ADMIN_TOKEN_STORAGE_KEY, token.value);
+      storage?.removeItem?.(LEGACY_ADMIN_TOKEN_STORAGE_KEY);
     } else {
-      storage?.removeItem("anomalo.adminToken");
+      storage?.removeItem(ADMIN_TOKEN_STORAGE_KEY);
+      storage?.removeItem?.(LEGACY_ADMIN_TOKEN_STORAGE_KEY);
     }
     return token.value;
   }
@@ -92,7 +103,7 @@ function withManagementAccess(url, options = {}, token) {
     return options;
   }
   const headers = new Headers(options.headers || {});
-  headers.set("X-Anomalo-Admin-Token", token);
+  headers.set("X-AnomaloHaris-Admin-Token", token);
   return { ...options, headers };
 }
 

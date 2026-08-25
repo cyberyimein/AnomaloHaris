@@ -54,7 +54,7 @@ token；公共监听必须同时配置 token。
 `runtime-bundle/skills/buddy/SKILL.md` 负责告诉模型何时使用 `buddy_*` 工具，以及设备不可用时
 如何降级。工具只有在当前 Preset Model 固定绑定 `buddy-bridge@1.0.0` 后才会进入工具图。
 
-不要修改已发布的 `luna@1` 或默认 `anomalo@1` 来偷偷加入硬件能力。需要 Luna 控制 Buddy 时，
+不要修改已发布的 `luna@1` 或默认 `anomaloharis@1` 来偷偷加入硬件能力。需要 Luna 控制 Buddy 时，
 发布新的 `luna-buddy@1` 或 `luna@2`，并让该版本同时绑定：
 
 ```yaml
@@ -80,13 +80,13 @@ plugins:
 ## 5. 启动与验证
 
 ```bash
-npm run build --workspace @anomalo/buddy-service
-npm run start --workspace @anomalo/buddy-service
+npm run build --workspace @anomaloharis/buddy-service
+npm run start --workspace @anomaloharis/buddy-service
 
 # Node Host 侧
-ANOMALO_PI_EXTENSIONS_ENABLED=true \
-  ANOMALO_PLUGIN_CONFIG=./runtime-bundle/config/plugins.yaml \
-  npm run start --workspace @anomalo/node-host
+ANOMALOHARIS_PI_EXTENSIONS_ENABLED=true \
+  ANOMALOHARIS_PLUGIN_CONFIG=./runtime-bundle/config/plugins.yaml \
+  npm run start --workspace @anomaloharis/node-host
 ```
 
 没有真实设备时，`/healthz` 和插件加载仍应成功；控制工具应返回明确的
@@ -94,7 +94,7 @@ ANOMALO_PI_EXTENSIONS_ENABLED=true \
 
 ### Apple Container 部署
 
-Buddy 服务仍然是独立容器。它必须与 Anomalo 位于同一个
+Buddy 服务仍然是独立容器。它必须与 AnomaloHaris 位于同一个
 `anomaloharis-external` 网络，Node Host 使用该网络网关映射的 Buddy
 HTTP 端口访问；Apple Container 当前不提供可靠的容器名 DNS，且
 `host.docker.internal` 是 Docker 专用地址。公开监听时必须同时设置

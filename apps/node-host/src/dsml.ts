@@ -1,4 +1,4 @@
-import type { ToolCall } from "@anomalo/contracts";
+import type { ToolCall } from "@anomaloharis/contracts";
 
 const DSML_TAG_PATTERN = "(?:｜|\\|)DSML(?:｜|\\|)";
 const TOOL_CALLS_START = new RegExp(`<${DSML_TAG_PATTERN}tool_calls>`, "i");

@@ -84,7 +84,7 @@ Never commit `.env` or another file containing real credentials.
 ## Frontend development
 
 Install the workspace dependencies from the repository root so the frontend can
-resolve `@anomalo/contracts`:
+resolve `@anomaloharis/contracts`:
 
 ```bash
 npm install
@@ -96,7 +96,7 @@ Start the Node Host first, then run Vite in another terminal:
 npm --prefix frontend run dev
 ```
 
-Open <http://127.0.0.1:5173>. Vite proxies `/api`, `/ws`, `/health`, `/fonts`, and `/static` to the backend on port `8000` by default. Set `ANOMALO_BACKEND_URL` when the backend uses a different origin.
+Open <http://127.0.0.1:5173>. Vite proxies `/api`, `/ws`, `/health`, `/fonts`, and `/static` to the backend on port `8000` by default. Set `ANOMALOHARIS_BACKEND_URL` when the backend uses a different origin.
 
 To refresh the frontend bundle committed for the Node Host:
 
@@ -116,7 +116,7 @@ All runtime configuration comes from the root `.env`. The most commonly used var
 | `OPENROUTER_MANAGEMENT_API_KEY` | Enables the credits widget | unset |
 | `OPENAI_BASE_URL` | OpenAI-compatible API base URL | OpenRouter |
 | `OPENROUTER_MODEL` | Model identifier | `openai/gpt-4o-mini` |
-| `ANOMALO_SEARCH_MODE` | Default retrieval mode for new sessions: `native`, `subagent`, or `diy` | `diy` |
+| `ANOMALOHARIS_SEARCH_MODE` | Default retrieval mode for new sessions: `native`, `subagent`, or `diy` | `diy` |
 | `WEB_RESEARCH_SUBAGENT_MODEL` | Fixed model used by the retrieval subagent | `deepseek/deepseek-v4-flash-0731` |
 | `SEARCH_MODE_TIMEOUT_SECONDS` | Timeout for Responses API retrieval calls | `90` |
 | `PYTHON_SANDBOX_ENABLED` | Enables the external FruitSpy Python tool | `true` |
@@ -125,20 +125,20 @@ All runtime configuration comes from the root `.env`. The most commonly used var
 | `FRUITSPY_PYTHON_TOOL_API_PATH` | FruitSpy Python API path | `/api/v1/tools/python` |
 | `FRUITSPY_PYTHON_TOOL_TOKEN` | Bearer token for FruitSpy | unset |
 | `FRUITSPY_PYTHON_TOOL_STATUS_TIMEOUT_SECONDS` | FruitSpy readiness-check timeout | `2` |
-| `ANOMALO_ARTIFACT_SECRET` | Stable secret for signed browser-readable artifact URLs | unset (ephemeral) |
+| `ANOMALOHARIS_ARTIFACT_SECRET` | Stable secret for signed browser-readable artifact URLs | unset (ephemeral) |
 | `MAX_TOOL_ITERATIONS` | Maximum model/tool loop iterations per run | `50` |
 | `AGENT_RUN_TIMEOUT_SECONDS` | Maximum wall-clock duration for one resumable run | `600` |
-| `ANOMALO_ADMIN_TOKEN` | Authorizes remote management requests | unset |
-| `ANOMALO_SESSION_SCHEMA` | Session adapter schema | `v2` |
-| `ANOMALO_PI_EXTENSIONS_ENABLED` | Enable the configured trusted Pi extensions | `false` |
-| `ANOMALO_PLUGIN_CONFIG` | Explicit plugin allowlist | `./runtime-bundle/config/plugins.yaml` |
-| `ANOMALO_PLUGIN_TIMEOUT_MS` | Plugin hook/tool timeout | `30000` |
-| `ANOMALO_BUDDY_SERVICE_URL` | Optional Buddy backend URL used by the Buddy dashboard proxy and `buddy-bridge` | `http://127.0.0.1:8765` |
-| `ANOMALO_BUDDY_SERVICE_TOKEN` | Token forwarded to the independent Buddy service by the dashboard proxy and allowlisted child plugin | unset |
-| `ANOMALO_BUDDY_REQUEST_TIMEOUT_MS` | Buddy bridge request timeout | `1500` |
-| `ANOMALO_AGENT_PROMPT_PROFILE` | Default prompt profile | `agent` |
+| `ANOMALOHARIS_ADMIN_TOKEN` | Authorizes remote management requests | unset |
+| `ANOMALOHARIS_SESSION_SCHEMA` | Session adapter schema | `v2` |
+| `ANOMALOHARIS_PI_EXTENSIONS_ENABLED` | Enable the configured trusted Pi extensions | `false` |
+| `ANOMALOHARIS_PLUGIN_CONFIG` | Explicit plugin allowlist | `./runtime-bundle/config/plugins.yaml` |
+| `ANOMALOHARIS_PLUGIN_TIMEOUT_MS` | Plugin hook/tool timeout | `30000` |
+| `ANOMALOHARIS_BUDDY_SERVICE_URL` | Optional Buddy backend URL used by the Buddy dashboard proxy and `buddy-bridge` | `http://127.0.0.1:8765` |
+| `ANOMALOHARIS_BUDDY_SERVICE_TOKEN` | Token forwarded to the independent Buddy service by the dashboard proxy and allowlisted child plugin | unset |
+| `ANOMALOHARIS_BUDDY_REQUEST_TIMEOUT_MS` | Buddy bridge request timeout | `1500` |
+| `ANOMALOHARIS_AGENT_PROMPT_PROFILE` | Default prompt profile | `agent` |
 | `WEB_TOOLS_ENABLED` | Publishes DuckDuckGo search and Markdown fetch tools | `true` |
-| `ANOMALO_DATA_DIR` | Persistent SQLite data directory | `./data` |
+| `ANOMALOHARIS_DATA_DIR` | Persistent SQLite data directory | `./data` |
 
 See [`.env.example`](.env.example) for the complete template. Empty optional values are intentionally safe to commit.
 
@@ -148,7 +148,7 @@ The Node Host does not embed Buddy hardware, audio, or vision runtimes. Buddy
 runs as an independent optional Node service in `apps/buddy-service/`. The UI's
 Buddy tab is an admin-only control-plane proxy for status, events, connection,
 and lightweight state commands; it is not a model-visible ToolRuntime. The
-Node Host uses the explicitly allowlisted `@anomalo/buddy-bridge` plugin and
+Node Host uses the explicitly allowlisted `@anomaloharis/buddy-bridge` plugin and
 the `runtime-bundle/skills/buddy` Skill only when an Agent Preset Model binds
 that plugin.
 Audio, vision, camera, and media processing remain outside this integration.
@@ -156,12 +156,12 @@ Audio, vision, camera, and media processing remain outside this integration.
 Start the Buddy service separately when a device is available:
 
 ```bash
-npm run build --workspace @anomalo/buddy-service
-npm run start --workspace @anomalo/buddy-service
+npm run build --workspace @anomaloharis/buddy-service
+npm run start --workspace @anomaloharis/buddy-service
 ```
 
 For an Apple Container deployment, build and deploy the independent service
-on the same `anomaloharis-external` network as Anomalo. Copy
+on the same `anomaloharis-external` network as AnomaloHaris. Copy
 `runtime-bundle/deploy/buddy-service.container.env.example` to the ignored
 `runtime-bundle/deploy/buddy-service.container.env`, set both service tokens
 and the device transport values, then run:
@@ -176,13 +176,13 @@ runtime-bundle/scripts/deploy_buddy_container.sh \
   runtime-bundle/artifacts/container-images/buddy-service-<tag>-linux-arm64.env
 ```
 
-The Anomalo env file must use the `anomaloharis-external` network gateway for
-the published Buddy port (currently `ANOMALO_BUDDY_SERVICE_URL=http://192.168.67.1:8765`;
+The AnomaloHaris env file must use the `anomaloharis-external` network gateway for
+the published Buddy port (currently `ANOMALOHARIS_BUDDY_SERVICE_URL=http://192.168.67.1:8765`;
 confirm the gateway with `container network inspect anomaloharis-external`) and
-the matching `ANOMALO_BUDDY_SERVICE_TOKEN`. The Buddy deployment publishes TCP
+the matching `ANOMALOHARIS_BUDDY_SERVICE_TOKEN`. The Buddy deployment publishes TCP
 `8787` for a remote device by default.
 
-Set `ANOMALO_PI_EXTENSIONS_ENABLED=true` in the Node Host and keep the Buddy
+Set `ANOMALOHARIS_PI_EXTENSIONS_ENABLED=true` in the Node Host and keep the Buddy
 service on loopback for local development. Public Buddy deployments require
 separate `BUDDY_SERVICE_TOKEN` and `BUDDY_HOOK_TOKEN` values. The Node service
 owns Call Buddy transport, Hook Relay state, and approvals; the Agent Host only
@@ -227,9 +227,9 @@ for this migration.
 `sandbox_python_run` is an external capability. The Node Host sends code to FruitSpy over the
 configured HTTP API and never starts a Python process or installs Python in the AnomaloHaris
 container. FruitSpy must be reachable from the container, and its Bearer token should be kept in
-the private `.env`. Requested artifacts are cached under `ANOMALO_DATA_DIR/artifacts/python/` and
+the private `.env`. Requested artifacts are cached under `ANOMALOHARIS_DATA_DIR/artifacts/python/` and
 served through signed, session-bound artifact URLs; raster images remain inline while other files
-download as inert attachments. Set `ANOMALO_ARTIFACT_SECRET` to keep URLs valid across restarts
+download as inert attachments. Set `ANOMALOHARIS_ARTIFACT_SECRET` to keep URLs valid across restarts
 (the admin token is used as a fallback). See
 [`runtime-bundle/docs/fruitspy-python-sandbox-api-requirements.md`](runtime-bundle/docs/fruitspy-python-sandbox-api-requirements.md)
 for the endpoint contract.
@@ -279,14 +279,14 @@ reuses it on resume.
 
 The **Preset Models** tab creates immutable, versioned Agent capability bundles. A Preset Model
 fixes the prompt, plugin set, provider model, tool policy, and runtime limits; callers select it
-with an explicit `name@version` such as `anomalo@1` or `fomc-brief@3`. Definitions are stored in
-`ANOMALO_DATA_DIR/preset-models.sqlite3`. Management requests use
+with an explicit `name@version` such as `anomaloharis@1` or `fomc-brief@3`. Definitions are stored in
+`ANOMALOHARIS_DATA_DIR/preset-models.sqlite3`. Management requests use
 `GET /api/preset-models` is the public published-model listing used by the
 control panel. Draft/retired definitions and all mutations use
 `GET/POST /api/manage/preset-models` plus the versioned `validate`, `publish`,
-and `retire` routes and require `ANOMALO_ADMIN_TOKEN`.
+and `retire` routes and require `ANOMALOHARIS_ADMIN_TOKEN`.
 
-The default chat entry point resolves `ANOMALO_DEFAULT_PRESET_MODEL` (default `anomalo@1`).
+The default chat entry point resolves `ANOMALOHARIS_DEFAULT_PRESET_MODEL` (default `anomaloharis@1`).
 External services can use the collected compatibility route or the native compute API; neither
 route permits callers to override the Preset Model prompt, plugins, provider model, or tool list.
 
@@ -338,8 +338,18 @@ To replace records from the retired Preset Agent database, run a dry run first a
 `--apply`:
 
 ```bash
-npm --workspace @anomalo/node-host run migrate:preset-models -- --source data/preset-agents.sqlite3
-npm --workspace @anomalo/node-host run migrate:preset-models -- --source data/preset-agents.sqlite3 --apply
+npm --workspace @anomaloharis/node-host run migrate:preset-models -- --source data/preset-agents.sqlite3
+npm --workspace @anomaloharis/node-host run migrate:preset-models -- --source data/preset-agents.sqlite3 --apply
+```
+
+Stage 0 naming migration is separate from the legacy Preset Agent import. Check the repository
+allowlist first, then run the SQLite migration in dry-run mode before applying it. The apply mode
+creates a `.stage0-backup-*` beside every changed database and recompiles Preset Model snapshots:
+
+```bash
+npm run check:naming
+npm run migrate:naming --workspace @anomaloharis/node-host -- --data-dir ./data
+npm run migrate:naming --workspace @anomaloharis/node-host -- --data-dir ./data --apply
 ```
 
 ### Prompt profiles and memory
@@ -412,9 +422,9 @@ ENV_FILE=runtime-bundle/deploy/anomaloharis.container.env \
 ```
 
 The private deployment environment file is ignored by Git. Review both scripts and adapt the network, storage, SSH, and host-loopback settings to your machine before running them.
-Before deployment, set `ANOMALO_SERVICE_TOKEN` and the separate `ANOMALO_ADMIN_TOKEN` to different long random secrets. The production image listens on `0.0.0.0` only with explicit acknowledgement and refuses to start without both tokens; compute callers send the service token as a Bearer token, while the dashboard sends the admin token only to management routes.
+Before deployment, set `ANOMALOHARIS_SERVICE_TOKEN` and the separate `ANOMALOHARIS_ADMIN_TOKEN` to different long random secrets. The production image listens on `0.0.0.0` only with explicit acknowledgement and refuses to start without both tokens; compute callers send the service token as a Bearer token, while the dashboard sends the admin token only to management routes.
 
-The deployment script mounts `REMOTE_DATA_DIR` from the deployment host to `/data` in the container. Session history and Stop/Resume checkpoints are stored in `/data/sessions.sqlite3`; Preset Models are stored in `/data/preset-models.sqlite3`; usage, idempotency reservations, and Native Run events are stored in `/data/compute.sqlite3`. Keep this directory on persistent host storage and do not delete it when replacing the container. By default it reuses an existing `.anomalo/anomalo-data` directory, otherwise it creates `.anomaloharis/anomaloharis-data`; set `REMOTE_STORAGE_ROOT` or `REMOTE_DATA_DIR` to an explicit host path when needed.
+The deployment script mounts `REMOTE_DATA_DIR` from the deployment host to `/data` in the container. Session history and Stop/Resume checkpoints are stored in `/data/sessions.sqlite3`; Preset Models are stored in `/data/preset-models.sqlite3`; usage, idempotency reservations, and Native Run events are stored in `/data/compute.sqlite3`. Keep this directory on persistent host storage and do not delete it when replacing the container. By default it reuses an existing legacy `.anomalo/anomalo-data` directory when present, otherwise it creates `.anomaloharis/anomaloharis-data`; set `REMOTE_STORAGE_ROOT` or `REMOTE_DATA_DIR` to an explicit host path when needed. <!-- naming-compat -->
 
 ## Tests and linting
 
@@ -435,7 +445,7 @@ the Node production image.
 ## Security notes
 
 - Keep all credentials in the ignored root `.env` or a secret manager.
-- Set a strong `ANOMALO_ADMIN_TOKEN` before allowing non-loopback management requests.
+- Set a strong `ANOMALOHARIS_ADMIN_TOKEN` before allowing non-loopback management requests.
 - The current application does not provide complete user authentication for chat, memory, session, prompt, or credits endpoints. Put an authenticated reverse proxy or equivalent access control in front of any non-local deployment.
 - Loopback checks can be affected by reverse proxies. Do not assume they provide end-user authentication.
 - Plugins are trusted local code or isolated child processes and must be explicitly allowlisted.

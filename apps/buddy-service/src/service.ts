@@ -1,6 +1,8 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { isIP } from "node:net";
 
+import { legacyNamingAdapter } from "@anomaloharis/contracts";
+
 import {
   BuddyConfigurationError,
   BuddyConnectionError,
@@ -112,6 +114,7 @@ export class BuddyService {
 }
 
 export function settingsFromEnv(env: NodeJS.ProcessEnv = process.env): BuddyServerSettings {
+  const readEnv = (name: string): string | undefined => legacyNamingAdapter.readEnv(env, name);
   const host = env.BUDDY_HOST?.trim() || "127.0.0.1";
   const settings: BuddyServerSettings = {
     host,
@@ -119,8 +122,8 @@ export function settingsFromEnv(env: NodeJS.ProcessEnv = process.env): BuddyServ
     serviceToken: env.BUDDY_SERVICE_TOKEN ?? "",
     hookToken: firstNonEmpty(
       env.BUDDY_HOOK_TOKEN,
-      env.ANOMALO_COPILOT_HOOK_ADMIN_TOKEN,
-      env.ANOMALO_ADMIN_TOKEN,
+      readEnv("ANOMALOHARIS_COPILOT_HOOK_ADMIN_TOKEN"),
+      readEnv("ANOMALOHARIS_ADMIN_TOKEN"),
     ),
     approvalEnabled: booleanEnv(env.BUDDY_APPROVAL_ENABLED, false),
     approvalTimeoutSeconds: Math.max(0.1, floatEnv(env.BUDDY_APPROVAL_TIMEOUT_SECONDS, 30)),
@@ -248,8 +251,8 @@ function authorized(request: IncomingMessage, expected: string, host: string): b
   if (!expected) return isLoopbackHost(host);
   const header = request.headers.authorization;
   if (typeof header === "string" && header.startsWith("Bearer ") && header.slice("Bearer ".length).trim() === expected) return true;
-  const legacyHeader = request.headers["x-anomalo-admin-token"];
-  return typeof legacyHeader === "string" && legacyHeader.trim() === expected;
+  const managementHeader = legacyNamingAdapter.readHeader(request.headers, "x-anomaloharis-admin-token");
+  return managementHeader?.trim() === expected;
 }
 
 function writeJson(response: ServerResponse, status: number, payload: Record<string, unknown>): void {

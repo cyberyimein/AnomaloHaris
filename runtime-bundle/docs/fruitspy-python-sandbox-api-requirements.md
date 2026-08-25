@@ -95,7 +95,7 @@ FruitSpy may return artifact descriptors with a relative or same-origin URL:
 
 The Node Host accepts only safe single-component names, same-origin URLs below the configured API
 path, and files up to 2 MB. It downloads them with the FruitSpy Bearer token, caches them below
-`ANOMALO_DATA_DIR/artifacts/python/<execution_id>/`, and exposes signed, session-bound local URLs in
+`ANOMALOHARIS_DATA_DIR/artifacts/python/<execution_id>/`, and exposes signed, session-bound local URLs in
 the tool result as `/api/artifacts/python/<execution_id>/<name>?session_id=...&artifact_token=...`.
 Only raster image types are served inline; all other artifact types are returned as inert downloads
 with `X-Content-Type-Options: nosniff`.

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "target_runtime": "node",
-  "default_preset_model": "anomalo@1",
+  "default_preset_model": "anomaloharis@1",
   "status": "partial",
   "source": {
     "legacy_python_host": "removed",

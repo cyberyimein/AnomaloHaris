@@ -150,7 +150,7 @@ const managementTokenHint = computed(() => {
   if (accessRequired.value && !managementToken.value) return "Remote Buddy control needs an admin token.";
   if (accessRequired.value) return "Saved token was rejected by the server.";
   if (managementToken.value) return "Token saved in this browser.";
-  return "Set ANOMALO_ADMIN_TOKEN, then save it here.";
+  return "Set ANOMALOHARIS_ADMIN_TOKEN, then save it here.";
 });
 
 onMounted(() => {

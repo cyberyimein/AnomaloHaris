@@ -1,4 +1,4 @@
-import type { ToolCall, ToolResult } from "@anomalo/contracts";
+import type { ToolCall, ToolResult } from "@anomaloharis/contracts";
 
 import { systemClock, type Clock } from "./clock.js";
 import { ReplayContextBuilder, type ContextBuilder } from "./context.js";

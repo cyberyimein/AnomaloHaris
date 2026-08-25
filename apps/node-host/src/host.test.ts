@@ -86,7 +86,7 @@ describe("Node Host", () => {
   });
 
   it("serves the frontend shell when a static directory is configured", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "anomalo-node-host-"));
+    const directory = mkdtempSync(join(tmpdir(), "anomaloharis-node-host-"));
     tempDirectories.push(directory);
     writeFileSync(join(directory, "index.html"), "<html>node-host</html>");
     writeFileSync(join(directory, "app.js"), "console.log('asset')");
@@ -119,9 +119,9 @@ describe("Node Host", () => {
     apps.push(app);
 
     const models = await app.inject({ method: "GET", url: "/api/preset-models" });
-    expect(models.json()).toMatchObject({ default_preset_model: "anomalo@1" });
+    expect(models.json()).toMatchObject({ default_preset_model: "anomaloharis@1" });
     expect(models.json().preset_models).toEqual(expect.arrayContaining([
-      expect.objectContaining({ ref: "anomalo@1", status: "published" }),
+      expect.objectContaining({ ref: "anomaloharis@1", status: "published" }),
       expect.objectContaining({ ref: "luna@1", status: "published" }),
     ]));
 
@@ -236,7 +236,7 @@ describe("Node Host", () => {
       undefined,
       undefined,
       sessions,
-      "anomalo@1",
+      "anomaloharis@1",
     );
     apps.push(first);
     const initial = await first.inject({ method: "POST", url: "/api/chat", payload: { session_id: "stable-session", message: "first" } });
@@ -259,7 +259,7 @@ describe("Node Host", () => {
   });
 
   it("serves resource debug APIs and keeps management/plugin metadata separate", async () => {
-    const root = mkdtempSync(join(tmpdir(), "anomalo-host-resources-"));
+    const root = mkdtempSync(join(tmpdir(), "anomaloharis-host-resources-"));
     tempDirectories.push(root);
     mkdirSync(join(root, "config"), { recursive: true });
     writeFileSync(join(root, "config", "prompts.yaml"), "profiles:\n  agent:\n    messages:\n      - role: system\n        content: |\n          Luna prompt.\n");
@@ -289,7 +289,7 @@ describe("Node Host", () => {
     const draft = await app.inject({
       method: "POST",
       url: "/api/manage/preset-models",
-      headers: { "x-anomalo-admin-token": "secret" },
+      headers: { "x-anomaloharis-admin-token": "secret" },
       payload: {
         name: "luna",
         version: 1,
@@ -299,10 +299,24 @@ describe("Node Host", () => {
     });
     expect(draft.statusCode).toBe(201);
     expect(draft.json().preset_model.ref).toBe("luna@1");
+
+    const legacyHeaderDraft = await app.inject({
+      method: "POST",
+      url: "/api/manage/preset-models",
+      headers: { "x-anomalo-admin-token": "secret" }, // naming-compat
+      payload: {
+        name: "legacy-header",
+        version: 1,
+        description: "Legacy header compatibility check",
+        provider: { adapter: "openai-compatible", model: "legacy-header-provider" },
+      },
+    });
+    expect(legacyHeaderDraft.statusCode).toBe(201);
+    expect(legacyHeaderDraft.json().preset_model.ref).toBe("legacy-header@1");
   });
 
   it("shows registered plugin catalog entries even when optional child plugins are disabled", async () => {
-    const app = await makeApp([], undefined, undefined, undefined, undefined, undefined, undefined, "anomalo@1", builtinPluginCatalog());
+    const app = await makeApp([], undefined, undefined, undefined, undefined, undefined, undefined, "anomaloharis@1", builtinPluginCatalog());
     apps.push(app);
 
     const response = await app.inject({ method: "GET", url: "/api/plugins" });
@@ -322,23 +336,23 @@ describe("Node Host", () => {
       disconnect: async () => ({ connected: false }),
       setState: async (body: Record<string, unknown>) => ({ state: body.state }),
     } as unknown as BuddyDashboardClient;
-    const app = await makeApp([], undefined, undefined, undefined, undefined, "secret", undefined, "anomalo@1", undefined, buddy);
+    const app = await makeApp([], undefined, undefined, undefined, undefined, "secret", undefined, "anomaloharis@1", undefined, buddy);
     apps.push(app);
 
     expect((await app.inject({ method: "GET", url: "/api/buddy/status" })).statusCode).toBe(403);
-    const status = await app.inject({ method: "GET", url: "/api/buddy/status", headers: { "x-anomalo-admin-token": "secret" } });
+    const status = await app.inject({ method: "GET", url: "/api/buddy/status", headers: { "x-anomaloharis-admin-token": "secret" } });
     expect(status.json()).toEqual({ connected: true, transport: "tcp" });
     const state = await app.inject({
       method: "POST",
       url: "/api/buddy/state",
-      headers: { "x-anomalo-admin-token": "secret" },
+      headers: { "x-anomaloharis-admin-token": "secret" },
       payload: { state: "thinking" },
     });
     expect(state.json()).toEqual({ state: "thinking" });
   });
 
   it("serves Python artifacts only through signed session-bound URLs", async () => {
-    const artifactsDir = mkdtempSync(join(tmpdir(), "anomalo-host-artifacts-"));
+    const artifactsDir = mkdtempSync(join(tmpdir(), "anomaloharis-host-artifacts-"));
     tempDirectories.push(artifactsDir);
     const pythonSandbox = new PythonSandboxRuntime({
       baseUrl: "http://fruitspy.test",
@@ -368,7 +382,7 @@ describe("Node Host", () => {
       new AbortController().signal,
     );
     const artifactUrl = String((result.data as { artifacts: Array<{ url: string }> }).artifacts[0]?.url);
-    const app = await makeApp([], undefined, undefined, undefined, undefined, undefined, undefined, "anomalo@1", undefined, undefined, pythonSandbox);
+    const app = await makeApp([], undefined, undefined, undefined, undefined, undefined, undefined, "anomaloharis@1", undefined, undefined, pythonSandbox);
     apps.push(app);
 
     expect((await app.inject({ method: "GET", url: artifactUrl })).statusCode).toBe(200);
@@ -389,7 +403,7 @@ async function makeApp(
   plugins?: PluginHost,
   managementToken?: string,
   sessionAdapter?: InMemorySessionAdapter,
-  defaultPresetModel = "anomalo@1",
+  defaultPresetModel = "anomaloharis@1",
   pluginCatalog?: PluginCatalog,
   buddy?: BuddyDashboardClient,
   pythonSandbox?: PythonSandboxRuntime,

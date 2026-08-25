@@ -1,6 +1,6 @@
 {
   "additionalProperties": true,
-  "$id": "https://anomalo.dev/schemas/run-request.schema.json",
+  "$id": "https://anomaloharis.dev/schemas/run-request.schema.json",
   "type": "object",
   "required": [
     "message"

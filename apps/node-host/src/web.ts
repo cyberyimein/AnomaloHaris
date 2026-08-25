@@ -3,7 +3,7 @@ import { lookup } from "node:dns/promises";
 import * as https from "node:https";
 import { isIP } from "node:net";
 
-import type { ToolCall, ToolDefinition, ToolResult } from "@anomalo/contracts";
+import type { ToolCall, ToolDefinition, ToolResult } from "@anomaloharis/contracts";
 
 import type { ToolRuntime } from "./tools.js";
 import type { ToolContext } from "./types.js";
@@ -89,12 +89,20 @@ export class WebToolRuntime implements ToolRuntime {
     if (!query) return { name: call.name, ok: false, content: "Search query is required.", data: { error_code: "message_required" } };
     const count = clampInteger(call.arguments.count, 5, 1, 10);
     try {
-      const body = new URLSearchParams({ q: query }).toString();
-      const response = await this.request(this.searchUrl, {
-        method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded", "user-agent": "AnomaloHaris/0.1 Node Host" },
-        body,
+      const searchTarget = new URL(this.searchUrl);
+      searchTarget.searchParams.set("q", query);
+      const response = await this.request(searchTarget.href, {
+        method: "GET",
+        headers: { accept: "text/html,application/xhtml+xml", "user-agent": "AnomaloHaris/0.1 Node Host" },
       }, signal);
+      if (!response.ok) {
+        return {
+          name: call.name,
+          ok: false,
+          content: `HTTP ${response.status} while searching ${searchTarget.origin}`,
+          data: { error_code: "tool_failed", query, status: response.status },
+        };
+      }
       const html = await response.text();
       const results = parseSearchResults(html).slice(0, count);
       return {

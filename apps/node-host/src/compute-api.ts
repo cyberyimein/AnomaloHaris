@@ -11,8 +11,8 @@ import type {
   OpenAIUsage,
   PresetModelRef,
   SessionId,
-} from "@anomalo/contracts";
-import { validateContract } from "@anomalo/contracts";
+} from "@anomaloharis/contracts";
+import { legacyNamingAdapter, validateContract } from "@anomaloharis/contracts";
 import type { FastifyInstance, FastifyReply } from "fastify";
 
 import { RunController, type StartRunRequest } from "./controller.js";
@@ -61,7 +61,7 @@ export class ServiceAuth {
 
   authenticate(headers: Record<string, unknown>, scope?: string): AuthenticatedClient {
     const raw = header(headers, "authorization");
-    const token = raw?.startsWith("Bearer ") ? raw.slice("Bearer ".length).trim() : header(headers, "x-anomalo-service-token");
+    const token = raw?.startsWith("Bearer ") ? raw.slice("Bearer ".length).trim() : legacyNamingAdapter.readHeader(headers, "x-anomaloharis-service-token");
     if (!token) {
       if (this.required) throw new ComputeRequestError(401, "unauthorized", "A service token is required.");
       return { id: "local", scopes: new Set(["compute:models", "compute:invoke", "compute:read"]) };
@@ -608,8 +608,8 @@ export function registerComputeRoutes(app: FastifyInstance, options: ComputeApiO
     reply.raw.statusCode = 200;
     reply.raw.setHeader("content-type", "application/x-ndjson; charset=utf-8");
     reply.raw.setHeader("cache-control", "no-cache, no-transform");
-    reply.raw.setHeader("x-anomalo-session-id", input.sessionId);
-    reply.raw.setHeader("x-anomalo-preset-model", model.ref);
+    reply.raw.setHeader("x-anomaloharis-session-id", input.sessionId);
+    reply.raw.setHeader("x-anomaloharis-preset-model", model.ref);
     const events: AgentEvent[] = [];
     try {
       for await (const event of options.controller.start(input)) {

@@ -54,13 +54,13 @@ StackChan / Buddy device
 Node 服务启动：
 
 ```bash
-npm run build --workspace @anomalo/buddy-service
-npm run start --workspace @anomalo/buddy-service
+npm run build --workspace @anomaloharis/buddy-service
+npm run start --workspace @anomaloharis/buddy-service
 ```
 
 默认只监听 `127.0.0.1:8765`。远程或容器部署必须设置独立的
 `BUDDY_SERVICE_TOKEN` 和 `BUDDY_HOOK_TOKEN`；Node bridge 只接收显式 allowlist
-中的 `ANOMALO_BUDDY_*` 变量。
+中的 `ANOMALOHARIS_BUDDY_*` 变量。
 
 核心路由：
 

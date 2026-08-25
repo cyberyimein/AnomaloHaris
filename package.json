@@ -11,6 +11,9 @@
   "engines": {
     "node": ">=22"
   },
+  "scripts": {
+    "check:naming": "node scripts/check-canonical-naming.mjs"
+  },
   "devDependencies": {
     "@sinclair/typebox": "^0.34.41",
     "ajv": "^8.17.1",

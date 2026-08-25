@@ -14,8 +14,23 @@ afterEach(() => {
 });
 
 describe("SqlitePresetModelRegistry", () => {
+  it("normalizes legacy model identity on write and accepts legacy refs on read", () => {
+    const registry = new SqlitePresetModelRegistry(":memory:");
+    const draft = registry.createDraft({
+      name: "anomalo", // naming-compat
+      version: 1,
+      description: "Legacy identity input",
+      provider: { adapter: "openai-compatible", model: "provider", tool_protocol: "none" },
+      plugins: { fixed: [] },
+    });
+    expect(draft.ref).toBe("anomaloharis@1");
+    expect(registry.publish("anomalo@1").ref).toBe("anomaloharis@1"); // naming-compat
+    expect(registry.list()).toEqual([expect.objectContaining({ ref: "anomaloharis@1" })]);
+    registry.close();
+  });
+
   it("publishes immutable versions and keeps the compiled hash stable across restart", () => {
-    const directory = mkdtempSync(join(tmpdir(), "anomalo-preset-model-"));
+    const directory = mkdtempSync(join(tmpdir(), "anomaloharis-preset-model-"));
     directories.push(directory);
     const databasePath = join(directory, "preset-models.sqlite3");
     const first = new SqlitePresetModelRegistry(databasePath, { now: () => "2026-08-22T00:00:00.000Z" });
@@ -44,7 +59,7 @@ describe("SqlitePresetModelRegistry", () => {
   });
 
   it("freezes resolved prompt profile content in the published snapshot", () => {
-    const directory = mkdtempSync(join(tmpdir(), "anomalo-preset-prompt-"));
+    const directory = mkdtempSync(join(tmpdir(), "anomaloharis-preset-prompt-"));
     directories.push(directory);
     const databasePath = join(directory, "preset-models.sqlite3");
     let prompt = "first prompt";
@@ -75,16 +90,16 @@ describe("SqlitePresetModelRegistry", () => {
     const registry = new SqlitePresetModelRegistry(":memory:");
     const builtin = registry.ensureBuiltinDefault({ model: "openai/gpt-4o-mini" });
     expect(builtin.ref).toBe(DEFAULT_PRESET_MODEL_REF);
-    expect(registry.resolve("anomalo").providerModel).toBe("openai/gpt-4o-mini");
+    expect(registry.resolve("anomaloharis").providerModel).toBe("openai/gpt-4o-mini");
 
     const report = registry.migrateLegacyAgents([
       { id: "luna-old", name: "Luna", description: "writer", model: "deepseek/deepseek-chat", tool_names: ["web_search"] },
-      { name: "anomalo", model: "openai/gpt-4o-mini" },
+      { name: "anomaloharis", model: "openai/gpt-4o-mini" },
       { name: "", model: "broken" },
     ]);
     expect(report.dryRun).toBe(true);
     expect(report.created.map((item) => item.ref)).toEqual(["luna@1"]);
-    expect(report.skipped).toEqual([{ ref: "anomalo@1", reason: "already_exists" }]);
+    expect(report.skipped).toEqual([{ ref: "anomaloharis@1", reason: "already_exists" }]);
     expect(report.errors[0]?.name).toBe("");
     expect(registry.list()).toHaveLength(1);
 

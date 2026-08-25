@@ -1,4 +1,4 @@
-import type { ToolDefinition } from "@anomalo/contracts";
+import type { ToolDefinition } from "@anomaloharis/contracts";
 
 import type { ResourceLoader, ResourceSnapshot } from "./resources.js";
 import type { ToolRuntime } from "./tools.js";
