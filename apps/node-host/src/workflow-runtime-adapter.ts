@@ -136,7 +136,6 @@ export class WorkflowRuntimeAdapter implements ExecutionRuntimeAdapter {
     const child = this.options.agentExecution.startAgentChild(context.runId, { kind: "preset_model", ref: modelRef as PresetModelRef }, {
       input: {
         message: serializeAgentInput(input),
-        response_format: { type: "json_object" },
       },
       idempotencyKey: `${context.runId}:${node.id}:${attempt}`,
       metadata: { workflow_node_id: node.id, workflow_node_attempt: attempt },

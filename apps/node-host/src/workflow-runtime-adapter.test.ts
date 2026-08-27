@@ -28,8 +28,9 @@ describe("WorkflowRuntimeAdapter", () => {
     presetModels.ensureBuiltinDefault({ model: "replay" });
     const model = presetModels.resolve("anomaloharis@1");
     const sessions = new InMemorySessionAdapter();
+    const replayModel = new ReplayModelAdapter([[{ type: "text.delta", text: '{"ok":true}' }, { type: "done" }]], { completions: ['{"ok":true}'] });
     const controller = new RunController(new AgentCore({
-      model: new ReplayModelAdapter([[{ type: "text.delta", text: '{"ok":true}' }, { type: "done" }]], { completions: ['{"ok":true}'] }),
+      model: replayModel,
       tools: new DeterministicToolRuntime([]),
       sessions,
     }));
@@ -71,6 +72,7 @@ describe("WorkflowRuntimeAdapter", () => {
     for await (const event of handle) events.push(event);
     const run = control.get(handle.runId);
     expect(run).toMatchObject({ status: "succeeded", output: { ok: true } });
+    expect(replayModel.streamCalls[0]?.responseFormat).toBeUndefined();
     const child = workflowDatabase.prepare("SELECT run_id, parent_run_id, status FROM execution_runs WHERE parent_run_id = ?").get(handle.runId) as Record<string, unknown>;
     expect(child).toMatchObject({ parent_run_id: handle.runId, status: "succeeded" });
     expect(events.some((event) => event.type === "workflow.node.succeeded" && event.data.child_run_id === child.run_id)).toBe(true);
