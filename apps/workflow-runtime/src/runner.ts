@@ -71,8 +71,6 @@ type NodeState = "pending" | "ready" | "running" | "succeeded" | "failed" | "ski
 type NodeOutcome = { nodeId: string; status: "succeeded" | "failed" | "stopped"; output?: unknown; error?: Record<string, unknown>; usage?: Record<string, unknown>; childRunId?: string };
 type ActiveTask = { nodeId: string; promise: Promise<NodeOutcome> };
 
-const ajv = new Ajv({ allErrors: true, strict: false });
-
 /**
  * Deterministic, dependency-driven DAG runner. It knows graph semantics and
  * node lifecycle only; actual Agent and Plugin execution is injected by Host.
@@ -108,8 +106,17 @@ export class WorkflowRunner {
       outgoing.push({ fromPort: edge.from.port, to: edge.to.node, toPort: edge.to.port });
       this.outgoing.set(edge.from.node, outgoing);
     }
-    this.inputValidator = ajv.compile(options.compiled.definition.spec.input_schema as JsonSchema);
-    this.outputValidator = ajv.compile(options.compiled.definition.spec.output_schema as JsonSchema);
+    // Ajv keeps `$id` registrations for the lifetime of an instance. A
+    // module-level compiler therefore rejects the same immutable Workflow
+    // schema on the second run in a long-lived Host process. Keep validators
+    // scoped to this Runner so concurrent/repeated Runs can reuse schema ids
+    // without sharing mutable registry state.
+    this.inputValidator = new Ajv({ allErrors: true, strict: false }).compile(
+      options.compiled.definition.spec.input_schema as JsonSchema,
+    );
+    this.outputValidator = new Ajv({ allErrors: true, strict: false }).compile(
+      options.compiled.definition.spec.output_schema as JsonSchema,
+    );
     if (options.signal.aborted) this.controller.abort(options.signal.reason);
     else options.signal.addEventListener("abort", () => this.controller.abort(options.signal.reason), { once: true });
   }

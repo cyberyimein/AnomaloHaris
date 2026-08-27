@@ -61,6 +61,34 @@ describe("WorkflowRunner", () => {
     ]);
   });
 
+  it("isolates schema registries across repeated runs", async () => {
+    const database = new DatabaseSync(":memory:");
+    resources.push(database);
+    const runtime = new WorkflowRuntime({ database });
+    const imported = await runtime.importDraft(schemaIdDefinition());
+    await runtime.publish(imported.workflow.ref);
+    database.exec("CREATE TABLE execution_runs(run_id TEXT PRIMARY KEY);");
+    database.prepare("INSERT INTO execution_runs(run_id) VALUES (?)").run("run_schema_1");
+    database.prepare("INSERT INTO execution_runs(run_id) VALUES (?)").run("run_schema_2");
+    const store = new WorkflowRunStore(database);
+    const compiled = runtime.registry.get(imported.workflow.ref).compiled;
+    store.create("run_schema_1", compiled);
+    store.create("run_schema_2", compiled);
+
+    for (const runId of ["run_schema_1", "run_schema_2"]) {
+      const runner = new WorkflowRunner({
+        runId,
+        compiled,
+        input: { go: true, value: "stable" },
+        signal: new AbortController().signal,
+        store,
+      });
+      const events = [];
+      for await (const event of runner.run()) events.push(event);
+      expect(events.at(-1)?.type).toBe("workflow.run.succeeded");
+    }
+  });
+
   it("persists failed and successful attempts when a node retries", async () => {
     const database = new DatabaseSync(":memory:");
     resources.push(database);
@@ -214,6 +242,19 @@ function definition() {
         { from: { node: "parallel", port: "output" }, to: { node: "join", port: "input" } },
         { from: { node: "join", port: "output" }, to: { node: "output", port: "result" } },
       ],
+    },
+  };
+}
+
+function schemaIdDefinition() {
+  const value = definition();
+  return {
+    ...value,
+    metadata: { ...value.metadata, name: "schema-id-flow" },
+    spec: {
+      ...value.spec,
+      input_schema: { $id: "https://urus.dev/schemas/remote_decision_input.v1.json", type: "object" },
+      output_schema: { $id: "https://urus.dev/schemas/remote_decision_artifact.v1.json" },
     },
   };
 }
