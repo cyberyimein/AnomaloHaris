@@ -1,4 +1,4 @@
-import Ajv from "ajv";
+import Ajv2020 from "ajv/dist/2020.js";
 
 import type { JsonSchema } from "@anomaloharis/contracts";
 
@@ -111,10 +111,10 @@ export class WorkflowRunner {
     // schema on the second run in a long-lived Host process. Keep validators
     // scoped to this Runner so concurrent/repeated Runs can reuse schema ids
     // without sharing mutable registry state.
-    this.inputValidator = new Ajv({ allErrors: true, strict: false }).compile(
+    this.inputValidator = new Ajv2020({ allErrors: true, strict: false }).compile(
       options.compiled.definition.spec.input_schema as JsonSchema,
     );
-    this.outputValidator = new Ajv({ allErrors: true, strict: false }).compile(
+    this.outputValidator = new Ajv2020({ allErrors: true, strict: false }).compile(
       options.compiled.definition.spec.output_schema as JsonSchema,
     );
     if (options.signal.aborted) this.controller.abort(options.signal.reason);

@@ -253,8 +253,15 @@ function schemaIdDefinition() {
     metadata: { ...value.metadata, name: "schema-id-flow" },
     spec: {
       ...value.spec,
-      input_schema: { $id: "https://urus.dev/schemas/remote_decision_input.v1.json", type: "object" },
-      output_schema: { $id: "https://urus.dev/schemas/remote_decision_artifact.v1.json" },
+      input_schema: {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        $id: "https://urus.dev/schemas/remote_decision_input.v1.json",
+        type: "object",
+      },
+      output_schema: {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        $id: "https://urus.dev/schemas/remote_decision_artifact.v1.json",
+      },
     },
   };
 }
