@@ -281,10 +281,21 @@ The **Preset Models** tab creates immutable, versioned Agent capability bundles.
 fixes the prompt, plugin set, provider model, tool policy, and runtime limits; callers select it
 with an explicit `name@version` such as `anomaloharis@1` or `fomc-brief@3`. Definitions are stored in
 `ANOMALOHARIS_DATA_DIR/preset-models.sqlite3`. Management requests use
-`GET /api/preset-models` is the public published-model listing used by the
-control panel. Draft/retired definitions and all mutations use
+`GET /api/preset-models` is the public current-model listing used by the
+control panel. Publishing a replacement retires the previous published version;
+retired definitions remain resolvable for already-bound sessions but are not
+new-run targets. Draft/current definitions and all mutations use
 `GET/POST /api/manage/preset-models` plus the versioned `validate`, `publish`,
-and `retire` routes and require `ANOMALOHARIS_ADMIN_TOKEN`.
+and `retire` routes and require `ANOMALOHARIS_ADMIN_TOKEN`. Add
+`?include_history=true` to the management listing when an administrator needs
+to inspect retired versions.
+
+The Preset Model editor can attach up to eight local Markdown Skill files (or pasted Markdown).
+Each file is stored as a `prompt.skills` entry containing one `SKILL.md`; its `name` and `description`
+come from frontmatter, and its body is loaded only after the Agent selects it. The compiled catalog
+and bodies are frozen into the model snapshot, so changing them requires publishing a new model
+version. Older definitions using eager `prompt.skill_files` or `prompt.skill_markdown` remain
+readable. ZIP packages and recursive referenced Skill files are intentionally not supported yet.
 
 The default chat entry point resolves `ANOMALOHARIS_DEFAULT_PRESET_MODEL` (default `anomaloharis@1`).
 External services can use the collected compatibility route or the native compute API; neither
@@ -370,7 +381,8 @@ runtime-bundle/skills/calculator/
 └── SKILL.md
 ```
 
-Skills are activated per session and included in the run context snapshot.
+Bundled Skills are activated per session and included in the run context snapshot; Preset Model
+Skills additionally remain fixed to the model version that published them.
 
 ### MCP catalog
 

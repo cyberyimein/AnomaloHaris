@@ -23,6 +23,7 @@ import type {
 } from "./types.js";
 import type { SessionRepository } from "./session.js";
 import type { PluginLock } from "./plugin-catalog.js";
+import { parseSkillSnapshot } from "./skills.js";
 import { DEFAULT_SEARCH_MODE, isSearchMode } from "./retrieval.js";
 
 export const SESSION_V2_SCHEMA_VERSION = 2;
@@ -504,6 +505,7 @@ function checkpointFromRow(row: Row): SessionCheckpoint {
   const allowedToolNames = parseStringArray(raw.allowedToolNames);
   const allowedPluginIds = parseStringArray(raw.allowedPluginIds);
   const allowedPluginLocks = parsePluginLocks(raw.allowedPluginLocks);
+  const skillSnapshot = parseSkillSnapshot(raw.skillSnapshot);
   const policy = parseAgentPolicy(raw.policy);
   const toolProtocol = stringValue(raw.toolProtocol);
   return {
@@ -528,6 +530,7 @@ function checkpointFromRow(row: Row): SessionCheckpoint {
       ...(model === undefined ? {} : { model }),
       ...(presetModelRef === undefined ? {} : { presetModelRef: presetModelRef as SessionCheckpoint["state"]["presetModelRef"] }),
       ...(toolProtocol === undefined ? {} : { toolProtocol: toolProtocol as SessionCheckpoint["state"]["toolProtocol"] }),
+      ...(skillSnapshot === undefined ? {} : { skillSnapshot }),
       ...(policy === undefined ? {} : { policy }),
       ...(allowedPluginIds.length === 0 && raw.allowedPluginIds === undefined
         ? {}

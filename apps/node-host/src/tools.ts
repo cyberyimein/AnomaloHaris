@@ -18,15 +18,22 @@ export type ToolHandler = (
 export type ToolAdapter = {
   id: string;
   priority: number;
+  alwaysAvailable?: boolean;
   list(context: ToolContext): Promise<ToolDefinition[]>;
   call(call: ToolCall, context: ToolContext, signal: AbortSignal): Promise<ToolResult>;
   status(context: ToolContext): Promise<Record<string, unknown>>;
 };
 
-export function asToolAdapter(id: string, priority: number, runtime: ToolRuntime): ToolAdapter {
+export function asToolAdapter(
+  id: string,
+  priority: number,
+  runtime: ToolRuntime,
+  options: { alwaysAvailable?: boolean } = {},
+): ToolAdapter {
   return {
     id,
     priority,
+    ...(options.alwaysAvailable ? { alwaysAvailable: true } : {}),
     list: (context) => runtime.list(context),
     call: (call, context, signal) => runtime.call(call, context, signal),
     status: async (context) => ({ provider: id, ...(await runtime.status(context)).reduce((value, item) => ({ ...value, ...item }), {}) }),
@@ -110,14 +117,14 @@ export class CompositeToolRuntime implements ToolRuntime {
 
   async status(context: ToolContext): Promise<Record<string, unknown>[]> {
     return Promise.all(this.adapters
-      .filter((adapter) => !context.allowedPluginIds || context.allowedPluginIds.has(adapter.id))
+      .filter((adapter) => adapter.alwaysAvailable || !context.allowedPluginIds || context.allowedPluginIds.has(adapter.id))
       .map((adapter) => adapter.status(context)));
   }
 
   private async resolve(context: ToolContext): Promise<Map<string, { definition: ToolDefinition; adapter: ToolAdapter }>> {
     const selected = new Map<string, { definition: ToolDefinition; adapter: ToolAdapter }>();
     for (const adapter of this.adapters) {
-      if (context.allowedPluginIds && !context.allowedPluginIds.has(adapter.id)) continue;
+      if (!adapter.alwaysAvailable && context.allowedPluginIds && !context.allowedPluginIds.has(adapter.id)) continue;
       for (const definition of await adapter.list(context)) {
         const existing = selected.get(definition.name);
         if (existing && existing.adapter.priority === adapter.priority) {

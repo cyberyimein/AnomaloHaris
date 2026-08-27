@@ -4,7 +4,11 @@ import { randomIds, type IdFactory } from "./ids.js";
 import type { AgentCore } from "./core.js";
 import type { AgentRunInput } from "./types.js";
 
-export type StartRunRequest = Omit<AgentRunInput, "runId"> & { runId?: RunId };
+export type StartRunRequest = Omit<AgentRunInput, "runId"> & {
+  runId?: RunId;
+  /** Internal Host authorization for a Session already bound to a retired model version. */
+  allowRetiredPresetModel?: boolean;
+};
 
 export type StopResult = {
   stopped: boolean;

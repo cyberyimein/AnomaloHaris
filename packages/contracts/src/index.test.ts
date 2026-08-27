@@ -64,7 +64,28 @@ describe("@anomaloharis/contracts", () => {
         version: 1,
         description: "Default",
         provider: { adapter: "openai-compatible", model: "test", tool_protocol: "auto" },
+        prompt: {
+          skill_files: [
+            { path: "skills/arbitration/SKILL.md", content: "# Arbitration\nUse the arbitration rules." },
+            { path: "skills/output/SKILL.md", content: "# Output\nReturn the required format." },
+          ],
+        },
         plugins: { fixed: ["host-core"] },
+      }).valid,
+    ).toBe(true);
+    expect(
+      validateContract("presetModelDefinition", {
+        name: "skill-model",
+        version: 1,
+        description: "Agent Skills",
+        provider: { adapter: "openai-compatible", model: "test", tool_protocol: "auto" },
+        prompt: {
+          skills: [
+            { content: "---\nname: invoice-review\ndescription: Review invoices.\n---\n\n# Invoice" },
+            { content: "---\nname: contract-review\ndescription: Review contracts.\n---\n\n# Contract" },
+          ],
+        },
+        plugins: { fixed: [] },
       }).valid,
     ).toBe(true);
     expect(

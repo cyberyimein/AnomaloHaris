@@ -112,6 +112,24 @@ export const PresetModelRefSchema = Type.String({
   minLength: 3,
 });
 
+const PresetModelSkillFileSchema = Type.Object(
+  {
+    path: Type.String({ minLength: 1, maxLength: 256 }),
+    content: Type.String({ maxLength: 262_144 }),
+  },
+  { additionalProperties: false },
+);
+
+// One uploaded Markdown document represents one independent Agent Skill. The
+// server derives its identity from the SKILL.md frontmatter, so callers cannot
+// accidentally maintain a second, conflicting name/description field.
+const PresetModelSkillSchema = Type.Object(
+  {
+    content: Type.String({ maxLength: 262_144 }),
+  },
+  { additionalProperties: false },
+);
+
 export const PresetModelDefinitionSchema = Type.Object(
   {
     name: Type.String({ pattern: "^[a-z][a-z0-9._-]{0,63}$", minLength: 1 }),
@@ -132,6 +150,10 @@ export const PresetModelDefinitionSchema = Type.Object(
     prompt: Type.Optional(Type.Object({
       profile: Type.Optional(Type.String({ minLength: 1 })),
       system: Type.Optional(Type.String()),
+      skills: Type.Optional(Type.Array(PresetModelSkillSchema, { maxItems: 8 })),
+      skill_files: Type.Optional(Type.Array(PresetModelSkillFileSchema, { maxItems: 8 })),
+      // Kept for definitions created before skill_files was introduced.
+      skill_markdown: Type.Optional(Type.String({ maxLength: 262_144 })),
     })),
     plugins: Type.Optional(Type.Object({
       fixed: Type.Array(Type.String({ minLength: 1 })),

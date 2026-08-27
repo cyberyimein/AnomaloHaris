@@ -13,9 +13,14 @@ import { canonicalizePresetModelName, canonicalizePresetModelRef, validateContra
 import type { AgentPolicy, BootstrapToolRequest } from "./types.js";
 import type { ResponseFormat } from "@anomaloharis/contracts";
 import { PluginCatalog, type PluginLock } from "./plugin-catalog.js";
+import { filterSkillSnapshot, mergeSkillSnapshots, SKILL_ACTIVATE_TOOL_NAME, SkillRuntime, type CompiledSkillSnapshot } from "./skills.js";
 
 export const DEFAULT_PRESET_MODEL_REF = "anomaloharis@1" as PresetModelRef;
 export const URUS_SCHEDULED_EVENT_PRESET_MODEL_REF = "scheduled-event-investigator@1" as PresetModelRef;
+export const MAX_SKILL_FILE_BYTES = 256 * 1024;
+export const MAX_SKILL_MARKDOWN_BYTES = MAX_SKILL_FILE_BYTES;
+export const MAX_SKILL_FILE_COUNT = 8;
+export const MAX_SKILL_TOTAL_BYTES = 1024 * 1024;
 
 export type CompiledPresetModel = {
   ref: PresetModelRef;
@@ -29,6 +34,7 @@ export type CompiledPresetModel = {
   promptProfile: string;
   systemPrompt: string;
   promptSnapshotVersion: 1;
+  skillSnapshot?: CompiledSkillSnapshot | undefined;
   fixedPlugins: string[];
   pluginLocks: PluginLock[];
   toolCatalog: string[];
@@ -123,6 +129,7 @@ export class SqlitePresetModelRegistry {
   private readonly now: () => string;
   private readonly catalog: PluginCatalog | undefined;
   private readonly resolvePrompt: ((profile: string) => string) | undefined;
+  private readonly bundledSkillSnapshot: CompiledSkillSnapshot | undefined;
   private readonly allowLegacySnapshotRecompile: boolean;
 
   constructor(
@@ -132,12 +139,14 @@ export class SqlitePresetModelRegistry {
       now?: () => string;
       catalog?: PluginCatalog;
       resolvePrompt?: (profile: string) => string;
+      bundledSkillSnapshot?: CompiledSkillSnapshot | undefined;
       allowLegacySnapshotRecompile?: boolean;
     } = {},
   ) {
     this.now = options.now ?? (() => new Date().toISOString());
     this.catalog = options.catalog;
     this.resolvePrompt = options.resolvePrompt;
+    this.bundledSkillSnapshot = options.bundledSkillSnapshot;
     this.allowLegacySnapshotRecompile = options.allowLegacySnapshotRecompile === true;
     if (options.database) {
       this.db = options.database;
@@ -159,9 +168,15 @@ export class SqlitePresetModelRegistry {
       "SELECT 1 FROM preset_model_versions WHERE name = ? AND version = ?",
     ).get(canonicalDefinition.name, canonicalDefinition.version);
     if (existing) throw new Error("preset_model_version_exists");
+    const latest = this.db.prepare(
+      "SELECT MAX(version) AS version FROM preset_model_versions WHERE name = ?",
+    ).get(canonicalDefinition.name) as { version?: number | null } | undefined;
+    if (latest?.version !== undefined && latest.version !== null && canonicalDefinition.version <= Number(latest.version)) {
+      throw new Error("preset_model_version_not_monotonic");
+    }
 
     const createdAt = this.now();
-    const compiled = compileDefinition(canonicalDefinition, "draft", this.catalog, this.resolvePrompt);
+    const compiled = compileDefinition(canonicalDefinition, "draft", this.catalog, this.resolvePrompt, this.bundledSkillSnapshot);
     this.db.prepare(
       "INSERT OR IGNORE INTO preset_models(name, description, created_at, updated_at) VALUES (?, ?, ?, ?)",
     ).run(canonicalDefinition.name, canonicalDefinition.description, createdAt, createdAt);
@@ -185,15 +200,38 @@ export class SqlitePresetModelRegistry {
     return compiled;
   }
 
-  publish(ref: string): CompiledPresetModel {
+  publish(ref: string, options: { defaultRef?: string } = {}): CompiledPresetModel {
     const record = this.read(ref, { includeDraft: true });
     if (record.status === "retired") throw new Error("preset_model_retired");
+    const higherVersion = this.db.prepare(
+      "SELECT 1 FROM preset_model_versions WHERE name = ? AND version > ? LIMIT 1",
+    ).get(record.name, record.version);
+    if (higherVersion) throw new Error("preset_model_version_not_monotonic");
     if (record.status === "draft") {
-      this.db.prepare(`
-        UPDATE preset_model_versions
-        SET status = 'published', published_at = ?, retired_at = NULL
-        WHERE name = ? AND version = ?
-      `).run(this.now(), record.name, record.version);
+      const publishedAt = this.now();
+      this.db.exec("BEGIN IMMEDIATE");
+      try {
+        // A model name has one current published version. Older versions remain
+        // resolvable for already-bound sessions, but never compete in listings
+        // or become the target of a new unversioned lookup. Keep a configured
+        // default alive until the caller explicitly switches that default.
+        const protectedDefaultRef = options.defaultRef ? normalizeRef(options.defaultRef) : undefined;
+        this.db.prepare(`
+          UPDATE preset_model_versions
+          SET status = 'retired', retired_at = ?
+          WHERE name = ? AND status = 'published' AND version <> ?
+            AND (? IS NULL OR name || '@' || version <> ?)
+        `).run(publishedAt, record.name, record.version, protectedDefaultRef ?? null, protectedDefaultRef ?? null);
+        this.db.prepare(`
+          UPDATE preset_model_versions
+          SET status = 'published', published_at = ?, retired_at = NULL
+          WHERE name = ? AND version = ?
+        `).run(publishedAt, record.name, record.version);
+        this.db.exec("COMMIT");
+      } catch (error) {
+        this.db.exec("ROLLBACK");
+        throw error;
+      }
       return this.read(`${record.name}@${record.version}`, { includeDraft: true });
     }
     return record;
@@ -223,7 +261,7 @@ export class SqlitePresetModelRegistry {
     return this.resolve(ref, { allowRetired: true });
   }
 
-  list(options: { includeDraft?: boolean; includeRetired?: boolean } = {}): PresetModelSummary[] {
+  list(options: { includeDraft?: boolean; includeRetired?: boolean; includeHistory?: boolean } = {}): PresetModelSummary[] {
     const statuses = options.includeDraft && options.includeRetired
       ? ["draft", "published", "retired"]
       : options.includeDraft
@@ -232,12 +270,22 @@ export class SqlitePresetModelRegistry {
           ? ["published", "retired"]
           : ["published"];
     const placeholders = statuses.map(() => "?").join(", ");
+    const latestClause = options.includeHistory === true
+      ? ""
+      : `AND current.version = (
+        SELECT MAX(latest.version)
+        FROM preset_model_versions AS latest
+        WHERE latest.name = current.name
+          AND latest.status IN (${placeholders})
+      )`;
     const rows = this.db.prepare(`
-      SELECT name, version, status, description, definition_json, compiled_hash
-      FROM preset_model_versions
-      WHERE status IN (${placeholders})
-      ORDER BY name ASC, version DESC
-    `).all(...statuses) as RegistryRow[];
+      SELECT current.name, current.version, current.status, current.description,
+        current.definition_json, current.compiled_hash
+      FROM preset_model_versions AS current
+      WHERE current.status IN (${placeholders})
+      ${latestClause}
+      ORDER BY current.name ASC, current.version DESC
+    `).all(...statuses, ...(options.includeHistory === true ? [] : statuses)) as RegistryRow[];
     return rows.map((row) => ({
       ref: `${row.name}@${row.version}` as PresetModelRef,
       name: row.name,
@@ -386,7 +434,7 @@ export class SqlitePresetModelRegistry {
       `);
       for (const row of rows) {
         const definition = canonicalizeDefinition(JSON.parse(row.definition_json) as PresetModelDefinition);
-        const compiled = compileDefinition(definition, row.status, this.catalog, this.resolvePrompt);
+        const compiled = compileDefinition(definition, row.status, this.catalog, this.resolvePrompt, this.bundledSkillSnapshot);
         update.run(
           JSON.stringify(definition),
           JSON.stringify(compiled),
@@ -461,7 +509,7 @@ export class SqlitePresetModelRegistry {
     if (!row) throw new Error("preset_model_not_found");
     const typed = row as RegistryRow;
     if (typed.status === "draft" && !options.includeDraft) throw new Error("preset_model_not_published");
-    return compiledFromRow(typed, this.catalog, this.resolvePrompt);
+    return compiledFromRow(typed, this.catalog, this.resolvePrompt, this.bundledSkillSnapshot);
   }
 
   private migrateLegacyPromptSnapshots(): void {
@@ -481,7 +529,7 @@ export class SqlitePresetModelRegistry {
       if (stored?.promptSnapshotVersion === 1) continue;
       if (stored?.pluginLocks && !this.allowLegacySnapshotRecompile) this.catalog?.assertCurrent(stored.pluginLocks);
       const definition = JSON.parse(row.definition_json) as PresetModelDefinition;
-      const compiled = compileDefinition(definition, row.status, this.catalog, this.resolvePrompt);
+      const compiled = compileDefinition(definition, row.status, this.catalog, this.resolvePrompt, this.bundledSkillSnapshot);
       update.run(
         JSON.stringify(compiled),
         compiled.promptHash,
@@ -554,6 +602,42 @@ function legacyPluginSelection(toolNames: readonly string[], toolSources: Record
 }
 
 function validateDefinition(definition: PresetModelDefinition): void {
+  const skillMarkdown = definition.prompt?.skill_markdown;
+  const skillFiles = definition.prompt?.skill_files;
+  const skills = definition.prompt?.skills;
+  if (skills !== undefined && (skillMarkdown !== undefined || skillFiles !== undefined)) throw new Error("skills_conflict");
+  if (skillMarkdown !== undefined && skillFiles !== undefined) throw new Error("skill_files_conflict");
+  if (skillMarkdown !== undefined && Buffer.byteLength(skillMarkdown, "utf8") > MAX_SKILL_FILE_BYTES) {
+    throw new Error("skill_markdown_too_large");
+  }
+  if (Array.isArray(skillFiles)) {
+    if (skillFiles.length > MAX_SKILL_FILE_COUNT) throw new Error("skill_files_too_many");
+    const paths = new Set<string>();
+    let totalBytes = 0;
+    for (const file of skillFiles) {
+      if (!file || typeof file.path !== "string" || typeof file.content !== "string") continue;
+      const path = normalizeSkillFilePath(file.path);
+      const pathKey = path.toLowerCase();
+      if (paths.has(pathKey)) throw new Error("skill_file_duplicate_path");
+      paths.add(pathKey);
+      const bytes = Buffer.byteLength(file.content, "utf8");
+      if (bytes > MAX_SKILL_FILE_BYTES) throw new Error("skill_file_too_large");
+      totalBytes += bytes;
+    }
+    if (totalBytes > MAX_SKILL_TOTAL_BYTES) throw new Error("skill_files_total_too_large");
+  }
+  if (Array.isArray(skills)) {
+    if (skills.length > MAX_SKILL_FILE_COUNT) throw new Error("skills_too_many");
+    let totalBytes = 0;
+    for (const skill of skills) {
+      if (!skill || typeof skill.content !== "string") continue;
+      const bytes = Buffer.byteLength(skill.content, "utf8");
+      if (bytes > MAX_SKILL_FILE_BYTES) throw new Error("skill_too_large");
+      totalBytes += bytes;
+    }
+    if (totalBytes > MAX_SKILL_TOTAL_BYTES) throw new Error("skills_total_too_large");
+    if (skills.length > 0) skillRuntime.compile(skills.map((skill) => ({ content: skill.content })));
+  }
   const validation = validateContract("presetModelDefinition", definition);
   if (!validation.valid) throw new Error(`invalid_preset_model_definition:${JSON.stringify(validation.errors)}`);
 }
@@ -631,31 +715,108 @@ function parseResponseFormatPolicy(value: unknown): ResponseFormat | undefined {
   throw new Error("invalid_policy:response_format");
 }
 
+type AttachedSkillFile = { path: string; content: string };
+
+type AttachedSkillContent = {
+  mode: "legacy" | "files";
+  files: AttachedSkillFile[];
+  legacyMarkdown?: string;
+};
+
+const skillRuntime = new SkillRuntime();
+
+function normalizeSkillFilePath(value: string): string {
+  const path = value.trim().replaceAll("\\", "/");
+  const segments = path.split("/");
+  if (!path || path.startsWith("/") || path.includes("\u0000") || segments.some((segment) => !segment || segment === "." || segment === "..")) {
+    throw new Error("skill_file_path_invalid");
+  }
+  return path;
+}
+
+function resolveAttachedSkillContent(definition: PresetModelDefinition): AttachedSkillContent {
+  const skillFiles = definition.prompt?.skill_files;
+  if (skillFiles !== undefined) {
+    return {
+      mode: "files",
+      files: skillFiles
+        .map((file) => ({ path: normalizeSkillFilePath(file.path), content: file.content }))
+        .sort((left, right) => left.path.localeCompare(right.path)),
+    };
+  }
+  const legacyMarkdown = definition.prompt?.skill_markdown;
+  return {
+    mode: "legacy",
+    files: legacyMarkdown?.trim() ? [{ path: "SKILL.md", content: legacyMarkdown }] : [],
+    ...(legacyMarkdown?.trim() ? { legacyMarkdown } : {}),
+  };
+}
+
+function resolvePresetSkillSnapshot(definition: PresetModelDefinition): CompiledSkillSnapshot | undefined {
+  const skills = definition.prompt?.skills;
+  if (!skills?.length) return undefined;
+  return skillRuntime.compile(skills.map((skill) => ({ content: skill.content })));
+}
+
+function assertSkillRequirements(snapshot: CompiledSkillSnapshot | undefined, fixedPluginIds: ReadonlySet<string>): void {
+  for (const skill of snapshot?.skills ?? []) {
+    const missing = (skill.requiredPluginIds ?? []).find((pluginId) => !fixedPluginIds.has(pluginId));
+    if (missing) throw new Error(`skill_plugin_not_bound:${skill.name}:${missing}`);
+  }
+}
+
+function formatSkillFiles(files: readonly AttachedSkillFile[]): string {
+  return [
+    "Attached Skill files:",
+    ...files.map((file) => `--- ${file.path} ---\n${file.content}`),
+  ].join("\n");
+}
+
 function compileDefinition(
   definition: PresetModelDefinition,
   status: "draft" | "published" | "retired",
   catalog?: PluginCatalog,
   resolvePrompt?: (profile: string) => string,
+  bundledSkillSnapshot?: CompiledSkillSnapshot,
 ): CompiledPresetModel {
   const providerProtocol = definition.provider.tool_protocol ?? "auto";
   const fixedPlugins = [...(definition.plugins?.fixed ?? [])];
+  const fixedPluginIds = new Set(fixedPlugins.map((selector) => selector.split("@")[0]!));
   const graph = catalog?.compile(fixedPlugins);
   const pluginLocks = graph?.locks ?? [];
-  const toolCatalog = graph?.toolNames ?? [];
-  const allowedToolNames = definition.plugins?.allowed_tools ? [...definition.plugins.allowed_tools] : undefined;
+  const presetSkillSnapshot = resolvePresetSkillSnapshot(definition);
+  assertSkillRequirements(presetSkillSnapshot, fixedPluginIds);
+  const availableBundledSkills = providerProtocol === "none"
+    ? undefined
+    : filterSkillSnapshot(bundledSkillSnapshot, fixedPluginIds);
+  const skillSnapshot = mergeSkillSnapshots(skillRuntime, availableBundledSkills, presetSkillSnapshot);
+  const intrinsicToolNames = skillSnapshot?.skills.length ? [SKILL_ACTIVATE_TOOL_NAME] : [];
+  const toolCatalog = [...new Set([...(graph?.toolNames ?? []), ...intrinsicToolNames])].sort();
+  const allowedToolNames = definition.plugins?.allowed_tools
+    ? [...new Set([...definition.plugins.allowed_tools, ...intrinsicToolNames])]
+    : undefined;
   if (graph && allowedToolNames?.some((name) => !toolCatalog.includes(name))) {
     const invalid = allowedToolNames.find((name) => !toolCatalog.includes(name));
     throw new Error(`tool_not_bound:${invalid}`);
   }
   const bootstrapTools = definition.plugins?.bootstrap_tools as BootstrapToolRequest[] | undefined;
-  if (providerProtocol === "none" && (fixedPlugins.length > 0 || Boolean(allowedToolNames?.length) || Boolean(bootstrapTools?.length))) {
+  if (providerProtocol === "none" && (fixedPlugins.length > 0 || Boolean(allowedToolNames?.length) || Boolean(bootstrapTools?.length) || intrinsicToolNames.length > 0)) {
     throw new Error("tool_protocol_none_with_tools");
   }
   const policy = compilePolicy(definition.policy);
   const promptProfile = definition.prompt?.profile ?? "agent";
-  const systemPrompt = definition.prompt?.system !== undefined
+  const baseSystemPrompt = definition.prompt?.system !== undefined
     ? definition.prompt.system
     : resolvePrompt?.(promptProfile) ?? "";
+  const attachedSkillContent = resolveAttachedSkillContent(definition);
+  const skillPrompt = attachedSkillContent.mode === "legacy"
+    ? attachedSkillContent.legacyMarkdown
+      ? `Attached SKILL.md instructions:\n${attachedSkillContent.legacyMarkdown}`
+      : undefined
+    : attachedSkillContent.files.length
+      ? formatSkillFiles(attachedSkillContent.files)
+      : undefined;
+  const systemPrompt = [baseSystemPrompt, skillPrompt].filter(Boolean).join("\n\n");
   const allowResponseFormatOverride = definition.metadata?.allow_response_format_override === true;
   const promptHash = hash({ profile: promptProfile, content: systemPrompt });
   const pluginLockHash = graph?.pluginLockHash ?? hash(fixedPlugins);
@@ -668,6 +829,13 @@ function compileDefinition(
     prompt_profile: promptProfile,
     prompt_content: systemPrompt,
     prompt_snapshot_version: 1,
+    ...(skillSnapshot ? { skill_snapshot: skillSnapshot } : {}),
+    ...(attachedSkillContent.mode === "legacy" && attachedSkillContent.legacyMarkdown
+      ? { skill_markdown: attachedSkillContent.legacyMarkdown }
+      : {}),
+    ...(attachedSkillContent.mode === "files" && attachedSkillContent.files.length
+      ? { skill_files: attachedSkillContent.files }
+      : {}),
     fixed_plugins: fixedPlugins,
     plugin_locks: pluginLocks,
     tool_catalog: toolCatalog,
@@ -688,6 +856,7 @@ function compileDefinition(
     promptProfile,
     systemPrompt,
     promptSnapshotVersion: 1,
+    ...(skillSnapshot ? { skillSnapshot } : {}),
     fixedPlugins,
     pluginLocks,
     toolCatalog,
@@ -706,6 +875,7 @@ function compiledFromRow(
   row: RegistryRow,
   catalog?: PluginCatalog,
   resolvePrompt?: (profile: string) => string,
+  bundledSkillSnapshot?: CompiledSkillSnapshot,
 ): CompiledPresetModel {
   const definition = JSON.parse(row.definition_json) as PresetModelDefinition;
   const stored = parseCompiledSnapshot(row.compiled_snapshot_json);
@@ -735,7 +905,7 @@ function compiledFromRow(
       compiledHash: row.compiled_hash,
     };
   }
-  const compiled = compileDefinition(definition, row.status, catalog, resolvePrompt);
+  const compiled = compileDefinition(definition, row.status, catalog, resolvePrompt, bundledSkillSnapshot);
   if (compiled.compiledHash !== row.compiled_hash && legacyCompiledHash(definition, compiled) !== row.compiled_hash) {
     throw new Error("preset_model_compiled_hash_mismatch");
   }
@@ -749,7 +919,8 @@ function compiledFromRow(
 }
 
 function compiledHashFromSnapshot(definition: PresetModelDefinition, model: CompiledPresetModel): string {
-  return hash({
+  const attachedSkillContent = resolveAttachedSkillContent(definition);
+  const payload = {
     provider_adapter: definition.provider.adapter,
     provider_model: model.providerModel,
     credential_ref: model.credentialRef ?? null,
@@ -758,6 +929,13 @@ function compiledHashFromSnapshot(definition: PresetModelDefinition, model: Comp
     prompt_profile: model.promptProfile,
     prompt_content: model.systemPrompt,
     prompt_snapshot_version: 1,
+    ...(model.skillSnapshot ? { skill_snapshot: model.skillSnapshot } : {}),
+    ...(attachedSkillContent.mode === "legacy" && attachedSkillContent.legacyMarkdown
+      ? { skill_markdown: attachedSkillContent.legacyMarkdown }
+      : {}),
+    ...(attachedSkillContent.mode === "files" && attachedSkillContent.files.length
+      ? { skill_files: attachedSkillContent.files }
+      : {}),
     fixed_plugins: model.fixedPlugins,
     plugin_locks: model.pluginLocks,
     tool_catalog: model.toolCatalog,
@@ -765,7 +943,8 @@ function compiledHashFromSnapshot(definition: PresetModelDefinition, model: Comp
     bootstrap_tools: model.bootstrapTools ?? null,
     policy: model.policy,
     ...(model.allowResponseFormatOverride ? { allow_response_format_override: true } : {}),
-  });
+  };
+  return hash(payload);
 }
 
 function parseCompiledSnapshot(value: string): CompiledPresetModel | undefined {

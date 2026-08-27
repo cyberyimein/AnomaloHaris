@@ -163,6 +163,10 @@ describe("Node Host", () => {
       expect.objectContaining({ ref: "luna@1", status: "published" }),
     ]));
 
+    const missingModel = await app.inject({ method: "GET", url: "/api/preset-models/luna@2" });
+    expect(missingModel.statusCode).toBe(404);
+    expect(missingModel.json()).toMatchObject({ error_code: "preset_model_not_found" });
+
     const first = await app.inject({
       method: "POST",
       url: "/api/chat",
@@ -351,6 +355,158 @@ describe("Node Host", () => {
     });
     expect(legacyHeaderDraft.statusCode).toBe(201);
     expect(legacyHeaderDraft.json().preset_model.ref).toBe("legacy-header@1");
+  });
+
+  it("shows one current preset model by default and exposes retired history explicitly", async () => {
+    const registry = new SqlitePresetModelRegistry(":memory:");
+    registries.push(registry);
+    registry.ensureBuiltinDefault({ model: "replay-model" });
+    const v1 = registry.publish(registry.createDraft({
+      name: "urus-arbitration",
+      version: 1,
+      description: "Arbitration model",
+      provider: { adapter: "openai-compatible", model: "urus-provider" },
+      plugins: { fixed: [] },
+    }).ref);
+    registry.publish(registry.createDraft({
+      ...v1.definition,
+      version: 2,
+      metadata: { ghost: "🦬" },
+    }).ref);
+    const app = await makeApp([], undefined, registry, undefined, undefined, "secret");
+    apps.push(app);
+
+    const current = await app.inject({
+      method: "GET",
+      url: "/api/manage/preset-models",
+      headers: { "x-anomaloharis-admin-token": "secret" },
+    });
+    expect(current.statusCode).toBe(200);
+    expect(current.json().preset_models.map((model: { ref: string }) => model.ref)).toEqual([
+      "anomaloharis@1",
+      "urus-arbitration@2",
+    ]);
+
+    const history = await app.inject({
+      method: "GET",
+      url: "/api/manage/preset-models?include_history=true",
+      headers: { "x-anomaloharis-admin-token": "secret" },
+    });
+    expect(history.statusCode).toBe(200);
+    expect(history.json().preset_models.map((model: { ref: string; status: string }) => `${model.ref}:${model.status}`)).toEqual([
+      "anomaloharis@1:published",
+      "urus-arbitration@2:published",
+      "urus-arbitration@1:retired",
+    ]);
+  });
+
+  it("exposes model-scoped Skill metadata without exposing Skill bodies", async () => {
+    const registry = new SqlitePresetModelRegistry(":memory:");
+    registries.push(registry);
+    registry.ensureBuiltinDefault({ model: "replay-model" });
+    registry.publish(registry.createDraft({
+      name: "progressive-skill-model",
+      version: 1,
+      description: "Progressive Skills",
+      provider: { adapter: "openai-compatible", model: "skill-provider" },
+      prompt: {
+        skills: [
+          { content: "---\nname: invoice-review\ndescription: Review invoices.\n---\n\nPrivate invoice rules." },
+          { content: "---\nname: contract-review\ndescription: Review contracts.\n---\n\nPrivate contract rules." },
+        ],
+      },
+      plugins: { fixed: [] },
+    }).ref);
+    const app = await makeApp([], undefined, registry, undefined, undefined, "secret", undefined, "progressive-skill-model@1");
+    apps.push(app);
+
+    const listed = await app.inject({ method: "GET", url: "/api/sessions/skill-session/skills?preset_model=progressive-skill-model@1" });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json().skills).toEqual([
+      expect.objectContaining({ name: "contract-review", summary: "Review contracts.", instructions_available: true }),
+      expect.objectContaining({ name: "invoice-review", summary: "Review invoices.", instructions_available: true }),
+    ]);
+    expect(JSON.stringify(listed.json())).not.toContain("Private invoice rules.");
+
+    const activated = await app.inject({
+      method: "PUT",
+      url: "/api/sessions/skill-session/skills?preset_model=progressive-skill-model@1",
+      payload: { active_skills: ["invoice-review"] },
+    });
+    expect(activated.statusCode).toBe(200);
+    expect(activated.json()).toMatchObject({ active_skills: ["invoice-review"] });
+  });
+
+  it("rejects Skill API requests scoped to a different model than the bound Session", async () => {
+    const registry = new SqlitePresetModelRegistry(":memory:");
+    registries.push(registry);
+    registry.ensureBuiltinDefault({ model: "replay-model" });
+    const bound = registry.publish(registry.createDraft({
+      name: "bound-skill-model",
+      version: 1,
+      description: "Bound Skill model",
+      provider: { adapter: "openai-compatible", model: "bound-skill-provider" },
+      prompt: { skills: [{ content: "---\nname: bound-review\ndescription: Review bound documents.\n---\n\nBound rules." }] },
+      plugins: { fixed: [] },
+    }).ref);
+    const other = registry.publish(registry.createDraft({
+      name: "other-skill-model",
+      version: 1,
+      description: "Other Skill model",
+      provider: { adapter: "openai-compatible", model: "other-skill-provider" },
+      prompt: { skills: [{ content: "---\nname: other-review\ndescription: Review other documents.\n---\n\nOther rules." }] },
+      plugins: { fixed: [] },
+    }).ref);
+    const sessions = new InMemorySessionAdapter();
+    await sessions.setPresetModel("bound-skill-session", bound.ref);
+    const app = await makeApp([], undefined, registry, undefined, undefined, "secret", sessions);
+    apps.push(app);
+
+    const listed = await app.inject({ method: "GET", url: `/api/sessions/bound-skill-session/skills?preset_model=${other.ref}` });
+    expect(listed.statusCode).toBe(409);
+    expect(listed.json()).toMatchObject({ error_code: "session_model_mismatch" });
+
+    const updated = await app.inject({
+      method: "PUT",
+      url: `/api/sessions/bound-skill-session/skills?preset_model=${other.ref}`,
+      payload: { active_skills: ["other-review"] },
+    });
+    expect(updated.statusCode).toBe(409);
+    expect(updated.json()).toMatchObject({ error_code: "session_model_mismatch" });
+
+    const tools = await app.inject({
+      method: "GET",
+      url: `/api/tools?session_id=bound-skill-session&preset_model=${other.ref}`,
+    });
+    expect(tools.statusCode).toBe(409);
+    expect(tools.json()).toMatchObject({ error_code: "session_model_mismatch" });
+  });
+
+  it("does not expose current deployment Skills for a Session whose model is unavailable", async () => {
+    const root = mkdtempSync(join(tmpdir(), "anomaloharis-host-missing-skill-model-"));
+    tempDirectories.push(root);
+    mkdirSync(join(root, "skills", "current-skill"), { recursive: true });
+    writeFileSync(join(root, "skills", "current-skill", "SKILL.md"), "---\nname: current-skill\ndescription: Current deployment rules.\n---\n\nCurrent deployment instructions.");
+    const registry = new SqlitePresetModelRegistry(":memory:");
+    registries.push(registry);
+    registry.ensureBuiltinDefault({ model: "replay-model" });
+    const sessions = new InMemorySessionAdapter();
+    await sessions.setPresetModel("missing-skill-model-session", "removed-model@1");
+    const app = await makeApp(
+      [],
+      undefined,
+      registry,
+      new FileResourceLoader({ projectRoot: root, skillDirs: [join(root, "skills")] }),
+      undefined,
+      undefined,
+      sessions,
+    );
+    apps.push(app);
+
+    const response = await app.inject({ method: "GET", url: "/api/sessions/missing-skill-model-session/skills" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().skills).toEqual([]);
   });
 
   it("shows registered plugin catalog entries even when optional child plugins are disabled", async () => {

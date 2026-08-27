@@ -6,6 +6,7 @@ import fastify, { type FastifyInstance, type FastifyReply } from "fastify";
 import fastifyStatic from "@fastify/static";
 import fastifyWebsocket from "@fastify/websocket";
 import {
+  canonicalizePresetModelRef,
   legacyNamingAdapter,
   validateContract,
   type AgentEvent,
@@ -23,7 +24,8 @@ import { DEFAULT_PRESET_MODEL_REF, type CompiledPresetModel, SqlitePresetModelRe
 import type { SessionRepository } from "./session.js";
 import type { SessionSnapshot, SessionSummary, ToolContext } from "./types.js";
 import type { ToolRuntime } from "./tools.js";
-import type { FileResourceLoader } from "./resources.js";
+import type { FileResourceLoader, ResourceSkillSummary } from "./resources.js";
+import { SKILL_ACTIVATE_TOOL_NAME, type CompiledSkillSnapshot } from "./skills.js";
 import type { PluginCatalog } from "./plugin-catalog.js";
 import type { PluginHost } from "./plugins.js";
 import { DEFAULT_SUBAGENT_MODEL, isSearchMode } from "./retrieval.js";
@@ -43,6 +45,7 @@ export type NodeHostOptions = {
   tools?: ToolRuntime;
   compute?: Omit<ComputeApiOptions, "registry" | "sessions">;
   resources?: FileResourceLoader;
+  skillSnapshot?: CompiledSkillSnapshot | undefined;
   managementToken?: string;
   plugins?: PluginHost;
   pluginCatalog?: PluginCatalog;
@@ -138,19 +141,34 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
 
   app.get<{ Params: { sessionId: string } }>("/api/sessions/:sessionId/skills", async (request, reply) => {
     const snapshot = await options.sessions.open(request.params.sessionId as SessionId);
-    return reply.send({ session_id: request.params.sessionId, active_skills: snapshot.activeSkills, skills: options.resources?.skills(new Set(snapshot.activeSkills)) ?? [] });
+    const query = request.query as { preset_model?: string };
+    const boundModel = sessionSkillModelMismatch(snapshot, query.preset_model);
+    if (boundModel) return reply.code(409).send({ error: `Session is bound to ${boundModel}; requested ${query.preset_model}.`, error_code: "session_model_mismatch" });
+    return reply.send({
+      session_id: request.params.sessionId,
+      active_skills: snapshot.activeSkills,
+      skills: sessionSkillSummaries(options, snapshot, query.preset_model),
+    });
   });
 
   app.put<{ Params: { sessionId: string }; Body: unknown }>("/api/sessions/:sessionId/skills", async (request, reply) => {
     const sessionId = request.params.sessionId as SessionId;
     if (!options.sessions.setResources) return reply.code(501).send({ error: "Session resource persistence is not supported." });
     const active = readStringArray(asObject(request.body).active_skills);
-    const available = new Set((options.resources?.skills() ?? []).map((skill) => skill.name));
+    const query = request.query as { preset_model?: string };
+    const snapshot = await options.sessions.open(sessionId);
+    const boundModel = sessionSkillModelMismatch(snapshot, query.preset_model);
+    if (boundModel) return reply.code(409).send({ error: `Session is bound to ${boundModel}; requested ${query.preset_model}.`, error_code: "session_model_mismatch" });
+    const available = new Set(sessionSkillSummaries(options, snapshot, query.preset_model).map((skill) => skill.name));
     const unknown = active.find((name) => !available.has(name));
     if (unknown) return reply.code(404).send({ error: `Unknown skill: ${unknown}`, error_code: "resource_not_found" });
-    const snapshot = await options.sessions.open(sessionId);
     await options.sessions.setResources(sessionId, active, snapshot.activeMcpServers);
-    return reply.send({ session_id: sessionId, active_skills: [...new Set(active)].sort(), skills: options.resources?.skills(new Set(active)) ?? [] });
+    const activeSkills = [...new Set(active)].sort();
+    return reply.send({
+      session_id: sessionId,
+      active_skills: activeSkills,
+      skills: sessionSkillSummaries(options, { ...snapshot, activeSkills }, query.preset_model),
+    });
   });
 
   app.get<{ Params: { sessionId: string } }>("/api/sessions/:sessionId/mcp", async (request, reply) => {
@@ -194,7 +212,12 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
   app.get("/api/manage/preset-models", async (request, reply) => {
     try {
       requireManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
-      const models = (options.presetModels?.list({ includeDraft: true, includeRetired: true }) ?? []).map((summary) => {
+      const query = request.query as { include_history?: string };
+      const includeHistory = query.include_history === "true";
+      const models = (options.presetModels?.list({
+        includeDraft: true,
+        ...(includeHistory ? { includeRetired: true, includeHistory: true } : {}),
+      }) ?? []).map((summary) => {
         const model = options.presetModels!.resolve(summary.ref, { allowDraft: true, allowRetired: true });
         return serializePresetModel(model, true);
       });
@@ -219,7 +242,11 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
     try {
       requireManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
       if (!options.presetModels) throw new HostRequestError(503, "preset_model_unavailable", "Preset Model registry is not configured.");
-      return reply.send({ preset_model: serializePresetModel(options.presetModels.publish(`${request.params.name}@${request.params.version}`), true) });
+      const ref = `${request.params.name}@${request.params.version}`;
+      const published = options.defaultPresetModel
+        ? options.presetModels.publish(ref, { defaultRef: options.defaultPresetModel })
+        : options.presetModels.publish(ref);
+      return reply.send({ preset_model: serializePresetModel(published, true) });
     } catch (error) {
       return sendHostError(reply, error);
     }
@@ -303,6 +330,8 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
     const snapshot = query.session_id ? await options.sessions.open(sessionId) : undefined;
     const boundRef = typeof snapshot?.metadata.preset_model_ref === "string" ? snapshot.metadata.preset_model_ref : undefined;
     const explicitRef = query.preset_model ?? query.model;
+    const boundModel = snapshot ? sessionSkillModelMismatch(snapshot, explicitRef) : undefined;
+    if (boundModel) return reply.code(409).send({ error: `Session is bound to ${boundModel}; requested ${explicitRef}.`, error_code: "session_model_mismatch" });
     const requestedRef = explicitRef ?? boundRef ?? options.defaultPresetModel;
     const interactiveDefault = !explicitRef
       && requestedRef === options.defaultPresetModel
@@ -322,6 +351,8 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
       : preset?.toolCatalog.length
         ? new Set(preset.toolCatalog)
         : undefined;
+    const skillSnapshot = preset ? preset.skillSnapshot : options.skillSnapshot;
+    if (skillSnapshot?.skills.length && allowedToolNames) allowedToolNames.add(SKILL_ACTIVATE_TOOL_NAME);
     if (interactiveDefault && options.pythonSandbox && allowedToolNames) allowedToolNames.add(PYTHON_SANDBOX_TOOL_NAME);
     const allowedPluginIds = preset ? new Set(preset.fixedPlugins.map((selector) => selector.split("@")[0]!)) : undefined;
     if (interactiveDefault && allowedPluginIds && options.pythonSandbox) allowedPluginIds.add("python-sandbox");
@@ -332,6 +363,7 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
       model: preset?.providerModel ?? options.model,
       activeSkills: new Set(snapshot?.activeSkills ?? []),
       activeMcpServers: new Set(snapshot?.activeMcpServers ?? []),
+      ...(skillSnapshot ? { skillSnapshot } : {}),
       ...(allowedPluginIds ? { allowedPluginIds } : {}),
       ...(preset ? { allowedPluginLocks: structuredClone(preset.pluginLocks) } : {}),
     };
@@ -741,7 +773,10 @@ async function toStartRunRequest(
         ? body.search_mode
         : preset?.policy.searchMode ?? "diy",
     ...(preset?.toolProtocol ? { toolProtocol: preset.toolProtocol } : {}),
+    ...(preset?.status === "retired" ? { allowRetiredPresetModel: true } : {}),
   };
+  const skillSnapshot = preset ? preset.skillSnapshot : options.skillSnapshot;
+  if (skillSnapshot) input.skillSnapshot = skillSnapshot;
   if (!isSearchMode(input.searchMode)) {
     throw new HostRequestError(400, "invalid_search_mode", "Invalid search mode. Choose native, subagent, or diy.");
   }
@@ -758,11 +793,15 @@ async function toStartRunRequest(
     if (preset.toolCatalog.length > 0) {
       const fixedTools = new Set(preset.toolCatalog);
       if (interactiveDefault && options.pythonSandbox) fixedTools.add(PYTHON_SANDBOX_TOOL_NAME);
+      if (skillSnapshot?.skills.length) fixedTools.add(SKILL_ACTIVATE_TOOL_NAME);
       input.allowedToolNames = preset.allowedToolNames
         ? new Set(preset.allowedToolNames.filter((name) => fixedTools.has(name)))
         : fixedTools;
     } else if (preset.allowedToolNames) {
       input.allowedToolNames = new Set(preset.allowedToolNames);
+    }
+    if (skillSnapshot?.skills.length && input.allowedToolNames) {
+      input.allowedToolNames = new Set([...input.allowedToolNames, SKILL_ACTIVATE_TOOL_NAME]);
     }
     if (preset.bootstrapTools) input.bootstrapTools = structuredClone(preset.bootstrapTools);
   }
@@ -804,6 +843,7 @@ function serializePresetModel(model: CompiledPresetModel, includeDefinition = fa
     provider_model: model.providerModel,
     tool_protocol: model.toolProtocol,
     prompt_profile: model.promptProfile,
+    skills: model.skillSnapshot?.skills.map(({ name, description, contentHash }) => ({ name, description, content_hash: contentHash })) ?? [],
     fixed_plugins: model.fixedPlugins,
     plugin_locks: model.pluginLocks,
     tool_catalog: model.toolCatalog,
@@ -840,7 +880,8 @@ function sendBuddyError(reply: FastifyReply, error: unknown): FastifyReply {
 function hostErrorStatus(error: unknown): number {
   if (error instanceof HostRequestError) return error.statusCode;
   const code = hostErrorCode(error);
-  if (["session_model_mismatch", "preset_model_default_cannot_retire"].includes(code)) return 409;
+  if (code === "preset_model_not_found") return 404;
+  if (["session_model_mismatch", "preset_model_default_cannot_retire", "preset_model_version_not_monotonic"].includes(code)) return 409;
   if (code === "invalid_preset_model_definition") return 400;
   return 500;
 }
@@ -852,7 +893,8 @@ function hostErrorCode(error: unknown): string {
     if (error.message === "invalid_preset_model_ref") return "invalid_request";
     if (error.message === "preset_model_retired") return "preset_model_not_found";
     if (error.message === "preset_model_default_cannot_retire") return "preset_model_default_cannot_retire";
-    if (error.message === "tool_protocol_none_with_tools" || error.message === "unsupported_tool_execution_policy" || error.message.startsWith("invalid_policy:") || error.message.startsWith("invalid_preset_model_definition:") || error.message.startsWith("tool_not_bound:")) {
+    if (error.message === "preset_model_version_not_monotonic") return "preset_model_version_not_monotonic";
+    if (error.message === "tool_protocol_none_with_tools" || error.message === "unsupported_tool_execution_policy" || error.message.startsWith("skill_") || error.message.startsWith("invalid_policy:") || error.message.startsWith("invalid_preset_model_definition:") || error.message.startsWith("tool_not_bound:")) {
       return "invalid_preset_model_definition";
     }
   }
@@ -914,6 +956,53 @@ function readStringArray(value: unknown): string[] {
   return [...new Set(value.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean))];
 }
 
+function sessionSkillModelMismatch(snapshot: SessionSnapshot, explicitPresetRef?: string): string | undefined {
+  const boundRef = typeof snapshot.metadata.preset_model_ref === "string" ? snapshot.metadata.preset_model_ref : undefined;
+  if (!boundRef || !explicitPresetRef) return undefined;
+  const normalizedBound = canonicalizePresetModelRef(boundRef.trim().toLowerCase());
+  const normalizedRequested = canonicalizePresetModelRef(explicitPresetRef.trim().toLowerCase());
+  return normalizedBound === normalizedRequested ? undefined : boundRef;
+}
+
+function sessionSkillSummaries(
+  options: NodeHostOptions,
+  snapshot: SessionSnapshot,
+  explicitPresetRef?: string,
+): ResourceSkillSummary[] {
+  const activeNames = new Set(snapshot.activeSkills);
+  const summaries = new Map<string, ResourceSkillSummary>();
+  const boundRef = typeof snapshot.metadata.preset_model_ref === "string" ? snapshot.metadata.preset_model_ref : undefined;
+  const requestedRef = boundRef || explicitPresetRef || options.defaultPresetModel;
+  let presetResolved = false;
+  if (requestedRef && options.presetModels) {
+    try {
+      const preset = boundRef && requestedRef === boundRef
+        ? options.presetModels.resolveForBoundSession(requestedRef)
+        : options.presetModels.resolve(requestedRef);
+      presetResolved = true;
+      for (const skill of preset.skillSnapshot?.skills ?? []) {
+        summaries.set(skill.name, {
+          name: skill.name,
+          summary: skill.description,
+          enabled: true,
+          active: activeNames.has(skill.name),
+          instructions_available: true,
+        });
+      }
+    } catch {
+      // A debug/UI resource query should remain usable if its optional model ref
+      // has just been retired or removed; the run path still returns the exact error.
+    }
+  }
+  // A bound Session must never fall back to the current deployment catalog:
+  // that catalog may belong to a different model revision (or a different
+  // model entirely). Keep the fallback only for genuinely unbound sessions.
+  if (!presetResolved && !boundRef) {
+    for (const skill of options.resources?.skills(activeNames) ?? []) summaries.set(skill.name, skill);
+  }
+  return [...summaries.values()].sort((left, right) => left.name.localeCompare(right.name));
+}
+
 async function collectRun(runControl: RunControl, input: StartRunRequest, activeRuns: Map<SessionId, string>): Promise<AgentEvent[]> {
   const events: AgentEvent[] = [];
   for await (const event of startAgentRun(runControl, input, activeRuns)) events.push(event);
@@ -925,6 +1014,7 @@ async function* startAgentRun(runControl: RunControl, input: StartRunRequest, ac
   const handle = runControl.start(
     { kind: "preset_model", ref: input.presetModelRef },
     { clientId: "local", input: { agent_input: input } },
+    { allowRetiredTarget: input.allowRetiredPresetModel === true },
   );
   activeRuns.set(input.sessionId, handle.runId);
   try {

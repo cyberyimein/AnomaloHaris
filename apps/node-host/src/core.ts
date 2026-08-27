@@ -97,6 +97,7 @@ export class AgentCore {
       ? new Set(checkpoint.state.allowedPluginIds)
       : input.allowedPluginIds;
     const effectiveAllowedPluginLocks = checkpoint?.state.allowedPluginLocks ?? input.allowedPluginLocks;
+    const effectiveSkillSnapshot = checkpoint?.state.skillSnapshot ?? input.skillSnapshot;
     const effectivePolicy = checkpoint?.state.policy ?? input.policy ?? fallbackPolicy;
     const effectiveSystemPrompt = checkpoint?.state.systemPrompt ?? input.systemPrompt;
     const runInput: AgentRunInput = {
@@ -123,6 +124,7 @@ export class AgentCore {
       ...(effectiveAllowedToolNames === undefined ? {} : { allowedToolNames: effectiveAllowedToolNames }),
       ...(effectiveAllowedPluginIds === undefined ? {} : { allowedPluginIds: effectiveAllowedPluginIds }),
       ...(effectiveAllowedPluginLocks === undefined ? {} : { allowedPluginLocks: structuredClone(effectiveAllowedPluginLocks) }),
+      ...(effectiveSkillSnapshot === undefined ? {} : { skillSnapshot: structuredClone(effectiveSkillSnapshot) }),
     };
     const policy = runInput.policy ?? fallbackPolicy;
     const runSignal = AbortSignal.any([signal, AbortSignal.timeout(policy.runTimeoutMs)]);
@@ -601,6 +603,7 @@ export class AgentCore {
         model: input.model,
         ...(input.presetModelRef ? { presetModelRef: input.presetModelRef } : {}),
         ...(input.compiledHash ? { compiledHash: input.compiledHash } : {}),
+        ...(input.skillSnapshot === undefined ? {} : { skillSnapshot: structuredClone(input.skillSnapshot) }),
         ...(input.toolProtocol ? { toolProtocol: input.toolProtocol } : {}),
         ...(input.policy ? { policy: structuredClone(input.policy) } : {}),
         ...(input.allowedPluginIds ? { allowedPluginIds: [...input.allowedPluginIds].sort() } : {}),
@@ -636,6 +639,7 @@ function toolContext(
     searchMode: input.searchMode,
     model: input.model,
     ...(input.presetModelRef ? { presetModelRef: input.presetModelRef } : {}),
+    ...(input.skillSnapshot === undefined ? {} : { skillSnapshot: structuredClone(input.skillSnapshot) }),
     activeSkills,
     activeMcpServers,
     ...(input.allowedPluginIds ? { allowedPluginIds: input.allowedPluginIds } : {}),

@@ -773,7 +773,7 @@
               <span class="switch-track" aria-hidden="true"></span>
               <span class="switch-card-body">
                 <strong>{{ skill.display_name || skill.name }}</strong>
-                <span>{{ skill.description || "No description" }}</span>
+                <span>{{ skill.description || skill.summary || "No description" }}</span>
                 <span>Use when: {{ skill.when_to_use || "No routing hint" }}</span>
                 <span>{{ skill.tool_count || 0 }} tools</span>
               </span>
@@ -1592,7 +1592,12 @@ async function loadWebTraces() {
 async function loadSkills() {
   const currentSessionId = sessionId.value;
   try {
-    const response = await fetch(`/api/sessions/${encodeURIComponent(currentSessionId)}/skills`);
+    const query = new URLSearchParams();
+    if (presetMode.value && selectedPresetAgentId.value) {
+      query.set("preset_model", selectedPresetAgentId.value);
+    }
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    const response = await fetch(`/api/sessions/${encodeURIComponent(currentSessionId)}/skills${suffix}`);
     const data = await response.json();
     if (sessionId.value !== currentSessionId) {
       return;
@@ -2155,7 +2160,12 @@ async function updateSessionSkills() {
   const activeSkills = skills.value.filter((skill) => skill.active).map((skill) => skill.name);
 
   try {
-    const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId.value)}/skills`, {
+    const query = new URLSearchParams();
+    if (presetMode.value && selectedPresetAgentId.value) {
+      query.set("preset_model", selectedPresetAgentId.value);
+    }
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId.value)}/skills${suffix}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ active_skills: activeSkills }),

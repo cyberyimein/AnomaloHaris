@@ -65,6 +65,7 @@ export type ErrorCode =
   | "preset_model_unavailable"
   | "preset_model_override_forbidden"
   | "preset_model_default_cannot_retire"
+  | "preset_model_version_not_monotonic"
   | "session_model_mismatch"
   | "tool_failed"
   | "tool_not_allowed"

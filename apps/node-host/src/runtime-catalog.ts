@@ -3,6 +3,7 @@ import type { ExecutionRuntimeKind } from "@anomaloharis/contracts";
 import type {
   ExecutionRuntimeAdapter,
   ResolvedExecutionTarget,
+  RuntimeResolveOptions,
 } from "./run-control.js";
 
 /** Trusted runtime adapters are assembled by Host; arbitrary plugins cannot register a Run runtime. */
@@ -20,10 +21,10 @@ export class RuntimeCatalog {
     return adapter;
   }
 
-  resolve(kind: ExecutionRuntimeKind, ref: string): { adapter: ExecutionRuntimeAdapter; target: ResolvedExecutionTarget } {
+  resolve(kind: ExecutionRuntimeKind, ref: string, options: RuntimeResolveOptions = {}): { adapter: ExecutionRuntimeAdapter; target: ResolvedExecutionTarget } {
     const adapter = this.adapter(kind);
     if (!adapter.isHealthy()) throw new Error(`runtime_unhealthy:${kind}`);
-    return { adapter, target: adapter.resolve(ref) };
+    return { adapter, target: adapter.resolve(ref, options) };
   }
 
   list(): Array<{ kind: ExecutionRuntimeKind; version: string; packageHash: string; capabilities: readonly string[]; healthy: boolean }> {

@@ -18,6 +18,7 @@ import { PythonSandboxRuntime } from "./python-sandbox.js";
 import { SqliteSessionAdapter } from "./sqlite.js";
 import { RunController } from "./controller.js";
 import { asToolAdapter, CompositeToolRuntime, CoreToolRuntime, PluginToolAdapter, TimeZoneToolRuntime } from "./tools.js";
+import { SkillRuntime, SkillToolRuntime } from "./skills.js";
 import { WebToolRuntime } from "./web.js";
 import { ServiceAuth, SqliteComputeStore, SqliteNativeRunStore } from "./compute-api.js";
 import { legacyNamingAdapter } from "@anomaloharis/contracts";
@@ -115,9 +116,12 @@ const resources = new FileResourceLoader({
   skillDirs: [join(repoRoot, "runtime-bundle", "skills")],
   mcpConfigPath: join(repoRoot, "runtime-bundle", "config", "mcp_servers.yaml"),
 });
+const skillRuntime = new SkillRuntime();
+const bundledSkillSnapshot = resources.skillSnapshot();
 const presetModels = new SqlitePresetModelRegistry(presetModelDatabasePath, {
   catalog: pluginCatalog,
   resolvePrompt: (profile) => resources.promptText(profile),
+  bundledSkillSnapshot,
 });
 const serviceClients = parseServiceClients(env("ANOMALOHARIS_SERVICE_TOKENS"), env("ANOMALOHARIS_SERVICE_TOKEN"));
 if (hasPublicBinding && serviceClients.length === 0) {
@@ -286,6 +290,7 @@ const model = new PresetModelAdapter({
   ...(apiKey ? { apiKey } : {}),
 });
 const tools = new CompositeToolRuntime([
+  asToolAdapter("agent-skills", 110, new SkillToolRuntime(skillRuntime, bundledSkillSnapshot), { alwaysAvailable: true }),
   asToolAdapter("host-core", 100, new CoreToolRuntime()),
   asToolAdapter("time-tools", 100, new TimeZoneToolRuntime()),
   asToolAdapter("web", 80, new WebToolRuntime({
@@ -321,7 +326,7 @@ const core = new AgentCore({
   model,
   tools,
   sessions,
-  context: new ResourceContextBuilder(tools, resources),
+  context: new ResourceContextBuilder(tools, resources, { bundledSkillSnapshot }),
   plugins,
 });
 const controller = new RunController(core);
@@ -358,6 +363,7 @@ const app = await buildNodeHost({
   tools,
   ...(existsSync(join(staticDir, "index.html")) ? { staticDir } : {}),
   resources,
+  skillSnapshot: bundledSkillSnapshot,
   plugins,
   pluginCatalog,
   ...(buddyDashboard ? { buddy: buddyDashboard } : {}),
@@ -374,6 +380,7 @@ const app = await buildNodeHost({
     idempotency: computeStore,
     nativeRuns: new SqliteNativeRunStore(computeStore.db),
     runControl,
+    skillSnapshot: bundledSkillSnapshot,
   },
   logger: env("ANOMALOHARIS_ENV") !== "test",
 });

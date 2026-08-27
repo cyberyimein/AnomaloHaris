@@ -4,8 +4,9 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { DEFAULT_PRESET_MODEL_REF, legacyAgentToDefinition, SqlitePresetModelRegistry, URUS_SCHEDULED_EVENT_PRESET_MODEL_REF } from "./preset-models.js";
+import { DEFAULT_PRESET_MODEL_REF, legacyAgentToDefinition, MAX_SKILL_FILE_COUNT, MAX_SKILL_MARKDOWN_BYTES, MAX_SKILL_TOTAL_BYTES, SqlitePresetModelRegistry, URUS_SCHEDULED_EVENT_PRESET_MODEL_REF } from "./preset-models.js";
 import { builtinPluginCatalog } from "./plugin-catalog.js";
+import { SkillRuntime } from "./skills.js";
 
 const directories: string[] = [];
 
@@ -47,15 +48,56 @@ describe("SqlitePresetModelRegistry", () => {
     expect(published.ref).toBe("luna@1");
     expect(first.resolve("luna@1").compiledHash).toMatch(/^[a-f0-9]{64}$/);
     expect(() => first.createDraft({ ...definition, description: "changed" })).toThrow("preset_model_version_exists");
+    const replacement = first.publish(first.createDraft({
+      ...definition,
+      version: 2,
+      description: "replacement",
+    }).ref);
+    expect(replacement.ref).toBe("luna@2");
+    expect(first.resolveForBoundSession("luna@1").status).toBe("retired");
+    expect(first.list().map((model) => model.ref)).toEqual(["luna@2"]);
+    expect(first.list({ includeRetired: true, includeHistory: true }).map((model) => model.ref)).toEqual(["luna@2", "luna@1"]);
     const hash = published.compiledHash;
     first.close();
 
     const restarted = new SqlitePresetModelRegistry(databasePath);
-    expect(restarted.resolve("luna@1").compiledHash).toBe(hash);
+    expect(restarted.resolveForBoundSession("luna@1").compiledHash).toBe(hash);
     expect(restarted.list()).toEqual([
-      expect.objectContaining({ ref: "luna@1", status: "published", provider_model: "deepseek/deepseek-chat" }),
+      expect.objectContaining({ ref: "luna@2", status: "published", provider_model: "deepseek/deepseek-chat" }),
     ]);
     restarted.close();
+  });
+
+  it("rejects a new version lower than any existing version", () => {
+    const registry = new SqlitePresetModelRegistry(":memory:");
+    const definition = {
+      name: "monotonic-model",
+      version: 2,
+      description: "Monotonic version fixture",
+      provider: { adapter: "openai-compatible", model: "provider" },
+      plugins: { fixed: [] },
+    };
+    registry.publish(registry.createDraft(definition).ref);
+
+    expect(() => registry.createDraft({ ...definition, version: 1 })).toThrow("preset_model_version_not_monotonic");
+    expect(registry.resolve("monotonic-model@2").status).toBe("published");
+    registry.close();
+  });
+
+  it("does not publish an older draft after a newer version exists", () => {
+    const registry = new SqlitePresetModelRegistry(":memory:");
+    const base = {
+      name: "draft-monotonic-model",
+      description: "Draft monotonic version fixture",
+      provider: { adapter: "openai-compatible" as const, model: "provider" },
+      plugins: { fixed: [] as string[] },
+    };
+    const older = registry.createDraft({ ...base, version: 1 });
+    const newer = registry.publish(registry.createDraft({ ...base, version: 2 }).ref);
+
+    expect(() => registry.publish(older.ref)).toThrow("preset_model_version_not_monotonic");
+    expect(registry.resolve(newer.ref).status).toBe("published");
+    registry.close();
   });
 
   it("freezes resolved prompt profile content in the published snapshot", () => {
@@ -112,6 +154,40 @@ describe("SqlitePresetModelRegistry", () => {
       provider: { model: "deepseek/deepseek-chat", credential_ref: "openrouter-primary" },
       plugins: { fixed: ["web"], allowed_tools: ["web_search"] },
     });
+    registry.close();
+  });
+
+  it("does not create a new built-in version when the deployment provider default changes", () => {
+    const registry = new SqlitePresetModelRegistry(":memory:");
+    const first = registry.ensureBuiltinDefault({ model: "provider-a" });
+    const restarted = registry.ensureBuiltinDefault({ model: "provider-b" });
+
+    expect(restarted.ref).toBe(first.ref);
+    expect(restarted.providerModel).toBe("provider-a");
+    expect(registry.list().map((model) => model.ref)).toEqual(["anomaloharis@1"]);
+    registry.close();
+  });
+
+  it("keeps the configured default version alive until the default is switched", () => {
+    const registry = new SqlitePresetModelRegistry(":memory:");
+    const first = registry.publish(registry.createDraft({
+      name: "default-model",
+      version: 1,
+      description: "Default model",
+      provider: { adapter: "openai-compatible", model: "provider-a" },
+      plugins: { fixed: [] },
+    }).ref);
+    const second = registry.createDraft({
+      ...first.definition,
+      version: 2,
+      provider: { ...first.definition.provider, model: "provider-b" },
+    });
+
+    registry.publish(second.ref, { defaultRef: first.ref });
+
+    expect(registry.resolve(first.ref).status).toBe("published");
+    expect(registry.resolve(second.ref).status).toBe("published");
+    expect(registry.list().map((model) => model.ref)).toEqual([second.ref]);
     registry.close();
   });
 
@@ -180,6 +256,170 @@ describe("SqlitePresetModelRegistry", () => {
       provider: { ...first.definition.provider, credential_ref: "credential-b" },
     }).ref);
     expect(second.compiledHash).not.toBe(first.compiledHash);
+    registry.close();
+  });
+
+  it("freezes bundled Skills and filters plugin-gated entries by model capability", () => {
+    const runtime = new SkillRuntime();
+    const bundled = runtime.compile([
+      { content: "---\nname: buddy\ndescription: Control Buddy.\nrequires_plugins: buddy-bridge\n---\n\nBuddy rules." },
+      { content: "---\nname: calculator\ndescription: Do arithmetic.\n---\n\nCalculator rules." },
+    ]);
+    const definition = {
+      name: "bundle-model",
+      version: 1,
+      description: "Bundled Skill test",
+      provider: { adapter: "openai-compatible", model: "provider" },
+      plugins: { fixed: [] as string[] },
+    };
+    const withoutBuddyRegistry = new SqlitePresetModelRegistry(":memory:", { bundledSkillSnapshot: bundled });
+    const withoutBuddy = withoutBuddyRegistry.createDraft(definition);
+    expect(withoutBuddy.skillSnapshot?.skills.map((skill) => skill.name)).toEqual(["calculator"]);
+    withoutBuddyRegistry.close();
+
+    const withBuddyRegistry = new SqlitePresetModelRegistry(":memory:", { bundledSkillSnapshot: bundled });
+    const withBuddy = withBuddyRegistry.createDraft({ ...definition, name: "buddy-model", plugins: { fixed: ["buddy-bridge"] } });
+    expect(withBuddy.skillSnapshot?.skills.map((skill) => skill.name)).toEqual(["buddy", "calculator"]);
+    withBuddyRegistry.close();
+
+    const changedBundleRegistry = new SqlitePresetModelRegistry(":memory:", {
+      bundledSkillSnapshot: runtime.compile([
+        { content: "---\nname: buddy\ndescription: Control Buddy.\nrequires_plugins: buddy-bridge\n---\n\nBuddy rules." },
+        { content: "---\nname: calculator\ndescription: Do arithmetic.\n---\n\nChanged calculator rules." },
+      ]),
+    });
+    const changed = changedBundleRegistry.createDraft(definition);
+    expect(changed.compiledHash).not.toBe(withoutBuddy.compiledHash);
+    changedBundleRegistry.close();
+  });
+
+  it("attaches one SKILL.md to the immutable prompt snapshot", () => {
+    const registry = new SqlitePresetModelRegistry(":memory:");
+    const skill = "# Calculator\nUse deterministic arithmetic.";
+    const first = registry.publish(registry.createDraft({
+      name: "skill-model",
+      version: 1,
+      description: "Skill test",
+      provider: { adapter: "openai-compatible", model: "provider" },
+      prompt: { system: "Be concise.", skill_markdown: skill },
+      plugins: { fixed: [] },
+    }).ref);
+
+    expect(first.systemPrompt).toBe(`Be concise.\n\nAttached SKILL.md instructions:\n${skill}`);
+    expect(first.definition.prompt?.skill_markdown).toBe(skill);
+
+    const second = registry.createDraft({
+      ...first.definition,
+      version: 2,
+      prompt: { ...first.definition.prompt, skill_markdown: "# Updated skill\nUse the new rule." },
+    });
+    expect(second.compiledHash).not.toBe(first.compiledHash);
+    expect(first.systemPrompt).toContain("Use deterministic arithmetic.");
+    expect(first.systemPrompt).not.toContain("Use the new rule.");
+    registry.close();
+  });
+
+  it("attaches multiple Skill files in a deterministic order", () => {
+    const registry = new SqlitePresetModelRegistry(":memory:");
+    const skillFiles = [
+      { path: "skills/z-output/SKILL.md", content: "# Output\nUse the requested format." },
+      { path: "skills/a-arbitration/SKILL.md", content: "# Arbitration\nApply the arbitration rules." },
+    ];
+    const first = registry.publish(registry.createDraft({
+      name: "multi-skill-model",
+      version: 1,
+      description: "Multiple Skill files",
+      provider: { adapter: "openai-compatible", model: "provider" },
+      prompt: { skill_files: skillFiles },
+      plugins: { fixed: [] },
+    }).ref);
+
+    expect(first.systemPrompt).toBe([
+      "Attached Skill files:",
+      "--- skills/a-arbitration/SKILL.md ---",
+      "# Arbitration\nApply the arbitration rules.",
+      "--- skills/z-output/SKILL.md ---",
+      "# Output\nUse the requested format.",
+    ].join("\n"));
+    expect(first.definition.prompt?.skill_files).toEqual(skillFiles);
+
+    const reordered = registry.createDraft({
+      ...first.definition,
+      version: 2,
+      prompt: { ...first.definition.prompt, skill_files: [...skillFiles].reverse() },
+    });
+    expect(reordered.compiledHash).toBe(first.compiledHash);
+    registry.close();
+  });
+
+  it("compiles multiple Agent Skills into an immutable catalog without eager instruction text", () => {
+    const registry = new SqlitePresetModelRegistry(":memory:");
+    const skills = [
+      {
+        content: "---\nname: contract-review\ndescription: Review contract clauses and obligations.\n---\n\n# Contract\nApply contract rules.",
+      },
+      {
+        content: "---\nname: invoice-review\ndescription: Review invoice totals and tax calculations.\n---\n\n# Invoice\nApply invoice rules.",
+      },
+    ];
+    const first = registry.publish(registry.createDraft({
+      name: "progressive-skill-model",
+      version: 1,
+      description: "Progressive Skill test",
+      provider: { adapter: "openai-compatible", model: "provider" },
+      prompt: { system: "Be concise.", skills },
+      plugins: { fixed: [] },
+    }).ref);
+
+    expect(first.systemPrompt).toBe("Be concise.");
+    expect(first.skillSnapshot?.skills.map((skill) => skill.name)).toEqual(["contract-review", "invoice-review"]);
+    expect(first.skillSnapshot?.skills.map((skill) => skill.body)).toEqual(["# Contract\nApply contract rules.", "# Invoice\nApply invoice rules."]);
+    expect(first.toolCatalog).toContain("skill_activate");
+    expect(first.skillSnapshot?.catalogHash).toBeTruthy();
+
+    const reordered = registry.createDraft({
+      ...first.definition,
+      version: 2,
+      prompt: { ...first.definition.prompt, skills: [...skills].reverse() },
+    });
+    expect(reordered.compiledHash).toBe(first.compiledHash);
+    registry.close();
+  });
+
+  it("rejects an oversized attached SKILL.md", () => {
+    const registry = new SqlitePresetModelRegistry(":memory:");
+    expect(() => registry.createDraft({
+      name: "oversized-skill",
+      version: 1,
+      description: "Skill size test",
+      provider: { adapter: "openai-compatible", model: "provider" },
+      prompt: { skill_markdown: "x".repeat(MAX_SKILL_MARKDOWN_BYTES + 1) },
+      plugins: { fixed: [] },
+    })).toThrow("skill_markdown_too_large");
+    registry.close();
+  });
+
+  it("rejects invalid multiple Skill file bundles", () => {
+    const registry = new SqlitePresetModelRegistry(":memory:");
+    const base = {
+      name: "invalid-skills",
+      version: 1,
+      description: "Skill validation",
+      provider: { adapter: "openai-compatible", model: "provider" },
+      plugins: { fixed: [] },
+    } as const;
+    expect(() => registry.createDraft({
+      ...base,
+      prompt: { skill_files: Array.from({ length: MAX_SKILL_FILE_COUNT + 1 }, (_, index) => ({ path: `skill-${index}.md`, content: "content" })) },
+    })).toThrow("skill_files_too_many");
+    expect(() => registry.createDraft({
+      ...base,
+      prompt: { skill_files: [{ path: "skill.md", content: "x" }, { path: "SKILL.md", content: "y" }] },
+    })).toThrow("skill_file_duplicate_path");
+    expect(() => registry.createDraft({
+      ...base,
+      prompt: { skill_files: [{ path: "skill.md", content: "x".repeat(MAX_SKILL_TOTAL_BYTES) }] },
+    })).toThrow("skill_file_too_large");
     registry.close();
   });
 

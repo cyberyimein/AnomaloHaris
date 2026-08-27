@@ -1,5 +1,10 @@
 # Urus → AnomaloHaris scheduled-event retrieval
 
+For the registered Workflow Runtime integration, use
+[`urus-workflow.md`](./urus-workflow.md). This document remains the contract for
+calling the standalone `scheduled-event-investigator@1` Preset Model through the
+compute API.
+
 Urus should call the published Preset Model through the compute API. The old
 `/api/agents/{agent}/chat` endpoint is not part of the interface.
 

@@ -77,6 +77,50 @@
         },
         "system": {
           "type": "string"
+        },
+        "skills": {
+          "maxItems": 8,
+          "type": "array",
+          "items": {
+            "additionalProperties": false,
+            "type": "object",
+            "required": [
+              "content"
+            ],
+            "properties": {
+              "content": {
+                "maxLength": 262144,
+                "type": "string"
+              }
+            }
+          }
+        },
+        "skill_files": {
+          "maxItems": 8,
+          "type": "array",
+          "items": {
+            "additionalProperties": false,
+            "type": "object",
+            "required": [
+              "path",
+              "content"
+            ],
+            "properties": {
+              "path": {
+                "minLength": 1,
+                "maxLength": 256,
+                "type": "string"
+              },
+              "content": {
+                "maxLength": 262144,
+                "type": "string"
+              }
+            }
+          }
+        },
+        "skill_markdown": {
+          "maxLength": 262144,
+          "type": "string"
         }
       }
     },

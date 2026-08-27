@@ -13,4 +13,11 @@ describe("pluginBindingsForTools", () => {
       ],
     )).toEqual(["host-core", "web", "pi-plugin-host", "buddy-plugin"]);
   });
+
+  it("does not turn the intrinsic Skill adapter into a plugin binding", () => {
+    expect(pluginBindingsForTools(
+      ["skill_activate"],
+      [{ name: "skill_activate", source: "agent-skill" }],
+    )).toEqual(["host-core"]);
+  });
 });

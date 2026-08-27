@@ -2,6 +2,7 @@ export function pluginBindingsForTools(toolNames, tools) {
   const fixed = new Set(["host-core"]);
   for (const toolName of toolNames) {
     const source = tools.find((tool) => tool.name === toolName)?.source;
+    if (toolName === "skill_activate" || source === "agent-skill") continue;
     if (source === "web" || toolName === "web_search" || toolName === "web_fetch") {
       fixed.add("web");
     } else if (source === "browser-bridge" || toolName.startsWith("browser.")) {

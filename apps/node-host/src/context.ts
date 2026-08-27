@@ -1,6 +1,7 @@
 import type { ToolDefinition } from "@anomaloharis/contracts";
 
 import type { ResourceLoader, ResourceSnapshot } from "./resources.js";
+import { filterSkillSnapshot, mergeSkillSnapshots, SkillRuntime, type CompiledSkillSnapshot } from "./skills.js";
 import type { ToolRuntime } from "./tools.js";
 import type { BuiltContext, ContextDiagnostics, ModelMessage, ToolContext } from "./types.js";
 
@@ -101,21 +102,92 @@ function activeResourceMessages(
 
 /** Adds the L1 resource snapshot while keeping tool discovery dynamic per turn. */
 export class ResourceContextBuilder extends ReplayContextBuilder {
+  private readonly skillRuntime = new SkillRuntime();
+
   constructor(
     tools: ToolRuntime,
     private readonly resources: ResourceLoader,
+    private readonly options: { bundledSkillSnapshot?: CompiledSkillSnapshot | undefined } = {},
   ) {
     super(tools);
   }
 
   async prepare(request: ContextRequest): Promise<ResourceSnapshot> {
-    return this.resources.snapshot({
+    const snapshot = await this.resources.snapshot({
       promptProfile: request.promptProfile,
       searchMode: request.toolContext.searchMode,
       activeSkills: request.toolContext.activeSkills,
       activeMcpServers: request.toolContext.activeMcpServers,
       ...(request.systemPrompt ? { systemPrompt: request.systemPrompt } : {}),
     });
+    return this.withPresetSkills(
+      snapshot,
+      request.toolContext.presetModelRef
+        ? undefined
+        : filterSkillSnapshot(this.options.bundledSkillSnapshot, request.toolContext.allowedPluginIds),
+      request.toolContext.skillSnapshot,
+      request.toolContext.activeSkills,
+      Boolean(request.toolContext.presetModelRef),
+    );
+  }
+
+  private withPresetSkills(
+    snapshot: ResourceSnapshot,
+    bundledSkillSnapshot: CompiledSkillSnapshot | undefined,
+    presetSkillSnapshot: CompiledSkillSnapshot | undefined,
+    activeSkillNames: ReadonlySet<string>,
+    presetScoped: boolean,
+  ): ResourceSnapshot {
+    const merged = mergeSkillSnapshots(this.skillRuntime, bundledSkillSnapshot, presetSkillSnapshot);
+    const replacedNames = new Set([
+      ...(presetScoped ? snapshot.skillCatalog.map((skill) => skill.name) : []),
+      ...(this.options.bundledSkillSnapshot?.skills.map((skill) => skill.name) ?? []),
+      ...(presetSkillSnapshot?.skills.map((skill) => skill.name) ?? []),
+    ]);
+    if (!merged && replacedNames.size === 0) return snapshot;
+    const skillCatalog = [
+      ...snapshot.skillCatalog.filter((skill) => !replacedNames.has(skill.name)),
+      ...(merged ? this.skillRuntime.catalog(merged).map((skill) => ({ name: skill.name, summary: skill.description })) : []),
+    ].sort((left, right) => left.name.localeCompare(right.name));
+    const skillInstructions = {
+      ...Object.fromEntries(snapshot.skillCatalog
+        .filter((skill) => !replacedNames.has(skill.name))
+        .map((skill) => [skill.name, snapshot.skillInstructions[skill.name]])
+        .filter((entry): entry is [string, string] => typeof entry[1] === "string")),
+      ...(merged ? Object.fromEntries(merged.skills.map((skill) => [skill.name, skill.body])) : {}),
+    };
+    const skillCatalogMessages: ModelMessage[] = skillCatalog.length > 0
+      ? [{
+        role: "system",
+        content: [
+          "Available Skill catalog:",
+          "Select a matching Skill with the skill_activate tool before applying its instructions.",
+          ...skillCatalog.map((skill) => `- ${skill.name}: ${skill.summary}`),
+        ].join("\n"),
+      }]
+      : [];
+    const availableNames = new Set(skillCatalog.map((skill) => skill.name));
+    const activeNames = [...activeSkillNames].filter((name) => availableNames.has(name)).sort();
+    const messages = [
+      ...snapshot.promptMessages,
+      ...snapshot.searchMessages,
+      ...snapshot.memoryMessages,
+      ...skillCatalogMessages,
+      ...snapshot.mcpCatalogMessages,
+    ];
+    return {
+      ...snapshot,
+      messages,
+      skillCatalogMessages,
+      skillCatalog,
+      skillInstructions,
+      activeSkillNames: activeNames,
+      diagnostics: {
+        ...snapshot.diagnostics,
+        skillCatalogEntries: skillCatalog.length,
+        activeSkillFiles: activeNames.filter((name) => Boolean(skillInstructions[name])).length,
+      },
+    };
   }
 }
 

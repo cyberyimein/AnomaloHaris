@@ -188,6 +188,60 @@ describe("OpenAI-compatible compute API", () => {
     expect(response.body.split("\n").filter(Boolean).map((line) => JSON.parse(line).type)).toContain("run.finished");
   });
 
+  it("continues a bound session on a retired Preset Model version", async () => {
+    const database = new DatabaseSync(":memory:");
+    databases.push(database);
+    const registry = new SqlitePresetModelRegistry(":memory:");
+    registries.push(registry);
+    const first = registry.publish(registry.createDraft({
+      name: "retired-session-model",
+      version: 1,
+      description: "Retired session fixture",
+      provider: { adapter: "openai-compatible", model: "retired-session-provider", tool_protocol: "auto" },
+      plugins: { fixed: [] },
+    }).ref);
+    const sessions = new InMemorySessionAdapter();
+    await sessions.setPresetModel("retired-session", first.ref);
+    registry.publish(registry.createDraft({
+      ...first.definition,
+      version: 2,
+      description: "Replacement fixture",
+    }).ref);
+    const controller = new RunController(new AgentCore({
+      model: new ReplayModelAdapter([[{ type: "text.delta", text: "continued" }, { type: "done" }]]),
+      tools: new DeterministicToolRuntime([]),
+      sessions,
+    }));
+    const catalog = new RuntimeCatalog();
+    catalog.register(new AgentRuntimeAdapter({ registry, controller }));
+    const runControl = new RunControl(database, catalog);
+    const app = await buildNodeHost({
+      sessions,
+      model: first.providerModel,
+      presetModels: registry,
+      defaultPresetModel: first.ref,
+      runControl,
+      compute: {
+        auth: new ServiceAuth({ clients: [{ id: "retired-session-client", token: "retired-session-token" }] }),
+        runControl,
+      },
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/preset-models/retired-session-model/versions/1/runs",
+      headers: { authorization: "Bearer retired-session-token" },
+      payload: { session_id: "retired-session", message: "continue" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      model: first.ref,
+      events: expect.arrayContaining([expect.objectContaining({ type: "run.finished" })]),
+    });
+  });
+
   it("keeps unified native invocations portable and preserves idempotency across the native route", async () => {
     const database = new DatabaseSync(":memory:");
     databases.push(database);

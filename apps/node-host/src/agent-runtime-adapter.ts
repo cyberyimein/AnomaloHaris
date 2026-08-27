@@ -9,8 +9,10 @@ import type {
   ResolvedExecutionTarget,
   RunContext,
   RuntimeEvent,
+  RuntimeResolveOptions,
 } from "./run-control.js";
 import type { AgentRunInput, AgentPolicy } from "./types.js";
+import { SKILL_ACTIVATE_TOOL_NAME } from "./skills.js";
 
 export type AgentInvocation = {
   message?: string | null;
@@ -43,13 +45,18 @@ export class AgentRuntimeAdapter implements ExecutionRuntimeAdapter {
     return this.options.registry.db.isOpen;
   }
 
-  resolve(ref: string): ResolvedExecutionTarget {
-    const model = resolvePublished(this.options.registry, ref);
-    return { kind: this.kind, ref: model.ref, hash: normalizeHash(model.compiledHash) };
+  resolve(ref: string, options: RuntimeResolveOptions = {}): ResolvedExecutionTarget {
+    const model = resolvePublished(this.options.registry, ref, options.allowRetired === true);
+    return {
+      kind: this.kind,
+      ref: model.ref,
+      hash: normalizeHash(model.compiledHash),
+      ...(options.allowRetired ? { allowRetired: true } : {}),
+    };
   }
 
   async *start(context: RunContext, input: unknown): AsyncIterable<RuntimeEvent> {
-    const model = resolvePublished(this.options.registry, context.target.ref);
+    const model = resolvePublished(this.options.registry, context.target.ref, context.target.allowRetired === true);
     if (normalizeHash(model.compiledHash) !== context.target.hash) {
       throw new Error(`preset_model_target_changed:${context.target.ref}`);
     }
@@ -71,9 +78,9 @@ export class AgentRuntimeAdapter implements ExecutionRuntimeAdapter {
   }
 }
 
-function resolvePublished(registry: SqlitePresetModelRegistry, ref: string): CompiledPresetModel {
-  const model = registry.resolve(ref);
-  if (model.status !== "published") throw new Error(`preset_model_unavailable:${ref}`);
+function resolvePublished(registry: SqlitePresetModelRegistry, ref: string, allowRetired = false): CompiledPresetModel {
+  const model = registry.resolve(ref, { ...(allowRetired ? { allowRetired: true } : {}) });
+  if (model.status !== "published" && !(allowRetired && model.status === "retired")) throw new Error(`preset_model_unavailable:${ref}`);
   return model;
 }
 
@@ -82,12 +89,20 @@ function toInvocation(value: unknown): AgentInvocation {
   return { message: typeof value === "string" ? value : JSON.stringify(value) };
 }
 
-function buildAgentInput(context: RunContext, model: CompiledPresetModel, invocation: AgentInvocation): AgentRunInput {
+function buildAgentInput(
+  context: RunContext,
+  model: CompiledPresetModel,
+  invocation: AgentInvocation,
+): AgentRunInput {
   const sessionId = (invocation.session_id || `run_${context.runId}`) as SessionId;
   const allowedToolNames = model.toolCatalog.length > 0
-    ? model.allowedToolNames ? model.allowedToolNames.filter((name) => model.toolCatalog.includes(name)) : model.toolCatalog
+    ? model.allowedToolNames ? model.allowedToolNames.filter((name) => model.toolCatalog.includes(name)) : [...model.toolCatalog]
     : model.allowedToolNames;
   const policy = structuredClone(model.policy) as AgentPolicy;
+  const skillSnapshot = model.skillSnapshot;
+  if (skillSnapshot?.skills.length && allowedToolNames && !allowedToolNames.includes(SKILL_ACTIVATE_TOOL_NAME)) {
+    allowedToolNames.push(SKILL_ACTIVATE_TOOL_NAME);
+  }
   return {
     runId: context.runId as RunId,
     sessionId,
@@ -98,6 +113,7 @@ function buildAgentInput(context: RunContext, model: CompiledPresetModel, invoca
     model: model.providerModel,
     presetModelRef: model.ref,
     compiledHash: model.compiledHash,
+    ...(skillSnapshot ? { skillSnapshot } : {}),
     toolProtocol: model.toolProtocol,
     policy,
     allowedPluginIds: new Set(model.fixedPlugins.map((selector) => selector.split("@")[0]!)),

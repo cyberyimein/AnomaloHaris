@@ -10,6 +10,7 @@ import type {
   ToolResult,
 } from "@anomaloharis/contracts";
 import type { PluginLock } from "./plugin-catalog.js";
+import type { CompiledSkillSnapshot } from "./skills.js";
 
 export type { AgentEvent, EntryId, PresetModelRef, ResponseFormat, RunId, SessionId, ToolCall, ToolDefinition, ToolResult };
 
@@ -41,6 +42,7 @@ export type AgentRunInput = {
   model: string;
   presetModelRef?: PresetModelRef | undefined;
   compiledHash?: string | undefined;
+  skillSnapshot?: CompiledSkillSnapshot | undefined;
   toolProtocol?: "openai" | "dsml" | "auto" | "none" | undefined;
   policy?: AgentPolicy | undefined;
   allowedPluginIds?: ReadonlySet<string> | undefined;
@@ -90,6 +92,7 @@ export type ToolContext = {
   presetModelRef?: PresetModelRef | undefined;
   activeSkills: ReadonlySet<string>;
   activeMcpServers: ReadonlySet<string>;
+  skillSnapshot?: CompiledSkillSnapshot | undefined;
   allowedPluginIds?: ReadonlySet<string> | undefined;
   allowedPluginLocks?: readonly PluginLock[] | undefined;
 };
@@ -125,6 +128,7 @@ export type SessionCheckpoint = {
     model?: string;
     presetModelRef?: PresetModelRef | undefined;
     compiledHash?: string | undefined;
+    skillSnapshot?: CompiledSkillSnapshot | undefined;
     toolProtocol?: "openai" | "dsml" | "auto" | "none" | undefined;
     policy?: AgentPolicy | undefined;
     allowedPluginIds?: string[] | undefined;

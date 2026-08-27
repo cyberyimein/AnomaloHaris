@@ -6,6 +6,8 @@
 >
 > 依赖决策：`docs/adr/0002-node-only-preset-model-compute-center.md`、`docs/adr/0003-anomaloharis-canonical-naming.md`、`docs/adr/0004-peer-agent-and-workflow-runtimes.md`
 >
+> Urus 对接手册：`docs/integrations/urus-workflow.md`
+>
 > 规范词：MUST 表示必须满足，SHOULD 表示默认应满足，MAY 表示可以延后
 >
 > 范围：只实现“导入并注册版本化工作流，再按 `name@version` 调用”的方式；不支持在单次运行请求中携带临时工作流定义

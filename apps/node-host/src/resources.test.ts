@@ -22,7 +22,7 @@ describe("FileResourceLoader", () => {
     mkdirSync(join(root, "config", "mcp"), { recursive: true });
     writeFileSync(join(root, "AGENTS.md"), "Use the repository memory.");
     writeFileSync(join(root, "config", "prompts.yaml"), "profiles:\n  agent:\n    messages:\n      - id: identity\n        role: system\n        content: |\n          Be precise.\n");
-    writeFileSync(join(root, "skills", "skill-a", "SKILL.md"), "# Skill A\nDo the useful thing.");
+    writeFileSync(join(root, "skills", "skill-a", "SKILL.md"), "---\nname: skill-a\ndescription: Do the useful thing.\n---\n\n# Skill A\nDo the useful thing.");
     writeFileSync(join(root, "config", "mcp_servers.yaml"), "servers:\n  - name: mcp-a\n");
     writeFileSync(join(root, "config", "mcp", "mcp-a.md"), "MCP instruction.");
 
@@ -44,6 +44,7 @@ describe("FileResourceLoader", () => {
     expect(snapshot.messages.map((message) => message.content).join("\n")).toContain("Available Skill catalog:");
     expect(snapshot.skillInstructions["skill-a"]).toContain("Do the useful thing.");
     expect(snapshot.mcpInstructions["mcp-a"]).toContain("MCP instruction.");
+    expect(loader.skillSnapshot()?.skills[0]).toMatchObject({ name: "skill-a", description: "Do the useful thing." });
   });
 
   it("does not mutate an already captured snapshot when files change", async () => {
@@ -88,6 +89,34 @@ describe("FileResourceLoader", () => {
 
     expect(inactive.messages.map((message) => message.content).join("\n")).not.toContain("Active Skill: skill-a");
     expect(active.messages.map((message) => message.content).join("\n")).toContain("Active Skill: skill-a");
+  });
+
+  it("does not inject current resource Skills into a Preset Model without a frozen snapshot", async () => {
+    const root = mkdtempSync(join(tmpdir(), "anomaloharis-resources-preset-"));
+    temporary.push(root);
+    mkdirSync(join(root, "skills", "current-skill"), { recursive: true });
+    writeFileSync(join(root, "skills", "current-skill", "SKILL.md"), "---\nname: current-skill\ndescription: Current deployment rules.\n---\n\nCurrent deployment instructions.");
+    const loader = new FileResourceLoader({ projectRoot: root, skillDirs: [join(root, "skills")] });
+    const builder = new ResourceContextBuilder(new DeterministicToolRuntime([]), loader);
+
+    const snapshot = await builder.prepare({
+      baseMessages: [],
+      loopMessages: [],
+      promptProfile: "agent",
+      toolContext: {
+        sessionId: "preset-resource-session",
+        runId: "preset-resource-run",
+        searchMode: "diy",
+        model: "replay",
+        presetModelRef: "frozen-model@1",
+        activeSkills: new Set(["current-skill"]),
+        activeMcpServers: new Set(),
+      },
+    });
+
+    expect(snapshot.skillCatalog).toEqual([]);
+    expect(snapshot.skillInstructions).toEqual({});
+    expect(snapshot.activeSkillNames).toEqual([]);
   });
 
   it("assembles prompt, bootstrap, memory, skills, MCP, and history in order", async () => {

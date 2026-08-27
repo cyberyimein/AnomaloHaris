@@ -20,6 +20,7 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import type { StartRunRequest } from "./controller.js";
 import { randomIds } from "./ids.js";
 import type { CompiledPresetModel, SqlitePresetModelRegistry } from "./preset-models.js";
+import { SKILL_ACTIVATE_TOOL_NAME, type CompiledSkillSnapshot } from "./skills.js";
 import type { ModelMessage } from "./types.js";
 import type { SessionRepository } from "./session.js";
 import { RunControlError, type RunControl } from "./run-control.js";
@@ -504,6 +505,7 @@ export type ComputeApiOptions = {
   idempotency?: IdempotencyRepository;
   nativeRuns?: NativeRunRepository;
   runControl: RunControl;
+  skillSnapshot?: CompiledSkillSnapshot | undefined;
 };
 
 export function registerComputeRoutes(app: FastifyInstance, options: ComputeApiOptions): void {
@@ -585,6 +587,7 @@ export function registerComputeRoutes(app: FastifyInstance, options: ComputeApiO
           permissions: [...client.scopes],
           ...(idempotencyKey ? { idempotency_key: idempotencyKey } : {}),
         },
+        { allowRetiredTarget: model.status === "retired" },
       );
       for await (const event of handle) void event;
       const run = options.runControl.get(handle.runId);
@@ -612,6 +615,7 @@ export function registerComputeRoutes(app: FastifyInstance, options: ComputeApiO
           permissions: [...client.scopes],
           ...(idempotencyKey ? { idempotency_key: idempotencyKey } : {}),
         },
+        { allowRetiredTarget: model.status === "retired" },
       );
       reply.hijack();
       reply.raw.statusCode = 200;
@@ -674,6 +678,7 @@ export function registerComputeRoutes(app: FastifyInstance, options: ComputeApiO
           permissions: [...client.scopes],
           ...(previous ? { parentRunId: previous.run_id } : {}),
         },
+        { allowRetiredTarget: model.status === "retired" },
       );
       for await (const _event of handle) { /* drain the resumed run before returning the native response */ }
       const run = options.runControl.get(handle.runId);
@@ -791,8 +796,12 @@ async function prepareChat(
   const messages = request.messages.map(toModelMessage);
   const historyMessages = messages.slice(0, -1);
   const allowedToolNames = model.toolCatalog.length > 0
-    ? model.allowedToolNames ? model.allowedToolNames.filter((name) => model.toolCatalog.includes(name)) : model.toolCatalog
+    ? model.allowedToolNames ? model.allowedToolNames.filter((name) => model.toolCatalog.includes(name)) : [...model.toolCatalog]
     : model.allowedToolNames;
+  const skillSnapshot = model.skillSnapshot;
+  if (skillSnapshot?.skills.length && allowedToolNames && !allowedToolNames.includes(SKILL_ACTIVATE_TOOL_NAME)) {
+    allowedToolNames.push(SKILL_ACTIVATE_TOOL_NAME);
+  }
   const input: StartRunRequest = {
     runId: randomIds.runId(),
     sessionId,
@@ -802,6 +811,8 @@ async function prepareChat(
     model: model.providerModel,
     presetModelRef: model.ref,
     compiledHash: model.compiledHash,
+    ...(model.status === "retired" ? { allowRetiredPresetModel: true } : {}),
+    ...(skillSnapshot ? { skillSnapshot } : {}),
     toolProtocol: model.toolProtocol,
     policy: structuredClone(model.policy),
     allowedPluginIds: new Set(model.fixedPlugins.map((selector) => selector.split("@")[0]!)),
@@ -910,6 +921,7 @@ async function executeWithUsage(
         permissions: prepared.permissions,
         ...(prepared.idempotencyKey ? { idempotency_key: prepared.idempotencyKey } : {}),
       },
+      { allowRetiredTarget: prepared.input.allowRetiredPresetModel === true },
     );
     begin.runId = handle.runId;
     await usage.begin(begin);

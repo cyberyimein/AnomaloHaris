@@ -257,6 +257,9 @@ type PresetModelDefinition = {
     };
     prompt: {
       system: string;
+      skills?: Array<{
+        content: string; // one SKILL.md document; name/description come from frontmatter
+      }>;
       resources?: Array<{
         path: string;
         required: boolean;
@@ -284,7 +287,35 @@ type PresetModelDefinition = {
 
 `credential_ref` 只引用 Host secret store 中的名称，Definition 不得保存真实 API key。
 
-### 6.3 示例
+### 6.3 Agent Skill progressive disclosure
+
+An Agent Skill is one `SKILL.md` document with required YAML frontmatter:
+
+```md
+---
+name: invoice-review
+description: Review invoice totals and tax calculations.
+---
+
+# Invoice review instructions
+```
+
+`SkillRuntime` is the deep Module behind the Skill Interface. At publish time it
+parses and validates every document, rejects duplicate names, computes content
+hashes, and stores an immutable Skill snapshot inside the Compiled Preset
+Model. A changed Skill therefore requires a new Preset Model version.
+
+At run time the Agent sees only the sorted `name`/`description` catalog. The
+intrinsic `skill_activate` Tool Adapter accepts an enum-constrained Skill name,
+checks it against the current snapshot, and marks it active. The next context
+projection injects only the selected Skill body. The Adapter never exposes an
+absolute host path or arbitrary file read capability.
+
+The first implementation accepts multiple independent `SKILL.md` documents,
+but no ZIP, references, assets, or executable scripts. A later package
+Implementation can add supporting files behind the same Skill Interface.
+
+### 6.4 示例
 
 ```yaml
 api_version: anomaloharis.dev/v1
@@ -306,6 +337,21 @@ spec:
     system: |
       你是体育研究 Agent。涉及赛果和当前信息时必须先联网检索，
       优先使用赛事组织方的官方来源，并明确区分事实与推断。
+    skills:
+      - content: |
+          ---
+          name: research
+          description: 对需要实时信息的问题先检索，再回答。
+          ---
+          # Research skill
+          对需要实时信息的问题先检索，再回答。
+      - content: |
+          ---
+          name: output
+          description: 给出来源并区分事实与推断。
+          ---
+          # Output skill
+          给出来源和事实/推断区分。
   plugins:
     - id: web
       package: "@anomaloharis/plugin-web"
@@ -355,6 +401,8 @@ draft
 - 校验 Definition schema。
 - 校验 name/version 唯一和版本单调递增。
 - 解析全部 prompt resources 并计算 `prompt_hash`。
+- `prompt.skills` 是当前推荐的内嵌 Skill 文档列表；每个条目只有 `content`，身份和描述来自 `SKILL.md` frontmatter，编译后写入不可变 Skill 快照。
+- 兼容旧定义的 `skill_files`/`skill_markdown` 仍按原 eager prompt 行为读取；新的 Skill 模组限制最多 8 个文件、单文件最多 256 KiB、总大小最多 1 MiB，暂不解析 ZIP 或文件间引用。
 - 解析并锁定每个插件的 package version、entry、manifest 和 config hash。
 - 检查插件权限与 Host allowlist。
 - 合并工具定义并检查重名与 schema。
@@ -742,7 +790,8 @@ Preset Model 的插件组合是发布内容，不是 Session 状态。
 
 - 调用方不得传 `plugins` 或 `tools` 覆盖。
 - UI 不提供对已发布版本的动态插件开关。
-- session skills/MCP 的旧动态开关只能在兼容模式使用；迁移后应转化为新 Preset Model 版本。
+- Preset Model Skill catalog 和正文是发布内容，不是 Session 的可变能力；Session 只记录当前快照中已激活的 Skill 名称。
+- session MCP 的旧动态开关只能在兼容模式使用；迁移后应转化为新 Preset Model 版本。
 - MCP server 可由一个固定配置的 MCP 插件 binding 提供。
 - Bootstrap tool 由插件 manifest 声明，Compiler 检查其安全级别。
 
@@ -765,16 +814,18 @@ ContextBuilder 输入必须是 Compiled Model 快照和 run/session 状态。
 1. Host 安全和协议约束。
 2. 当前时间、时区和 runtime metadata。
 3. Preset Model system prompt。
-4. Preset Model prompt resources。
-5. 固定插件 instructions。
-6. bootstrap results。
-7. Session history 或外部调用消息历史。
-8. 当前用户消息。
-9. 当前 run 的 tool-loop messages。
+4. Skill catalog metadata。
+5. 已激活 Skill instructions。
+6. Preset Model prompt resources。
+7. 固定插件 instructions。
+8. bootstrap results。
+9. Session history 或外部调用消息历史。
+10. 当前用户消息。
+11. 当前 run 的 tool-loop messages。
 
 要求：
 
-- 每个 run 开始时冻结 1–6 的静态快照。
+- 每个 run 开始时冻结 1–8 的静态快照。
 - 当前时间由 Host 注入，禁止依赖 Provider 训练时间判断“现在”。
 - ContextBuilder 产生 segment metadata 和 count，但 public event 默认不暴露 prompt 内容。
 - 插件 context hook 的输出重新经过 schema、tool allowlist 和 token budget 校验。
@@ -891,6 +942,10 @@ POST   /api/manage/plugins/validate
 GET    /api/manage/providers
 GET    /api/manage/usage
 ```
+
+管理列表默认只返回每个模型名称的当前 draft/published 版本；追加
+`?include_history=true` 才返回 retired 历史。发布新版本会在原子事务中退役同名旧
+published 版本，但已绑定旧版本的 Session 仍可解析和继续运行。
 
 只有 draft 可 PATCH。publish 后修改返回 `immutable_model_version`。
 

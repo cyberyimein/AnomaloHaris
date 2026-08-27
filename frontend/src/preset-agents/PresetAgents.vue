@@ -107,6 +107,28 @@
               placeholder="You are a focused research analyst…"
             ></textarea>
           </label>
+          <label class="preset-field preset-field-wide">
+            <span>Agent Skills (optional)</span>
+            <input type="file" accept=".md,text/markdown" multiple @change="loadSkillFiles" />
+            <small>Each Markdown file is one independent Skill. Add YAML frontmatter with name and description. ZIP packages and referenced files are not supported yet.</small>
+          </label>
+          <div v-if="form.skill_files.length" class="preset-skill-list preset-field-wide">
+            <article v-for="(skill, index) in form.skill_files" :key="`${skill.path}-${index}`" class="preset-skill-card">
+              <header>
+                <div>
+                  <strong>{{ skillDisplayName(skill) }}</strong>
+                  <small>{{ skillDescription(skill) || "Missing frontmatter description" }}</small>
+                </div>
+                <button type="button" @click="removeSkillFile(index)">Remove</button>
+              </header>
+              <textarea
+                v-model="skill.content"
+                rows="8"
+                :aria-label="`Content for ${skill.path}`"
+                placeholder="Paste the Markdown instructions here…"
+              ></textarea>
+            </article>
+          </div>
           <label class="preset-field preset-field-model">
             <span>LLM model</span>
             <input v-model="form.model" required placeholder="deepseek/deepseek-v4-flash" />
@@ -126,7 +148,7 @@
               :key="`${tool.source}:${tool.name}`"
               class="preset-tool-option"
             >
-              <input v-model="form.tool_names" type="checkbox" :value="tool.name" />
+              <input v-model="form.tool_names" type="checkbox" :value="tool.name" :disabled="tool.name === 'skill_activate'" />
               <span>
                 <strong>{{ tool.name }}</strong>
                 <small>{{ tool.source }}</small>
@@ -212,6 +234,7 @@ import {
 } from "@lucide/vue";
 import { computed, onMounted, reactive, ref } from "vue";
 import { pluginBindingsForTools } from "./pluginBindings.js";
+import { buildSkillPayload } from "./skillPayload.js";
 
 const props = defineProps({
   management: { type: Object, required: true },
@@ -228,6 +251,9 @@ const noticeIsError = ref(false);
 const defaults = reactive({ model: "openai/gpt-4o-mini", temperature: 0.4 });
 const searchModeOptions = ref(fallbackSearchModeOptions());
 const form = reactive(emptyForm());
+const MAX_SKILL_FILE_BYTES = 256 * 1024;
+const MAX_SKILL_FILE_COUNT = 8;
+const MAX_SKILL_TOTAL_BYTES = 1024 * 1024;
 const startupClocks = [
   { label: "Local time", timezone: "Asia/Tokyo" },
   { label: "US Eastern time", timezone: "America/New_York" },
@@ -241,6 +267,8 @@ function emptyForm() {
     description: "",
     ghost: "👻",
     system_prompt: "",
+    skill_files: [],
+    skill_format: "skills",
     model: defaults?.model || "openai/gpt-4o-mini",
     temperature: defaults?.temperature ?? 0.4,
     tool_names: [],
@@ -258,6 +286,8 @@ function replaceForm(value) {
     search_mode: toolNames.includes("web_search") ? value?.search_mode || "diy" : null,
     bootstrap_tools: [...(value?.bootstrap_tools || [])],
     fixed_plugins: [...(value?.fixed_plugins || ["host-core"])],
+    skill_files: [...(value?.skill_files || [])].map((file) => ({ ...file })),
+    skill_format: value?.skill_format || "skills",
   });
 }
 
@@ -338,6 +368,20 @@ function toAgentForm(model) {
   const provider = definition.provider || {};
   const plugins = definition.plugins || {};
   const policy = definition.policy || {};
+  const skillFiles = Array.isArray(definition.prompt?.skills)
+    ? definition.prompt.skills.map((skill, index) => ({ path: `skill-${index + 1}/SKILL.md`, content: skill.content }))
+    : Array.isArray(definition.prompt?.skill_files)
+    ? definition.prompt.skill_files.map((file) => ({ path: file.path, content: file.content }))
+      : definition.prompt?.skill_markdown
+      ? [{ path: "SKILL.md", content: definition.prompt.skill_markdown }]
+      : [];
+  const skillFormat = Array.isArray(definition.prompt?.skills)
+    ? "skills"
+    : Array.isArray(definition.prompt?.skill_files)
+      ? "legacy_files"
+      : definition.prompt?.skill_markdown
+        ? "legacy_markdown"
+        : "skills";
   return {
     id: model.ref,
     ref: model.ref,
@@ -347,6 +391,8 @@ function toAgentForm(model) {
     description: model.description || "",
     ghost: definition.metadata?.ghost || "👻",
     system_prompt: definition.prompt?.system || "",
+    skill_files: skillFiles,
+    skill_format: skillFormat,
     prompt_profile: definition.prompt?.profile || "agent",
     model: provider.model || model.provider_model || defaults.model,
     temperature: Number(policy.temperature ?? defaults.temperature),
@@ -356,6 +402,98 @@ function toAgentForm(model) {
     fixed_plugins: [...(plugins.fixed || model.fixed_plugins || ["host-core"])],
     status: model.status,
   };
+}
+
+function skillFrontmatterValue(content, key) {
+  const source = String(content || "");
+  if (!source.trimStart().startsWith("---")) return "";
+  const match = source.match(new RegExp(`^${key}\\s*:\\s*(.+)$`, "mi"));
+  return match?.[1]?.trim().replace(/^(?:"([\s\S]*)"|'([\s\S]*)')$/, "$1$2") || "";
+}
+
+function skillDisplayName(skill) {
+  return skillFrontmatterValue(skill?.content, "name") || skill?.path || "SKILL.md";
+}
+
+function skillDescription(skill) {
+  return skillFrontmatterValue(skill?.content, "description");
+}
+
+function uniqueSkillFilePath(rawPath, occupiedPaths) {
+  const normalized = String(rawPath || "SKILL.md").replaceAll("\\", "/").split("/").filter(Boolean).join("/") || "SKILL.md";
+  const key = (path) => path.toLowerCase();
+  if (!occupiedPaths.has(key(normalized))) return normalized;
+  const dot = normalized.lastIndexOf(".");
+  const stem = dot > 0 ? normalized.slice(0, dot) : normalized;
+  const extension = dot > 0 ? normalized.slice(dot) : "";
+  let suffix = 2;
+  let candidate = `${stem}-${suffix}${extension}`;
+  while (occupiedPaths.has(key(candidate))) {
+    suffix += 1;
+    candidate = `${stem}-${suffix}${extension}`;
+  }
+  return candidate;
+}
+
+async function loadSkillFiles(event) {
+  const input = event.currentTarget;
+  const files = Array.from(input?.files || []);
+  if (!files.length) return;
+  if (form.skill_files.length + files.length > MAX_SKILL_FILE_COUNT) {
+    input.value = "";
+    showNotice(`At most ${MAX_SKILL_FILE_COUNT} Skill files can be attached.`, true);
+    return;
+  }
+  try {
+    const occupiedPaths = new Set(form.skill_files.map((file) => String(file.path).toLowerCase()));
+    const loaded = [];
+    let totalBytes = form.skill_files.reduce(
+      (total, file) => total + new TextEncoder().encode(String(file.content || "")).byteLength,
+      0,
+    );
+    for (const file of files) {
+      if (!/\.md$/i.test(file.name)) {
+        input.value = "";
+        showNotice("Only .md files can be attached as Skills.", true);
+        return;
+      }
+      if (file.size > MAX_SKILL_FILE_BYTES) {
+        input.value = "";
+        showNotice("Each Skill file must be 256 KB or smaller.", true);
+        return;
+      }
+      const content = await file.text();
+      const bytes = new TextEncoder().encode(content).byteLength;
+      if (bytes > MAX_SKILL_FILE_BYTES) {
+        input.value = "";
+        showNotice("Each Skill file must be 256 KB or smaller.", true);
+        return;
+      }
+      totalBytes += bytes;
+      if (totalBytes > MAX_SKILL_TOTAL_BYTES) {
+        input.value = "";
+        showNotice("Attached Skill files must total 1 MB or less.", true);
+        return;
+      }
+      const path = uniqueSkillFilePath(file.webkitRelativePath || file.name, occupiedPaths);
+      occupiedPaths.add(path.toLowerCase());
+      loaded.push({ path, content });
+    }
+    if (!loaded.length) {
+      input.value = "";
+      return;
+    }
+    form.skill_files = [...form.skill_files, ...loaded].sort((left, right) => left.path.localeCompare(right.path));
+    input.value = "";
+    showNotice(`${loaded.length} Skill file${loaded.length === 1 ? "" : "s"} loaded. Save to attach them to a new model version.`);
+  } catch (error) {
+    input.value = "";
+    showNotice(`Skill file could not be read: ${error?.message || String(error)}`, true);
+  }
+}
+
+function removeSkillFile(index) {
+  form.skill_files.splice(index, 1);
 }
 
 function splitModelRef(ref) {
@@ -369,12 +507,27 @@ async function saveAgent() {
   notice.value = "";
   const nextVersion = form.id ? Number(form.version || 1) + 1 : Number(form.version || 1);
   const toolNames = [...new Set(form.tool_names)];
+  const skillFiles = form.skill_files
+    .map((file) => ({ path: String(file.path).trim(), content: String(file.content || "") }))
+    .filter((file) => file.path);
+  let skillPayload;
+  try {
+    skillPayload = buildSkillPayload(skillFiles, form.skill_format);
+  } catch (error) {
+    saving.value = false;
+    showNotice(error.message || String(error), true);
+    return;
+  }
   const payload = {
     name: form.name.trim().toLowerCase(),
     version: nextVersion,
     description: form.description,
     provider: { adapter: "openai-compatible", model: form.model, tool_protocol: "auto" },
-    prompt: { profile: form.prompt_profile || "agent", system: form.system_prompt },
+    prompt: {
+      profile: form.prompt_profile || "agent",
+      system: form.system_prompt,
+      ...skillPayload,
+    },
     plugins: {
       fixed: pluginBindingsForTools(toolNames, tools.value),
       allowed_tools: toolNames,
@@ -495,9 +648,19 @@ defineExpose({ refresh: load });
 .preset-form-grid { display: grid; grid-template-columns: 110px minmax(220px, 1fr) minmax(160px, .7fr); gap: 16px; }
 .preset-field { display: grid; align-content: start; gap: 7px; }
 .preset-field > span, .preset-tools-fieldset legend { font-size: 12px; font-weight: 600; }
+.preset-field > small { color: var(--muted); font-size: 11px; line-height: 1.4; }
 .preset-field-wide { grid-column: 1 / -1; }
 .preset-field-model { grid-column: 1 / 3; }
 .preset-field textarea { resize: vertical; line-height: 1.5; }
+.preset-skill-list { display: grid; gap: 10px; }
+.preset-skill-card { border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+.preset-skill-card header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.preset-skill-card header > div { display: grid; gap: 3px; min-width: 0; }
+.preset-skill-card strong { overflow-wrap: anywhere; font-size: 12px; }
+.preset-skill-card header small { color: var(--muted); font-size: 11px; line-height: 1.4; }
+.preset-skill-card button { border: 0; background: transparent; color: var(--muted); cursor: pointer; font: inherit; font-size: 12px; }
+.preset-skill-card button:hover { color: var(--text); }
+.preset-skill-card textarea { width: 100%; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; padding: 10px 11px; resize: vertical; line-height: 1.5; }
 .preset-ghost-field input { font-size: 20px; }
 .preset-tools-fieldset { margin: 22px 0 0; border: 0; border-top: 1px solid var(--line); padding: 20px 0 0; }
 .preset-tools-fieldset p { margin: 4px 0 14px; color: var(--muted); font-size: 12px; }

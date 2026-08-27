@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "
 import { dirname, join, resolve } from "node:path";
 
 import type { ModelMessage } from "./types.js";
+import { parseSkillDocument, SkillRuntime, type CompiledSkillSnapshot, type RawSkillDocument } from "./skills.js";
 
 export type ResourceSnapshotRequest = {
   promptProfile: string;
@@ -17,6 +18,7 @@ export type ResourceSnapshot = {
   searchMessages: ModelMessage[];
   memoryMessages: ModelMessage[];
   skillCatalogMessages: ModelMessage[];
+  skillCatalog: ResourceSkillCatalogEntry[];
   mcpCatalogMessages: ModelMessage[];
   skillInstructions: Record<string, string>;
   mcpInstructions: Record<string, string>;
@@ -53,6 +55,11 @@ export type ResourceSkillSummary = {
   instructions_available: boolean;
 };
 
+export type ResourceSkillCatalogEntry = {
+  name: string;
+  summary: string;
+};
+
 export type ResourceMcpSummary = {
   name: string;
   enabled: boolean;
@@ -72,6 +79,7 @@ export class FileResourceLoader implements ResourceLoader {
   private readonly mcpConfigPath: string;
   private readonly mcpInstructionDir: string;
   private readonly maxFileBytes: number;
+  private readonly skillRuntime = new SkillRuntime();
 
   constructor(options: FileResourceLoaderOptions) {
     this.projectRoot = resolve(options.projectRoot);
@@ -120,6 +128,19 @@ export class FileResourceLoader implements ResourceLoader {
       active: activeNames.has(skill.name),
       instructions_available: Boolean(skill.content),
     }));
+  }
+
+  /** Captures trusted bundled Skills into the same immutable shape used by Preset Models. */
+  skillSnapshot(): CompiledSkillSnapshot | undefined {
+    const documents = this.readSkillDocuments();
+    if (documents.length === 0) return undefined;
+    try {
+      return this.skillRuntime.compile(documents);
+    } catch {
+      // The management/resource view remains usable for a legacy malformed
+      // local file; the strict uploaded Preset Model path still rejects it.
+      return undefined;
+    }
   }
 
   mcpServers(activeNames: ReadonlySet<string> = new Set()): ResourceMcpSummary[] {
@@ -175,6 +196,7 @@ export class FileResourceLoader implements ResourceLoader {
       searchMessages,
       memoryMessages,
       skillCatalogMessages,
+      skillCatalog: skills.map((skill) => ({ name: skill.name, summary: skill.summary })),
       mcpCatalogMessages,
       skillInstructions: Object.fromEntries(skills.filter((skill) => skill.content).map((skill) => [skill.name, skill.content])),
       mcpInstructions: Object.fromEntries(mcp.instructions),
@@ -228,15 +250,28 @@ export class FileResourceLoader implements ResourceLoader {
 
   private readSkills(): Array<{ name: string; summary: string; content: string }> {
     const skills = new Map<string, { name: string; summary: string; content: string }>();
-    for (const directory of this.skillDirs) {
-      for (const path of findFiles(directory, "SKILL.md")) {
-        const content = readBoundedFile(path, this.maxFileBytes) ?? "";
-        const name = skillName(path);
-        const summary = content.split("\n").find((line) => line.trim() && !line.trim().startsWith("#"))?.trim() ?? name;
-        skills.set(name, { name, summary, content });
+    for (const document of this.readSkillDocuments()) {
+      try {
+        const parsed = parseSkillDocument(document.content);
+        skills.set(parsed.name, { name: parsed.name, summary: parsed.description, content: parsed.body });
+      } catch {
+        const name = document.path ? skillName(document.path) : "skill";
+        const summary = document.content.split("\n").find((line) => line.trim() && !line.trim().startsWith("#"))?.trim() ?? name;
+        skills.set(name, { name, summary, content: document.content });
       }
     }
     return [...skills.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  private readSkillDocuments(): RawSkillDocument[] {
+    const documents: RawSkillDocument[] = [];
+    for (const directory of this.skillDirs) {
+      for (const path of findFiles(directory, "SKILL.md")) {
+        const content = readBoundedFile(path, this.maxFileBytes) ?? "";
+        documents.push({ path, content });
+      }
+    }
+    return documents;
   }
 
   private readMcpCatalog(): { names: string[]; instructions: Map<string, string> } {

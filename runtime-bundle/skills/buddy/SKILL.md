@@ -1,6 +1,7 @@
 ---
 name: buddy
 description: Control the optional Buddy device through the isolated Buddy backend.
+requires_plugins: buddy-bridge
 ---
 
 # Buddy Control

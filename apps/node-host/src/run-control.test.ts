@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { assertLegalRunTransition, RunControl, type ExecutionRuntimeAdapter, type RunContext } from "./run-control.js";
+import { assertLegalRunTransition, RunControl, type ExecutionRuntimeAdapter, type RunContext, type RuntimeResolveOptions } from "./run-control.js";
 import { RuntimeCatalog } from "./runtime-catalog.js";
 
 const databases: DatabaseSync[] = [];
@@ -140,6 +140,30 @@ describe("RunControl", () => {
     expect(control.get(child.runId)).toMatchObject({ parent_run_id: "parent", client_id: "parent-client", status: "succeeded" });
   });
 
+  it("continues a Workflow child against a retired locked Preset Model", async () => {
+    const database = new DatabaseSync(":memory:");
+    databases.push(database);
+    const catalog = new RuntimeCatalog();
+    catalog.register(new SuccessfulAdapter());
+    catalog.register(new RetiredPresetAdapter());
+    const control = new RunControl(database, catalog);
+    database.prepare(`
+      INSERT INTO execution_runs(
+        run_id, runtime_kind, target_ref, target_hash, runtime_adapter_version, runtime_adapter_hash,
+        client_id, status, input_json, permissions_json, request_hash, created_at
+      ) VALUES ('workflow-parent', 'workflow', 'demo@1', 'sha256:demo', 'test', 'sha256:test', 'parent-client', 'running', '{}', '[]', 'sha256:req', '2026-08-25T00:00:00.000Z')
+    `).run();
+
+    const child = control.startAgentChild("workflow-parent", { kind: "preset_model", ref: "agent@1" }, {
+      input: {},
+      expectedTargetHash: "sha256:agent",
+    });
+    await collect(child);
+
+    expect(control.get(child.runId)).toMatchObject({ status: "succeeded" });
+    expect(database.prepare("SELECT target_allow_retired FROM execution_runs WHERE run_id = ?").get(child.runId)).toMatchObject({ target_allow_retired: 1 });
+  });
+
   it("applies one host capacity limit to all Agent Runs", async () => {
     const database = new DatabaseSync(":memory:");
     databases.push(database);
@@ -207,6 +231,24 @@ class CapacityAdapter implements ExecutionRuntimeAdapter {
     this.maximumActive = Math.max(this.maximumActive, this.active);
     await new Promise((resolve) => setTimeout(resolve, 5));
     this.active -= 1;
+    yield { type: "agent.run.finished", data: { output: input }, terminal: "succeeded" as const };
+  }
+  stop(): void {}
+}
+
+class RetiredPresetAdapter implements ExecutionRuntimeAdapter {
+  readonly kind = "preset_model" as const;
+  readonly version = "test";
+  readonly packageHash = "sha256:agent-test";
+  readonly capabilities = ["test"];
+  readonly consumesHostSlot = false;
+
+  isHealthy(): boolean { return true; }
+  resolve(ref: string, options: RuntimeResolveOptions = {}) {
+    if (!options.allowRetired) throw new Error("preset_model_not_published");
+    return { kind: this.kind, ref, hash: "sha256:agent", allowRetired: true } as const;
+  }
+  async *start(_context: RunContext, input: unknown) {
     yield { type: "agent.run.finished", data: { output: input }, terminal: "succeeded" as const };
   }
   stop(): void {}

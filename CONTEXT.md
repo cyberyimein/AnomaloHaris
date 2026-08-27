@@ -12,6 +12,8 @@
 
 - **Preset Model** — an immutable, published Agent capability combining prompt resources, fixed plugins, a Provider Model, and runtime policy.
 - **Preset Model Ref** — the exact `<name>@<version>` identity of a Preset Model.
+- **Agent Skill** — a versioned prompt resource with a `SKILL.md` frontmatter name and description; the Agent sees its catalog entry first and loads its immutable instructions only when selected.
+- **Skill Runtime** — the deep Module that compiles Skill documents into a Preset Model snapshot, exposes catalog metadata, and authorizes model-selected activation without arbitrary filesystem access.
 - **Agent Runtime** — the execution Module built around AgentCore for running an exact Preset Model Ref.
 - **Workflow Runtime** — the executable Module that manages, validates, compiles, and runs workflows alongside AgentCore; it may be installed through a trusted built-in plugin Adapter.
 - **Runtime Adapter** — a trusted Adapter that installs an execution Runtime at the Run Control Seam; it is not a normal tool plugin.

@@ -24,6 +24,12 @@ export type ResolvedExecutionTarget = {
   kind: ExecutionRuntimeKind;
   ref: string;
   hash: string;
+  /** Internal authorization carried from the validated bound-session request. */
+  allowRetired?: boolean;
+};
+
+export type RuntimeResolveOptions = {
+  allowRetired?: boolean;
 };
 
 export type RunContext = {
@@ -60,7 +66,7 @@ export interface ExecutionRuntimeAdapter {
   readonly capabilities: readonly string[];
   readonly consumesHostSlot: boolean;
   isHealthy(): boolean;
-  resolve(ref: string): ResolvedExecutionTarget;
+  resolve(ref: string, options?: RuntimeResolveOptions): ResolvedExecutionTarget;
   /** Called while the top-level execution row is in the same transaction. */
   prepareRun?(context: { runId: string; target: ResolvedExecutionTarget; request: RunRequest }): void;
   start(context: RunContext, input: unknown): AsyncIterable<RuntimeEvent>;
@@ -81,6 +87,10 @@ export type RunHandle = AsyncIterable<ExecutionRunEvent> & {
   existing: boolean;
 };
 
+export type RunStartOptions = {
+  allowRetiredTarget?: boolean;
+};
+
 const RUN_SCHEMA = `
 PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS execution_runs (
@@ -89,6 +99,7 @@ CREATE TABLE IF NOT EXISTS execution_runs (
   runtime_kind TEXT NOT NULL CHECK(runtime_kind IN ('preset_model', 'workflow')),
   target_ref TEXT NOT NULL,
   target_hash TEXT NOT NULL,
+  target_allow_retired INTEGER NOT NULL DEFAULT 0,
   runtime_adapter_version TEXT NOT NULL,
   runtime_adapter_hash TEXT NOT NULL,
   client_id TEXT NOT NULL,
@@ -168,12 +179,14 @@ export class RunControl {
     this.db.exec(RUN_SCHEMA);
     ensureSqliteColumn(this.db, "execution_runs", "permissions_json", "TEXT NOT NULL DEFAULT '[]'");
     ensureSqliteColumn(this.db, "execution_runs", "metadata_json", "TEXT NOT NULL DEFAULT '{}'");
+    ensureSqliteColumn(this.db, "execution_runs", "target_allow_retired", "INTEGER NOT NULL DEFAULT 0");
     ensureSqliteColumn(this.db, "execution_runs", "runtime_adapter_version", "TEXT NOT NULL DEFAULT 'unknown'");
     ensureSqliteColumn(this.db, "execution_runs", "runtime_adapter_hash", "TEXT NOT NULL DEFAULT 'unknown'");
   }
 
-  start(target: ExecutionTarget, request: RunRequest): RunHandle {
-    const resolved = this.runtimes.resolve(target.kind, target.ref);
+  start(target: ExecutionTarget, request: RunRequest, options: RunStartOptions = {}): RunHandle {
+    const allowRetiredTarget = options.allowRetiredTarget === true;
+    const resolved = this.runtimes.resolve(target.kind, target.ref, allowRetiredTarget ? { allowRetired: true } : {});
     const permissions = normalizePermissions(request.permissions);
     const requestHash = hashJson({
       target,
@@ -202,16 +215,17 @@ export class RunControl {
     try {
       this.db.prepare(`
         INSERT INTO execution_runs(
-          run_id, parent_run_id, runtime_kind, target_ref, target_hash,
+          run_id, parent_run_id, runtime_kind, target_ref, target_hash, target_allow_retired,
           runtime_adapter_version, runtime_adapter_hash, client_id,
           status, input_json, metadata_json, permissions_json, idempotency_key, request_hash, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)
       `).run(
         runId,
         request.parentRunId ?? null,
         resolved.target.kind,
         resolved.target.ref,
         resolved.target.hash,
+        allowRetiredTarget ? 1 : 0,
         resolved.adapter.version,
         resolved.adapter.packageHash,
         request.clientId,
@@ -330,14 +344,19 @@ export class RunControl {
   }
 
   async recover(): Promise<RecoveryResult[]> {
-    const rows = this.db.prepare(`SELECT run_id, parent_run_id, status, runtime_kind, target_ref, target_hash, runtime_adapter_version, runtime_adapter_hash, client_id, input_json, metadata_json, permissions_json, idempotency_key FROM execution_runs WHERE status IN ('queued', 'running', 'stopping')`).all() as Array<Record<string, unknown>>;
+    const rows = this.db.prepare(`SELECT run_id, parent_run_id, status, runtime_kind, target_ref, target_hash, target_allow_retired, runtime_adapter_version, runtime_adapter_hash, client_id, input_json, metadata_json, permissions_json, idempotency_key FROM execution_runs WHERE status IN ('queued', 'running', 'stopping')`).all() as Array<Record<string, unknown>>;
     const result: RecoveryResult[] = [];
     for (const row of rows) {
       const runId = String(row.run_id);
       const status = String(row.status) as ExecutionRunStatus;
       if (status === "queued") {
         try {
-          const resolved = this.runtimes.resolve(String(row.runtime_kind) as ExecutionRuntimeKind, String(row.target_ref));
+          const allowRetiredTarget = Number(row.target_allow_retired) === 1;
+          const resolved = this.runtimes.resolve(
+            String(row.runtime_kind) as ExecutionRuntimeKind,
+            String(row.target_ref),
+            allowRetiredTarget ? { allowRetired: true } : {},
+          );
           if (resolved.target.hash !== String(row.target_hash)
             || resolved.adapter.version !== String(row.runtime_adapter_version)
             || resolved.adapter.packageHash !== String(row.runtime_adapter_hash)) {
@@ -379,7 +398,15 @@ export class RunControl {
     if (requestedPermissions.some((permission) => !hasPermission(parentPermissions, permission))) {
       throw new RunControlError(403, "child_run_permission_escalation", "A child Agent Run cannot widen its parent Run permissions.");
     }
-    const resolved = this.runtimes.resolve(target.kind, target.ref);
+    // Workflow dependency locks are the authorization to keep using a retired
+    // Preset Model version. Without the lock, child creation must still obey
+    // the normal published-only target policy.
+    const allowRetiredTarget = request.expectedTargetHash !== undefined;
+    const resolved = this.runtimes.resolve(
+      target.kind,
+      target.ref,
+      allowRetiredTarget ? { allowRetired: true } : {},
+    );
     if (request.expectedTargetHash && request.expectedTargetHash !== resolved.target.hash) {
       throw new RunControlError(503, "workflow_dependency_hash_mismatch", "The locked Preset Model hash is no longer available.", true);
     }
@@ -390,7 +417,7 @@ export class RunControl {
       ...(request.metadata ? { metadata: request.metadata } : {}),
       permissions: requestedPermissions,
       parentRunId,
-    });
+    }, { allowRetiredTarget });
   }
 
   stopChildren(parentRunId: string, reason: StopReason): Promise<void> {
