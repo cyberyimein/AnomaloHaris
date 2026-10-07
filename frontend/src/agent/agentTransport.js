@@ -16,7 +16,9 @@ export function createAgentTransport({
   location = globalThis.location,
   reconnectDelayMs = DEFAULT_RECONNECT_DELAY_MS,
 } = {}) {
-  const sessionId = ref(loadSessionId(storage));
+  const sessionId = ref(createSessionId());
+  storage?.setItem(SESSION_STORAGE_KEY, sessionId.value);
+  storage?.removeItem?.(LEGACY_SESSION_STORAGE_KEY);
   const connectionStatus = ref("Disconnected");
   const connectionClass = ref("error");
   const sendDisabled = ref(true);
@@ -176,22 +178,6 @@ export function createAgentTransport({
     startNewSession,
     stop,
   };
-}
-
-function loadSessionId(storage) {
-  const existing = storage?.getItem(SESSION_STORAGE_KEY);
-  if (existing) {
-    return existing;
-  }
-  const legacy = storage?.getItem(LEGACY_SESSION_STORAGE_KEY);
-  if (legacy) {
-    storage?.setItem(SESSION_STORAGE_KEY, legacy);
-    storage?.removeItem?.(LEGACY_SESSION_STORAGE_KEY);
-    return legacy;
-  }
-  const generated = createSessionId();
-  storage?.setItem(SESSION_STORAGE_KEY, generated);
-  return generated;
 }
 
 function createSessionId() {

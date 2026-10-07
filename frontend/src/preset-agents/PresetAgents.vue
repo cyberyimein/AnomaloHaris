@@ -69,7 +69,7 @@
       <form v-if="editing" class="preset-editor" @submit.prevent="saveAgent">
         <header>
           <div>
-            <span>{{ form.id ? "Create new version" : "Create preset model" }}</span>
+            <span>{{ form.id ? "Edit preset model" : "Create preset model" }}</span>
             <h3>{{ form.name || "Untitled model" }}</h3>
           </div>
           <button class="preset-icon-button" type="button" aria-label="Close editor" @click="closeEditor">
@@ -89,6 +89,7 @@
           <label class="preset-field">
             <span>Version</span>
             <input v-model.number="form.version" type="number" min="1" required />
+            <small>Change this number to publish a new version.</small>
           </label>
           <label class="preset-field preset-field-wide">
             <span>Description</span>
@@ -215,7 +216,7 @@
           <button class="preset-secondary-button" type="button" @click="closeEditor">Cancel</button>
           <button class="preset-primary-button" type="submit" :disabled="saving">
             <Save :size="16" />
-            {{ saving ? "Saving…" : form.id ? "Publish new version" : "Create model" }}
+            {{ saving ? "Saving…" : form.id ? "Save model" : "Create model" }}
           </button>
         </footer>
       </form>
@@ -485,7 +486,7 @@ async function loadSkillFiles(event) {
     }
     form.skill_files = [...form.skill_files, ...loaded].sort((left, right) => left.path.localeCompare(right.path));
     input.value = "";
-    showNotice(`${loaded.length} Skill file${loaded.length === 1 ? "" : "s"} loaded. Save to attach them to a new model version.`);
+    showNotice(`${loaded.length} Skill file${loaded.length === 1 ? "" : "s"} loaded. Save to attach them to the model.`);
   } catch (error) {
     input.value = "";
     showNotice(`Skill file could not be read: ${error?.message || String(error)}`, true);
@@ -505,7 +506,7 @@ function splitModelRef(ref) {
 async function saveAgent() {
   saving.value = true;
   notice.value = "";
-  const nextVersion = form.id ? Number(form.version || 1) + 1 : Number(form.version || 1);
+  const nextVersion = Number(form.version || 1);
   const toolNames = [...new Set(form.tool_names)];
   const skillFiles = form.skill_files
     .map((file) => ({ path: String(file.path).trim(), content: String(file.content || "") }))
@@ -540,17 +541,24 @@ async function saveAgent() {
     metadata: { ghost: form.ghost },
   };
   try {
-    const created = await props.management.requestJson("/api/manage/preset-models", {
-      method: "POST",
+    const originalRef = splitModelRef(form.id);
+    const updating = originalRef?.name === payload.name && originalRef.version === nextVersion;
+    const created = await props.management.requestJson(updating
+      ? `/api/manage/preset-models/${encodeURIComponent(payload.name)}/versions/${nextVersion}`
+      : "/api/manage/preset-models", {
+      method: updating ? "PUT" : "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
     const ref = `${payload.name}@${nextVersion}`;
-    await props.management.requestJson(`/api/manage/preset-models/${encodeURIComponent(payload.name)}/versions/${nextVersion}/validate`, { method: "POST" });
-    const published = await props.management.requestJson(`/api/manage/preset-models/${encodeURIComponent(payload.name)}/versions/${nextVersion}/publish`, { method: "POST" });
+    let published = created;
+    if (created.preset_model.status !== "published") {
+      await props.management.requestJson(`/api/manage/preset-models/${encodeURIComponent(payload.name)}/versions/${nextVersion}/validate`, { method: "POST" });
+      published = await props.management.requestJson(`/api/manage/preset-models/${encodeURIComponent(payload.name)}/versions/${nextVersion}/publish`, { method: "POST" });
+    }
     await load();
     editAgent(toAgentForm(published.preset_model || created.preset_model));
-    showNotice(`Published ${ref}.`);
+    showNotice(`${updating ? "Saved" : "Published"} ${ref}.`);
   } catch (error) {
     props.management.markError(error);
     showNotice(error.message || String(error), true);

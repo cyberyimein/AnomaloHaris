@@ -55,7 +55,7 @@ afterEach(() => {
 });
 
 describe("AgentTransport", () => {
-  it("migrates an existing legacy browser session key", () => {
+  it("starts a new session instead of restoring a legacy browser session", () => {
     const legacySessionKey = "anomalo.session"; // naming-compat: legacy browser session fixture
     const values = new Map([[legacySessionKey, "session_legacy"]]);
     const storage = {
@@ -76,8 +76,10 @@ describe("AgentTransport", () => {
 
     transport.connect();
 
-    expect(sockets[0].url).toBe("ws://anomaloharis.test/ws/chat/session_legacy");
-    expect(storage.setItem).toHaveBeenCalledWith("anomaloharis.session", "session_legacy");
+    const sessionId = transport.state.sessionId.value;
+    expect(sessionId).not.toBe("session_legacy");
+    expect(sockets[0].url).toBe(`ws://anomaloharis.test/ws/chat/${sessionId}`);
+    expect(storage.setItem).toHaveBeenCalledWith("anomaloharis.session", sessionId);
     expect(storage.removeItem).toHaveBeenCalledWith(legacySessionKey);
   });
 
@@ -111,7 +113,7 @@ describe("AgentTransport", () => {
     });
     sockets[0].emit("message", { data: JSON.stringify(started) });
 
-    expect(sockets[0].url).toBe("ws://anomaloharis.test/ws/chat/session_existing");
+    expect(sockets[0].url).toBe(`ws://anomaloharis.test/ws/chat/${transport.state.sessionId.value}`);
     expect(transport.state.connectionStatus.value).toBe("Connected");
     expect(onState).toHaveBeenCalledWith("Idle", "Connected. Waiting for input.");
     expect(onEvent).toHaveBeenCalledWith({ type: "pong" });
@@ -164,9 +166,21 @@ describe("AgentTransport", () => {
     sockets[1].emit("message", { data: JSON.stringify(current) });
 
     expect(sockets).toHaveLength(2);
+    expect(sockets[1].url).toBe(sockets[0].url);
     expect(sockets[1].url).toMatch(/^wss:\/\/anomaloharis\.test/);
     expect(onEvent).toHaveBeenCalledTimes(1);
     expect(onEvent).toHaveBeenCalledWith(current);
+  });
+
+  it("starts fresh on each page opening even after selecting a history session", () => {
+    const storage = createStorage();
+    const first = createAgentTransport({ storage, socketFactory: (url) => new FakeSocket(url) });
+    expect(first.state.sessionId.value).not.toBe("session_existing");
+    first.switchSession("session_history");
+    first.stop();
+    const reopened = createAgentTransport({ storage });
+    expect(reopened.state.sessionId.value).not.toBe("session_history");
+    expect(reopened.state.sessionId.value).toMatch(/^session_[a-f0-9]{32}$/);
   });
 
   it("starts a fresh persisted session and closes the previous socket", () => {

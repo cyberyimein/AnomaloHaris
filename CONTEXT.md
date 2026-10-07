@@ -5,13 +5,13 @@
 - **AnomaloHaris** is the product and the Node.js/TypeScript local AI compute center.
 - **`anomaloharis`** is the only canonical machine-readable product namespace after the Stage 0 naming migration.
 - **`@anomaloharis/*`** is the canonical npm scope.
-- **`anomaloharis@1`** is the immutable reference of the built-in default Preset Model after Stage 0.
+- **`anomaloharis@1`** is the versioned reference of the built-in default Preset Model after Stage 0.
 - **`anomalo`**, **`@anomalo/*`**, **`anomalo.dev`**, **`ANOMALO_*`**, and **`X-Anomalo-*`** are legacy identifiers permitted only inside the centralized Stage 0 migration Adapter, migration fixtures, and historical documents. <!-- naming-compat -->
 
 ## Runtime concepts
 
-- **Preset Model** — an immutable, published Agent capability combining prompt resources, fixed plugins, a Provider Model, and runtime policy.
-- **Preset Model Ref** — the exact `<name>@<version>` identity of a Preset Model.
+- **Preset Model** — a versioned Agent capability combining prompt resources, fixed plugins, a Provider Model, and runtime policy. Management edits can update the current definition in place; a new version is created only when the user changes its version number. Each execution compiles or resolves a fixed snapshot.
+- **Preset Model Ref** — the exact `<name>@<version>` identity of a Preset Model; its compiled hash identifies the content after in-place edits.
 - **Agent Skill** — a versioned prompt resource with a `SKILL.md` frontmatter name and description; the Agent sees its catalog entry first and loads its immutable instructions only when selected.
 - **Skill Runtime** — the deep Module that compiles Skill documents into a Preset Model snapshot, exposes catalog metadata, and authorizes model-selected activation without arbitrary filesystem access.
 - **Agent Runtime** — the execution Module built around AgentCore for running an exact Preset Model Ref.

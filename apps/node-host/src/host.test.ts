@@ -400,6 +400,31 @@ describe("Node Host", () => {
     ]);
   });
 
+  it("authorizes same-version updates and rejects mismatched identities", async () => {
+    const registry = new SqlitePresetModelRegistry(":memory:");
+    registries.push(registry);
+    registry.ensureBuiltinDefault({ model: "replay-model" });
+    const definition = {
+      name: "editable-api-model", version: 1, description: "Original",
+      provider: { adapter: "openai-compatible", model: "provider" },
+      prompt: { system: "Original prompt" }, plugins: { fixed: [] },
+    };
+    registry.publish(registry.createDraft(definition).ref);
+    const app = await makeApp([], undefined, registry, undefined, undefined, "secret");
+    apps.push(app);
+    const url = "/api/manage/preset-models/editable-api-model/versions/1";
+    const payload = { ...definition, prompt: { system: "Updated prompt" } };
+    expect((await app.inject({ method: "PUT", url, payload })).statusCode).toBe(403);
+    expect(registry.resolve("editable-api-model@1").systemPrompt).toBe("Original prompt");
+    const headers = { "x-anomaloharis-admin-token": "secret" };
+    const updated = await app.inject({ method: "PUT", url, headers, payload });
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json().preset_model).toMatchObject({ ref: "editable-api-model@1", version: 1, status: "published" });
+    expect(registry.resolve("editable-api-model@1").systemPrompt).toBe("Updated prompt");
+    expect((await app.inject({ method: "PUT", url, headers, payload: { ...payload, version: 2 } })).statusCode).toBe(400);
+    expect((await app.inject({ method: "PUT", url: url.replace("versions/1", "versions/9"), headers, payload })).statusCode).toBe(404);
+  });
+
   it("exposes model-scoped Skill metadata without exposing Skill bodies", async () => {
     const registry = new SqlitePresetModelRegistry(":memory:");
     registries.push(registry);

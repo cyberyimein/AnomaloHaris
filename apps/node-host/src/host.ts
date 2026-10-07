@@ -238,6 +238,17 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
     }
   });
 
+  app.put<{ Params: { name: string; version: string }; Body: unknown }>("/api/manage/preset-models/:name/versions/:version", async (request, reply) => {
+    try {
+      requireManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
+      if (!options.presetModels) throw new HostRequestError(503, "preset_model_unavailable", "Preset Model registry is not configured.");
+      const updated = options.presetModels.update(`${request.params.name}@${request.params.version}`, request.body as any);
+      return reply.send({ preset_model: serializePresetModel(updated, true) });
+    } catch (error) {
+      return sendHostError(reply, error);
+    }
+  });
+
   app.post<{ Params: { name: string; version: string } }>("/api/manage/preset-models/:name/versions/:version/publish", async (request, reply) => {
     try {
       requireManagementAccess(request.headers as Record<string, unknown>, options.managementToken);

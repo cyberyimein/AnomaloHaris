@@ -200,6 +200,38 @@ export class SqlitePresetModelRegistry {
     return compiled;
   }
 
+  update(ref: string, definition: PresetModelDefinition): CompiledPresetModel {
+    const canonicalDefinition = canonicalizeDefinition(definition);
+    validateDefinition(canonicalDefinition);
+    const record = this.read(ref, { includeDraft: true });
+    if (record.status === "retired") throw new Error("preset_model_retired");
+    if (canonicalDefinition.name !== record.name || canonicalDefinition.version !== record.version) {
+      throw new Error("invalid_preset_model_definition: identity_mismatch");
+    }
+    const compiled = compileDefinition(canonicalDefinition, record.status, this.catalog, this.resolvePrompt, this.bundledSkillSnapshot);
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare(`
+        UPDATE preset_model_versions
+        SET description = ?, definition_json = ?, compiled_snapshot_json = ?,
+          prompt_hash = ?, plugin_lock_hash = ?, compiled_hash = ?
+        WHERE name = ? AND version = ?
+      `).run(
+        canonicalDefinition.description, JSON.stringify(canonicalDefinition), JSON.stringify(compiled),
+        compiled.promptHash, compiled.pluginLockHash, compiled.compiledHash, record.name, record.version,
+      );
+      this.db.prepare("DELETE FROM preset_model_plugin_locks WHERE name = ? AND version = ?").run(record.name, record.version);
+      this.persistPluginLocks(compiled);
+      this.db.prepare("UPDATE preset_models SET description = ?, updated_at = ? WHERE name = ?")
+        .run(canonicalDefinition.description, this.now(), record.name);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+    return compiled;
+  }
+
   publish(ref: string, options: { defaultRef?: string } = {}): CompiledPresetModel {
     const record = this.read(ref, { includeDraft: true });
     if (record.status === "retired") throw new Error("preset_model_retired");

@@ -30,7 +30,7 @@ describe("SqlitePresetModelRegistry", () => {
     registry.close();
   });
 
-  it("publishes immutable versions and keeps the compiled hash stable across restart", () => {
+  it("creates explicit versions and keeps the compiled hash stable across restart", () => {
     const directory = mkdtempSync(join(tmpdir(), "anomaloharis-preset-model-"));
     directories.push(directory);
     const databasePath = join(directory, "preset-models.sqlite3");
@@ -66,6 +66,36 @@ describe("SqlitePresetModelRegistry", () => {
       expect.objectContaining({ ref: "luna@2", status: "published", provider_model: "deepseek/deepseek-chat" }),
     ]);
     restarted.close();
+  });
+
+  it("saves published edits in place and recompiles prompt and plugin locks", () => {
+    const registry = new SqlitePresetModelRegistry(":memory:", { catalog: builtinPluginCatalog() });
+    const definition = {
+      name: "editable-model", version: 1, description: "Original",
+      provider: { adapter: "openai-compatible", model: "provider" },
+      prompt: { system: "Original prompt" }, plugins: { fixed: ["host-core"] },
+    };
+    const original = registry.publish(registry.createDraft(definition).ref);
+    const updated = registry.update(original.ref, {
+      ...definition, description: "Updated", prompt: { system: "Updated prompt" },
+      plugins: { fixed: ["host-core", "web"], allowed_tools: ["web_search"] },
+    });
+    expect(updated).toMatchObject({ ref: original.ref, version: 1, status: "published", systemPrompt: "Updated prompt" });
+    expect(updated.compiledHash).not.toBe(original.compiledHash);
+    expect(updated.promptHash).not.toBe(original.promptHash);
+    expect(registry.resolve(original.ref).compiledHash).toBe(updated.compiledHash);
+    expect(registry.list({ includeHistory: true })).toHaveLength(1);
+    expect(registry.db.prepare("SELECT plugin_id FROM preset_model_plugin_locks WHERE name = ? ORDER BY plugin_id")
+      .all(definition.name)).toEqual([{ plugin_id: "host-core" }, { plugin_id: "web" }]);
+    expect(() => registry.update(original.ref, { ...definition, version: 2 })).toThrow("identity_mismatch");
+    expect(() => registry.update(original.ref, {
+      ...definition, plugins: { fixed: ["missing-plugin"] },
+    })).toThrow();
+    expect(registry.resolve(original.ref).compiledHash).toBe(updated.compiledHash);
+    const newer = registry.publish(registry.createDraft({ ...definition, version: 3 }).ref);
+    expect(newer.ref).toBe("editable-model@3");
+    expect(() => registry.update(original.ref, definition)).toThrow("preset_model_retired");
+    registry.close();
   });
 
   it("rejects a new version lower than any existing version", () => {

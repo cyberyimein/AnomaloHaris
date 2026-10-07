@@ -277,7 +277,8 @@ reuses it on resume.
 
 ### Preset Models
 
-The **Preset Models** tab creates immutable, versioned Agent capability bundles. A Preset Model
+The **Preset Models** tab manages versioned Agent capability bundles. Saving edits keeps the
+current version number; change the Version field explicitly to create a new version. A Preset Model
 fixes the prompt, plugin set, provider model, tool policy, and runtime limits; callers select it
 with an explicit `name@version` such as `anomaloharis@1` or `fomc-brief@3`. Definitions are stored in
 `ANOMALOHARIS_DATA_DIR/preset-models.sqlite3`. Management requests use
@@ -285,7 +286,8 @@ with an explicit `name@version` such as `anomaloharis@1` or `fomc-brief@3`. Defi
 control panel. Publishing a replacement retires the previous published version;
 retired definitions remain resolvable for already-bound sessions but are not
 new-run targets. Draft/current definitions and all mutations use
-`GET/POST /api/manage/preset-models` plus the versioned `validate`, `publish`,
+`GET/POST /api/manage/preset-models`, `PUT /api/manage/preset-models/{name}/versions/{version}`
+for in-place edits, plus the versioned `validate`, `publish`,
 and `retire` routes and require `ANOMALOHARIS_ADMIN_TOKEN`. Add
 `?include_history=true` to the management listing when an administrator needs
 to inspect retired versions.
