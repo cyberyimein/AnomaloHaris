@@ -161,6 +161,11 @@ export class SqliteSessionAdapter implements SessionRepository {
     return this.readSnapshot(sessionId);
   }
 
+  async journal(sessionId: SessionId): Promise<ModelMessage[]> {
+    const snapshot = await this.open(sessionId);
+    return this.readMessageChain(sessionId, snapshot.activeLeafEntryId, true);
+  }
+
   async append(entries: NewSessionEntry[]): Promise<void> {
     if (entries.length === 0) return;
     this.db.exec("BEGIN IMMEDIATE");
@@ -216,7 +221,9 @@ export class SqliteSessionAdapter implements SessionRepository {
 
   async beginRun(record: NewRunRecord): Promise<void> {
     this.ensureSession(record.sessionId);
-    this.db.prepare(`
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare(`
       INSERT INTO runs(
         run_id, session_id, status, start_entry_id, last_entry_id,
         config_json, started_at, ended_at, error_code
@@ -238,6 +245,18 @@ export class SqliteSessionAdapter implements SessionRepository {
       JSON.stringify(record.config),
       record.startedAt,
     );
+      if (record.resumedFromRunId && record.resumedFromRunId !== record.runId) {
+        const moved = this.db.prepare("UPDATE run_checkpoints SET run_id = ? WHERE run_id = ? AND session_id = ?")
+          .run(record.runId, record.resumedFromRunId, record.sessionId);
+        if (moved.changes !== 1) throw new Error("checkpoint_resume_conflict");
+        this.db.prepare("UPDATE runs SET status = 'stopped', ended_at = COALESCE(ended_at, ?) WHERE run_id = ? AND session_id = ?")
+          .run(record.startedAt, record.resumedFromRunId, record.sessionId);
+      }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   async checkpoint(record: SessionCheckpoint): Promise<void> {
@@ -463,9 +482,9 @@ export class SqliteSessionAdapter implements SessionRepository {
     } as SessionSnapshot & { updatedAt: string };
   }
 
-  private readMessageChain(sessionId: SessionId, leaf: string | null | undefined): Array<{ role: "system" | "user" | "assistant" | "tool"; content: string; [key: string]: unknown }> {
+  private readMessageChain(sessionId: SessionId, leaf: string | null | undefined, withIds = false): Array<{ role: "system" | "user" | "assistant" | "tool"; content: string; [key: string]: unknown }> {
     const rows = this.db.prepare(`
-      SELECT entry_id, parent_entry_id, kind, role, payload_json
+      SELECT entry_id, parent_entry_id, run_id, kind, role, payload_json
       FROM session_entries WHERE session_id = ?
     `).all(sessionId) as Row[];
     const byId = new Map(rows.map((row) => [String(row.entry_id), row]));
@@ -484,7 +503,7 @@ export class SqliteSessionAdapter implements SessionRepository {
       if (row.kind !== "message" || typeof row.role !== "string") return [];
       const payload = parseObject(row.payload_json);
       if (typeof payload.content !== "string") return [];
-      return [{ role: row.role as "system" | "user" | "assistant" | "tool", content: payload.content, ...payload }];
+      return [{ role: row.role as "system" | "user" | "assistant" | "tool", content: payload.content, ...payload, ...(withIds ? { _entryId: String(row.entry_id), _runId: row.run_id } : {}) }];
     });
   }
 

@@ -3,6 +3,7 @@ import type { EntryId, RunId, SessionId } from "@anomaloharis/contracts";
 import type { Clock } from "./clock.js";
 import { randomIds, type IdFactory } from "./ids.js";
 import type {
+  ModelMessage,
   FailedRunRecord,
   FinishedRunRecord,
   NewRunRecord,
@@ -18,6 +19,7 @@ import { DEFAULT_SEARCH_MODE, isSearchMode } from "./search-mode.js";
 
 export interface SessionRepository {
   open(sessionId: SessionId): Promise<SessionSnapshot>;
+  journal?(sessionId: SessionId): Promise<ModelMessage[]>;
   append(entries: NewSessionEntry[]): Promise<void>;
   setActiveLeaf(sessionId: SessionId, entryId: EntryId): Promise<void>;
   beginRun(record: NewRunRecord): Promise<void>;
@@ -34,6 +36,7 @@ export interface SessionRepository {
 type StoredSession = {
   snapshot: SessionSnapshot;
   entryParents: Map<EntryId, EntryId | undefined>;
+  entries: Map<EntryId, NewSessionEntry>;
   runs: Map<RunId, NewRunRecord>;
 };
 
@@ -60,14 +63,30 @@ export class InMemorySessionAdapter implements SessionRepository {
       activeMcpServers: [],
       webTraces: [],
     };
-    this.sessions.set(sessionId, { snapshot, entryParents: new Map(), runs: new Map() });
+    this.sessions.set(sessionId, { snapshot, entryParents: new Map(), entries: new Map(), runs: new Map() });
     return structuredClone(snapshot);
+  }
+
+  async journal(sessionId: SessionId): Promise<ModelMessage[]> {
+    const stored = await this.ensure(sessionId);
+    const entries: NewSessionEntry[] = [];
+    let id = stored.snapshot.activeLeafEntryId;
+    while (id) {
+      const entry = stored.entries.get(id);
+      if (!entry) break;
+      entries.unshift(entry);
+      id = entry.parentEntryId;
+    }
+    return entries.filter((entry) => entry.kind === "message" && entry.role).map((entry) => ({
+      ...entry.payload, role: entry.role!, content: String(entry.payload.content ?? ""), _entryId: entry.entryId, _runId: entry.runId,
+    }));
   }
 
   async append(entries: NewSessionEntry[]): Promise<void> {
     for (const entry of entries) {
       const stored = await this.ensure(entry.sessionId);
       stored.entryParents.set(entry.entryId, entry.parentEntryId);
+      stored.entries.set(entry.entryId, structuredClone(entry));
       if (entry.kind === "message" && entry.role && typeof entry.payload.content === "string") {
         stored.snapshot.messages.push({
           role: entry.role,
@@ -87,7 +106,16 @@ export class InMemorySessionAdapter implements SessionRepository {
 
   async beginRun(record: NewRunRecord): Promise<void> {
     const stored = await this.ensure(record.sessionId);
+    if (record.resumedFromRunId && record.resumedFromRunId !== record.runId
+        && stored.snapshot.checkpoint?.runId !== record.resumedFromRunId) {
+      throw new Error("checkpoint_resume_conflict");
+    }
     stored.runs.set(record.runId, structuredClone(record));
+    if (record.resumedFromRunId && stored.snapshot.checkpoint?.runId === record.resumedFromRunId) {
+      stored.snapshot.checkpoint.runId = record.runId;
+      const previous = stored.runs.get(record.resumedFromRunId);
+      if (previous && record.resumedFromRunId !== record.runId) previous.status = "stopped";
+    }
   }
 
   async checkpoint(record: SessionCheckpoint): Promise<void> {

@@ -212,7 +212,154 @@ describe("WorkflowRunner", () => {
 
     expect(events.at(-1)).toMatchObject({ type: "workflow.run.succeeded", data: { output: [{ value: "fanout" }, { value: "fanout" }] } });
   });
+
+  it("runs ready nodes concurrently and joins outputs in edge order", async () => {
+    const { compiled, store } = await executionFixture(parallelModelDefinition());
+    let releaseLeft!: () => void;
+    const leftFinished = new Promise<void>((resolve) => { releaseLeft = resolve; });
+    let activeSlots = 0;
+    let peakSlots = 0;
+    const acquired: string[] = [];
+    const released: string[] = [];
+    const runner = new WorkflowRunner({
+      runId: "run_readability", compiled, store,
+      input: { value: "parallel" }, signal: new AbortController().signal,
+      acquireHostSlot: async (node) => {
+        acquired.push(node.id);
+        activeSlots += 1;
+        peakSlots = Math.max(peakSlots, activeSlots);
+        return () => { released.push(node.id); activeSlots -= 1; };
+      },
+      executePresetModel: async (node) => {
+        if (node.id === "left") await leftFinished;
+        return { output: { side: node.id } };
+      },
+    });
+    const events = [];
+    for await (const event of runner.run()) {
+      events.push(event);
+      if (event.type === "workflow.node.succeeded" && event.data.node_id === "right") releaseLeft();
+    }
+
+    expect(peakSlots).toBe(2);
+    expect(activeSlots).toBe(0);
+    expect(released.toSorted()).toEqual(acquired.toSorted());
+    expect(events.filter((event) => event.type === "workflow.node.succeeded")
+      .map((event) => event.data.node_id)).toEqual(["input", "right", "left", "join", "output"]);
+    expect(events.at(-1)?.data.output).toEqual([{ side: "left" }, { side: "right" }]);
+  });
+
+  it("keeps one host slot across retries and preserves child-run metadata", async () => {
+    const { compiled, store } = await executionFixture(retryDefinition());
+    const acquired: string[] = [];
+    const released: string[] = [];
+    const runner = new WorkflowRunner({
+      runId: "run_readability", compiled, store,
+      input: { value: "retry" }, signal: new AbortController().signal,
+      acquireHostSlot: async (node) => {
+        acquired.push(node.id);
+        return () => { released.push(node.id); };
+      },
+      executePresetModel: async (_node, input, context) => {
+        if (context.attempt === 1) throw new WorkflowNodeExecutionError("transient", "retry", true, "child_failed");
+        return { output: input, childRunId: "child_succeeded", usage: { total_tokens: 7 } };
+      },
+    });
+    const events = [];
+    for await (const event of runner.run()) events.push(event);
+
+    expect(acquired.filter((nodeId) => nodeId === "model")).toHaveLength(1);
+    expect(released.filter((nodeId) => nodeId === "model")).toHaveLength(1);
+    expect(store.listNodes("run_readability").filter((node) => node.node_id === "model")
+      .map((node) => [node.attempt, node.status, node.child_run_id])).toEqual([
+        [1, "failed", "child_failed"], [2, "succeeded", "child_succeeded"],
+      ]);
+    expect(events.find((event) => event.type === "workflow.node.succeeded" && event.data.node_id === "model")?.data)
+      .toMatchObject({ attempt: 2, child_run_id: "child_succeeded", usage: { total_tokens: 7 } });
+  });
+
+  it("releases an acquired slot when cancellation prevents node startup", async () => {
+    const { compiled, store } = await executionFixture(parallelModelDefinition());
+    const abort = new AbortController();
+    const released: string[] = [];
+    const runner = new WorkflowRunner({
+      runId: "run_readability", compiled, store,
+      input: { value: "stop" }, signal: abort.signal,
+      acquireHostSlot: async (node) => {
+        if (node.id === "left") abort.abort("user_stop");
+        return () => { released.push(node.id); };
+      },
+      executePresetModel: async () => { throw new Error("Cancelled nodes must not start."); },
+    });
+    const events = [];
+    for await (const event of runner.run()) events.push(event);
+
+    expect(released).toEqual(["input", "left"]);
+    expect(events.filter((event) => event.type === "workflow.node.started")
+      .map((event) => event.data.node_id)).toEqual(["input"]);
+    expect(store.listNodes("run_readability").find((node) => node.node_id === "left")?.status).toBe("stopped");
+    expect(events.at(-1)).toMatchObject({ type: "workflow.run.stopped", data: { reason: "user_stop" } });
+  });
+
+  it("drains active tasks after fail-fast and journals a late successful result", async () => {
+    const { compiled, store } = await executionFixture(parallelModelDefinition());
+    const runner = new WorkflowRunner({
+      runId: "run_readability", compiled, store,
+      input: { value: "failure" }, signal: new AbortController().signal,
+      executePresetModel: async (node, _input, context) => {
+        if (node.id === "left") throw new WorkflowNodeExecutionError("denied", "permission denied");
+        if (!context.signal.aborted) {
+          await new Promise<void>((resolve) => context.signal.addEventListener("abort", () => resolve(), { once: true }));
+        }
+        return { output: { side: "right" } };
+      },
+    });
+    const events = [];
+    for await (const event of runner.run()) events.push(event);
+
+    expect(events.filter((event) => event.type === "workflow.node.failed")
+      .map((event) => event.data.node_id)).toEqual(["left"]);
+    expect(events.some((event) => event.type === "workflow.node.succeeded" && event.data.node_id === "right")).toBe(true);
+    expect(store.listNodes("run_readability").find((node) => node.node_id === "right")?.status).toBe("succeeded");
+    expect(store.listNodes("run_readability").find((node) => node.node_id === "join")?.status).toBe("stopped");
+    expect(events.at(-1)?.type).toBe("workflow.run.failed");
+  });
 });
+
+async function executionFixture(value: unknown) {
+  const database = new DatabaseSync(":memory:");
+  resources.push(database);
+  const preset = { ref: "retry-model@1", description: "Retry model", compiled_hash: hash("model"), plugin_lock_hash: hash("plugins") };
+  const runtime = new WorkflowRuntime({
+    database,
+    presetModels: { listPublished: () => [preset], resolve: () => preset },
+  });
+  const imported = await runtime.importDraft(value);
+  await runtime.publish(imported.workflow.ref);
+  database.exec("CREATE TABLE execution_runs(run_id TEXT PRIMARY KEY);");
+  database.prepare("INSERT INTO execution_runs(run_id) VALUES ('run_readability')").run();
+  const store = new WorkflowRunStore(database);
+  const compiled = runtime.registry.get(imported.workflow.ref).compiled;
+  store.create("run_readability", compiled);
+  return { compiled, store };
+}
+
+function parallelModelDefinition() {
+  const value = fanoutDefinition();
+  return {
+    ...value,
+    spec: {
+      ...value.spec,
+      policy: { max_parallelism: 2 },
+      nodes: value.spec.nodes.map((node) => {
+        if (node.id === "left" || node.id === "right") {
+          return { ...node, type: "preset_model", config: { model_ref: "retry-model@1" } };
+        }
+        return node;
+      }),
+    },
+  };
+}
 
 function hash(value: string): `sha256:${string}` {
   return (`sha256:${value.padEnd(64, "0").slice(0, 64)}`) as `sha256:${string}`;

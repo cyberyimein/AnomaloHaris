@@ -21,6 +21,7 @@
           >
             Agent
           </button>
+          <button class="nav-tab" :class="{ active: activeView === 'bot' }" type="button" @click="setActiveView('bot')">Bot</button>
           <button
             class="nav-tab"
             :class="{ active: activeView === 'buddy' }"
@@ -60,7 +61,7 @@
             <span class="status-dot" aria-hidden="true"></span>
             {{ openrouterCreditsLabel }}
           </span>
-          <span id="connectionStatus" class="connection-chip" :class="connectionClass">
+          <span v-if="activeView !== 'bot'" id="connectionStatus" class="connection-chip" :class="connectionClass">
             <span class="status-dot" aria-hidden="true"></span>
             {{ connectionStatus }}
           </span>
@@ -319,6 +320,8 @@
           </article>
         </template>
       </section>
+
+      <BotPage v-else-if="activeView === 'bot'" :management="managementAccess" :render-markdown="renderMarkdown" />
 
       <PresetAgents
         v-else-if="activeView === 'preset-agents'"
@@ -1082,6 +1085,7 @@ import CapabilityDashboard from "./dashboard/CapabilityDashboard.vue";
 import { createBuddyDashboardController } from "./dashboard/buddyDashboardController";
 import { createManagementAccess } from "./management/managementAccess";
 import { createSearchModeController } from "./management/searchModeController";
+import BotPage from "./bot/BotPage.vue";
 import PresetAgents from "./preset-agents/PresetAgents.vue";
 import Workflows from "./workflows/Workflows.vue";
 

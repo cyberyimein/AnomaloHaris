@@ -1,3 +1,5 @@
+import { registerBotRoutes } from "./bot-api.js";
+import type { BotService } from "./bot-service.js";
 import { statSync } from "node:fs";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { resolve } from "node:path";
@@ -36,6 +38,7 @@ import type { RunControl } from "./run-control.js";
 
 export type NodeHostOptions = {
   sessions: SessionRepository;
+  bot?: BotService;
   model: string;
   presetModels?: SqlitePresetModelRegistry;
   defaultPresetModel?: string;
@@ -62,6 +65,20 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
   const app = fastify({ logger: options.logger ?? false });
   const activeAgentRuns = new Map<SessionId, string>();
   await app.register(fastifyWebsocket);
+  if (options.bot) {
+    registerBotRoutes(app, options.bot, options.managementToken);
+    app.addHook("preHandler", async (request, reply) => {
+      if (request.url.startsWith("/api/bot")) return;
+      const body = asObject(request.body);
+      const params = asObject(request.params);
+      const query = asObject(request.query);
+      const metadata = asObject(body.metadata);
+      const ids = [params.sessionId, params.session_id, body.session_id, query.session_id, metadata.session_id];
+      if (ids.some((id) => typeof id === "string" && options.bot!.ownsSession(id))) {
+        return reply.code(403).send({ error: "Bot session must use the Bot entry point.", error_code: "bot_session_owned" });
+      }
+    });
+  }
 
   app.get("/health", async () => ({
     status: "ok",
@@ -476,7 +493,7 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
     const sessions = await options.sessions.list(
       parsedLimit === undefined || !Number.isFinite(parsedLimit) ? {} : { limit: parsedLimit },
     );
-    return { sessions: sessions.map(serializeSummary) };
+    return { sessions: sessions.filter((session) => !options.bot?.ownsSession(session.sessionId)).map(serializeSummary) };
   });
 
   app.get<{ Params: { sessionId: string } }>("/api/sessions/:sessionId", async (request, reply) => {

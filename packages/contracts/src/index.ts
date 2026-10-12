@@ -146,3 +146,4 @@ export {
   validateWorkflowDefinition,
 } from "./validation.js";
 export type { ContractName, ContractValidation } from "./validation.js";
+export * from './bot.js';

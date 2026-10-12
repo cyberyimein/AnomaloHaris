@@ -39,6 +39,7 @@ export class AgentRuntimeAdapter implements ExecutionRuntimeAdapter {
   constructor(private readonly options: {
     registry: SqlitePresetModelRegistry;
     controller: RunController;
+    prepareInput?: (context: RunContext, input: AgentRunInput) => AgentRunInput;
   }) {}
 
   isHealthy(): boolean {
@@ -61,7 +62,8 @@ export class AgentRuntimeAdapter implements ExecutionRuntimeAdapter {
       throw new Error(`preset_model_target_changed:${context.target.ref}`);
     }
     const invocation = toInvocation(input);
-    const agentInput = invocation.agent_input ?? buildAgentInput(context, model, invocation);
+    const baseInput = invocation.agent_input ?? buildAgentInput(context, model, invocation);
+    const agentInput = this.options.prepareInput ? this.options.prepareInput(context, baseInput) : baseInput;
     this.sessions.set(context.runId, agentInput.sessionId);
     try {
       for await (const event of this.options.controller.start({ ...agentInput, runId: context.runId as RunId }, context.signal)) {

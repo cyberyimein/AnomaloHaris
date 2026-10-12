@@ -109,6 +109,7 @@ function withManagementAccess(url, options = {}, token) {
 
 function requiresManagementAccess(url) {
   return (
+    url.startsWith("/api/bot") ||
     url.startsWith("/api/buddy") ||
     url.startsWith("/api/manage")
   );

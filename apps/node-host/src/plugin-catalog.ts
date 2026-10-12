@@ -212,6 +212,11 @@ export function createPluginManifest(input: {
 export function builtinPluginCatalog(): PluginCatalog {
   return new PluginCatalog([
     createPluginManifest({
+      id: "bot-tools", version: "1.0.0", package: "@anomaloharis/node-host",
+      entry: "builtin:bot-tools", compatibility: "L1", permissions: ["tools.register"],
+      toolNames: ["bot_schedule", "bot_tasks", "bot_task_update", "bot_memory_search", "bot_memory_write", "bot_memory_deactivate", "bot_history_read"],
+    }),
+    createPluginManifest({
       id: "host-core",
       version: "1.0.0",
       package: "@anomaloharis/node-host",

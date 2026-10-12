@@ -3,6 +3,10 @@ import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { loadHostEnvironment } from "./env.js";
+import { HostLock } from "./host-lock.js";
+import { BotService } from "./bot-service.js";
+import { BotToolRuntime } from "./bot-tools.js";
 import { AgentCore } from "./core.js";
 import { ResourceContextBuilder } from "./context.js";
 import { BuddyDashboardClient } from "./buddy-dashboard.js";
@@ -30,8 +34,10 @@ import { RunControl } from "./run-control.js";
 import { WorkflowRuntimeAdapter } from "./workflow-runtime-adapter.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..", "..");
+loadHostEnvironment(repoRoot);
 const env = (name: string): string | undefined => legacyNamingAdapter.readEnv(process.env, name);
 const dataDir = resolve(env("ANOMALOHARIS_DATA_DIR") ?? join(repoRoot, "data"));
+const hostLock = new HostLock(join(dataDir, "host.lock.sqlite3"));
 const databasePath = env("ANOMALOHARIS_SESSION_DB_PATH") || join(dataDir, "sessions.sqlite3");
 const presetModelDatabasePath = env("ANOMALOHARIS_PRESET_MODEL_DB_PATH") || join(dataDir, "preset-models.sqlite3");
 const computeDatabasePath = env("ANOMALOHARIS_COMPUTE_DB_PATH") || join(dataDir, "compute.sqlite3");
@@ -289,7 +295,9 @@ const model = new PresetModelAdapter({
   baseUrl,
   ...(apiKey ? { apiKey } : {}),
 });
+let bot!: BotService;
 const tools = new CompositeToolRuntime([
+  asToolAdapter("bot-tools", 100, new BotToolRuntime(() => bot)),
   asToolAdapter("agent-skills", 110, new SkillToolRuntime(skillRuntime, bundledSkillSnapshot), { alwaysAvailable: true }),
   asToolAdapter("host-core", 100, new CoreToolRuntime()),
   asToolAdapter("time-tools", 100, new TimeZoneToolRuntime()),
@@ -328,11 +336,14 @@ const core = new AgentCore({
   sessions,
   context: new ResourceContextBuilder(tools, resources, { bundledSkillSnapshot }),
   plugins,
+  prepareModelContext: (input, context, signal) => bot.prepareContext(input, context, signal),
+  onUsage: (input, usage) => bot.recordUsage(input, usage),
+  beforeComplete: (input, request) => bot.prepareCompletion(input, request),
 });
 const controller = new RunController(core);
 const workflowRunStore = new WorkflowRunStore(workflowRuntime.registry.db);
 const runtimeCatalog = new RuntimeCatalog();
-const agentRuntimeAdapter = new AgentRuntimeAdapter({ registry: presetModels, controller });
+const agentRuntimeAdapter = new AgentRuntimeAdapter({ registry: presetModels, controller, prepareInput: (context, input) => bot.prepareInput(context, input) });
 let runControl!: RunControl;
 const workflowRuntimeAdapter = new WorkflowRuntimeAdapter({
   runtime: workflowRuntime,
@@ -352,10 +363,23 @@ runtimeCatalog.register(workflowRuntimeAdapter);
 runControl = new RunControl(workflowRuntime.registry.db, runtimeCatalog, {
   maxConcurrency: runMaxConcurrency,
 });
+// Seed a separate explicit Bot preset; never edit the ordinary default model.
+const botModelRef = "anomaloharis-bot@1";
+if (!presetModels.list({ includeDraft: true, includeRetired: true, includeHistory: true }).some((item) => item.ref === botModelRef)) {
+  const definition = structuredClone(defaultPresetModel.definition);
+  definition.name = "anomaloharis-bot";
+  definition.version = 1;
+  definition.description = "Local standby Bot with scheduling and durable memory.";
+  definition.plugins = { fixed: [...(definition.plugins?.fixed ?? []).filter((id) => id !== "browser-bridge"), "bot-tools"] };
+  presetModels.publish(presetModels.createDraft(definition).ref);
+}
+bot = new BotService({ control: runControl, sessions, defaultModel: botModelRef, model, projectId: repoRoot, resolveModel: (ref) => presetModels.resolve(ref).providerModel });
+await bot.initialize();
 await runControl.recover();
 const managementToken = env("ANOMALOHARIS_ADMIN_TOKEN");
 const app = await buildNodeHost({
   sessions,
+  bot,
   model: modelName,
   presetModels,
   defaultPresetModel: defaultPresetModel.ref,
@@ -389,13 +413,23 @@ if (host !== requestedHost) {
   console.warn("[node-host] Refusing public bind without ANOMALOHARIS_ACKNOWLEDGE_PUBLIC_HOST=true.");
 }
 await app.listen({ port, host });
+bot.start();
 
+let shuttingDown = false;
 async function shutdown(): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  const closingApp = app.close();
+  await bot.close();
+  const outstanding = runControl.db.prepare("SELECT run_id FROM execution_runs WHERE status IN ('queued','running','stopping')").all();
+  await Promise.allSettled(outstanding.map((row) => runControl.stop(String(row.run_id), "user_stop")));
+  await runControl.drain();
+  await closingApp;
   sessions.close();
   presetModels.close();
   computeStore.close();
-  await app.close();
   workflowRuntime.close();
+  hostLock.close();
 }
 
 function workflowOperationCapability(operation: ReturnType<typeof pluginCatalog.listWorkflowOperations>[number]) {

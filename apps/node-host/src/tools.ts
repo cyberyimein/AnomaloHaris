@@ -420,7 +420,7 @@ function parseWallTime(value: string): WallTime {
   return wall;
 }
 
-function resolveLocalDateTime(value: string, timezone: string, fold: 0 | 1): Date {
+export function resolveLocalDateTime(value: string, timezone: string, fold: 0 | 1): Date {
   const wall = parseWallTime(value);
   const wallMs = Date.UTC(wall.year, wall.month - 1, wall.day, wall.hour, wall.minute, wall.second, wall.millisecond);
   const offsets = new Set<number>();

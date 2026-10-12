@@ -55,6 +55,12 @@
       "minLength": 1,
       "type": "string"
     },
+    "metadata": {
+      "type": "object",
+      "patternProperties": {
+        "^(.*)$": {}
+      }
+    },
     "status": {
       "anyOf": [
         {

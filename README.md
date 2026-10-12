@@ -18,12 +18,13 @@ These goals share one runtime: agent-harness experiments can be tested through t
 ## What is implemented today
 
 - Streams agent lifecycle, message, and tool events over WebSocket or REST.
-- Uses an OpenAI SDK-compatible client with OpenRouter defaults and a local mock mode.
+- Uses an OpenAI-compatible client with OpenRouter defaults and deterministic adapters for tests.
 - Loads prompt profiles, `AGENTS.md` memory, skills, and MCP catalogs at runtime.
 - Provides a Vue dashboard for chat, context inspection, Preset Models, plugin capability status, and an admin-only Buddy control tab.
 - Loads explicitly allowlisted Pi-like Node plugins in the Host or isolated child processes.
 - Includes OpenAI-compatible and AnomaloHaris-native APIs with usage, idempotency, and management routes.
 - Keeps hardware protocol notes and optional plugin seams outside the Node production image.
+- Includes a local standby Bot with persisted enable/disable settings, scheduled tasks, conversation compaction, and editable memory.
 
 ## Repository layout
 
@@ -72,7 +73,7 @@ node apps/node-host/dist/main.js
 
 Open <http://127.0.0.1:8000>.
 
-Without `OPENROUTER_API_KEY`, AnomaloHaris uses a deterministic mock response. Add an OpenRouter key to the untracked `.env` file to enable model calls:
+The Node Host loads the repository-root `.env` automatically, while explicitly injected environment variables take precedence. Without a configured credential, model execution reports `provider_unavailable`; it does not silently substitute a mock response. Add an OpenRouter key to the untracked `.env` file to enable model calls:
 
 ```dotenv
 OPENROUTER_API_KEY=your-key-here
@@ -112,7 +113,7 @@ All runtime configuration comes from the root `.env`. The most commonly used var
 
 | Variable | Purpose | Default |
 | --- | --- | --- |
-| `OPENROUTER_API_KEY` | Enables live LLM requests | unset (mock mode) |
+| `OPENROUTER_API_KEY` | Enables live LLM requests | unset (`provider_unavailable`) |
 | `OPENROUTER_MANAGEMENT_API_KEY` | Enables the credits widget | unset |
 | `OPENAI_BASE_URL` | OpenAI-compatible API base URL | OpenRouter |
 | `OPENROUTER_MODEL` | Model identifier | `openai/gpt-4o-mini` |
@@ -194,6 +195,20 @@ Buddy TCP listener on `127.0.0.1:8766`; set `BUDDY_TCP_HOST` and
 listener is rejected unless the client IP allowlist is configured.
 
 ## Agent runtime
+
+### Local standby Bot
+
+Open **Bot** in the top navigation, then **设置 → 启用**. The Bot starts disabled on a new data directory. Leaving the page keeps an accepted run working while the Node Host remains running. Turning the radio to **停用** blocks new execution and requests active Bot runs to stop; history, tasks and memory remain saved.
+
+The Host seeds a separate `anomaloharis-bot@1` Preset Model with explicitly bound `bot-tools`. It uses the existing provider configuration. Bot tasks accept one-time, interval, and timezone-aware daily/weekly schedules; the model can arrange its next wake-up with `bot_schedule`. Independent tasks run in separate Sessions and report meaningful results to the Bot page. Missed intervals coalesce rather than replaying every missed tick. Failed or interrupted task runs require explicit user action; an available checkpoint can be resumed from the task execution history.
+
+The page also provides task management, memory editing and deactivation, and manual conversation compaction. Automatic compaction keeps recent messages and a durable summary, while the original transcript stays readable. The context-window setting is an estimate budget and should match the selected model. The daily token meter includes reported Provider usage and conservative reservations for summary calls without usage. Every summary batch checks and reserves quota before inference, then settles reported usage immediately, including when later batches fail. It is not an exact monetary cap.
+
+Bot records live beside RunControl in the workflow SQLite database; raw transcripts stay in the Session database. A separate `host.lock.sqlite3` contains no application data and prevents two production Hosts from scheduling the same data directory. Both application databases must be preserved together when moving or backing up the Bot. Bot APIs use the existing admin-token header; without a configured token, only loopback access is accepted.
+
+Background memory consolidation, embeddings, arbitrary cron syntax, external notifications, and full history erasure are follow-up features. Memory deactivation stops automatic recall and preserves its source history. The implementation details and first-version decisions are in [the Bot design](docs/design/always-on-agent-and-memory.md).
+
+To run the deterministic browser smoke script, first build the workspaces and frontend, then run `node scripts/bot-smoke.mjs` with Playwright installed and Chrome available. If Playwright comes from a bundled installation, set `PLAYWRIGHT_MODULE` to its absolute `playwright/index.mjs` path. The script starts a temporary local mock Host and uses no model credentials or hardware. Screenshots are written under `output/playwright/`.
 
 AnomaloHaris assembles each model request from:
 

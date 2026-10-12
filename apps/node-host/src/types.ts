@@ -35,6 +35,8 @@ export type BootstrapToolRequest = {
 export type AgentRunInput = {
   sessionId: SessionId;
   runId: RunId;
+  /** Trusted runtime ownership, never accepted from a public invocation. */
+  botSession?: boolean;
   message: string | null;
   resume: boolean;
   promptProfile: string;
@@ -156,6 +158,7 @@ export type SessionSnapshot = {
 
 export type NewRunRecord = {
   runId: RunId;
+  resumedFromRunId?: RunId;
   sessionId: SessionId;
   status: "active" | "paused" | "finished" | "error" | "stopped";
   startEntryId?: EntryId | undefined;

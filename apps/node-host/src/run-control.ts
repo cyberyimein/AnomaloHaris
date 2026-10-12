@@ -166,6 +166,16 @@ export class RunControl {
   private readonly controllers = new Map<string, AbortController>();
   private readonly waiters = new Map<string, Set<() => void>>();
   private readonly capacity: ExecutionCapacity;
+  private admission?: (request: RunRequest, runId?: string) => void;
+
+  setAdmission(check: (request: RunRequest, runId?: string) => void): void { this.admission = check; }
+
+  async drain(): Promise<void> { await Promise.allSettled([...this.active.values()]); }
+
+  findRunByKey(clientId: string, key: string): ExecutionRun | undefined {
+    const row = this.db.prepare("SELECT run_id FROM execution_runs WHERE client_id = ? AND idempotency_key = ?").get(clientId, key);
+    return row ? this.get(String(row.run_id)) : undefined;
+  }
 
   constructor(
     readonly db: DatabaseSync,
@@ -185,6 +195,7 @@ export class RunControl {
   }
 
   start(target: ExecutionTarget, request: RunRequest, options: RunStartOptions = {}): RunHandle {
+    this.admission?.(request);
     const allowRetiredTarget = options.allowRetiredTarget === true;
     const resolved = this.runtimes.resolve(target.kind, target.ref, allowRetiredTarget ? { allowRetired: true } : {});
     const permissions = normalizePermissions(request.permissions);
@@ -351,6 +362,12 @@ export class RunControl {
       const status = String(row.status) as ExecutionRunStatus;
       if (status === "queued") {
         try {
+          this.admission?.({
+            clientId: String(row.client_id), input: JSON.parse(String(row.input_json)), metadata: parseObject(row.metadata_json),
+            ...(row.idempotency_key ? { idempotency_key: String(row.idempotency_key) } : {}),
+            ...(row.parent_run_id ? { parentRunId: String(row.parent_run_id) } : {}),
+            permissions: parsePermissions(row.permissions_json),
+          }, runId);
           const allowRetiredTarget = Number(row.target_allow_retired) === 1;
           const resolved = this.runtimes.resolve(
             String(row.runtime_kind) as ExecutionRuntimeKind,
@@ -452,6 +469,7 @@ export class RunControl {
         if (current.status === "stopping") this.transition(runId, "stopped", "run.stopped", { reason: String(abort.signal.reason ?? "user_stop"), status: "stopped" });
         return;
       }
+      this.admission?.(request, runId);
       this.transition(runId, "running", "run.started", { status: "running" });
       let terminal: RuntimeEvent["terminal"];
       let output: unknown;
@@ -612,6 +630,7 @@ function rowToRun(row: Record<string, unknown>): ExecutionRun {
     client_id: String(row.client_id),
     status: String(row.status) as ExecutionRunStatus,
     input: parsed(row.input_json),
+    metadata: parseObject(row.metadata_json),
     ...(parsed(row.output_json) === undefined ? {} : { output: parsed(row.output_json) }),
     ...(parsed(row.error_json) === undefined ? {} : { error: parsed(row.error_json) as Record<string, unknown> }),
     ...(row.idempotency_key ? { idempotency_key: String(row.idempotency_key) } : {}),

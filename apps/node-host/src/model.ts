@@ -5,6 +5,7 @@ import type { ModelMessage, ResponseFormat, ToolDefinition } from "./types.js";
 
 export type ModelRequest = {
   model: string;
+  maxTokens?: number;
   presetModelRef?: string | undefined;
   toolProtocol?: "openai" | "dsml" | "auto" | "none" | undefined;
   temperature?: number | undefined;
@@ -20,6 +21,8 @@ export type ModelUsage = {
   cachedTokens?: number | undefined;
   providerRequestId?: string | undefined;
 };
+
+export type ModelCallSettlement = (usage: ModelUsage | undefined) => void;
 
 export type ModelCompletion = {
   text: string;
@@ -299,6 +302,7 @@ function finishDsml(parser: DsmlToolCallParser | undefined): { text: string; cal
 function requestPayload(request: ModelRequest, toolProtocol = request.toolProtocol): Record<string, unknown> {
   return {
     model: request.model,
+    max_tokens: request.maxTokens,
     temperature: request.temperature,
     messages: request.messages.map(toProviderMessage),
     tools: request.toolProtocol === "none" ? undefined : request.tools.length > 0 ? request.tools.map((tool) => ({

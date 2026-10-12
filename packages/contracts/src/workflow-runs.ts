@@ -80,6 +80,7 @@ export const ExecutionRunSchema = Type.Object(
     runtime_adapter_version: Type.String({ minLength: 1 }),
     runtime_adapter_hash: Type.String({ minLength: 1 }),
     client_id: Type.String({ minLength: 1 }),
+    metadata: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
     status: ExecutionRunStatusSchema,
     input: Type.Unknown(),
     output: Type.Optional(Type.Unknown()),

@@ -10,6 +10,7 @@ node_modules/
 frontend/node_modules/
 .vite/
 .playwright-cli/
+output/playwright/
 local-fonts/
 *.woff
 *.woff2
