@@ -30,6 +30,11 @@ The Site directory is a separate, ignored Git checkout. Keep it for subsequent
 publishes; its identity and source history are also retained by Sites.
 
 The six views contain illustrative data, preset replies and browser-local state.
+All showcase copy is in English. Agent demonstrates the complete tool-calling
+loop with expandable search, reading, Python and memory calls. Bot presents the
+24/7 standby AI experience, including ongoing goals and example check-ins.
 There are no real model requests, backend requests or hardware connections.
+The 24/7 positioning describes the product experience; this static demo does not
+run background jobs or deliver reminders.
 Refreshing clears the interactive state. Public visitors can inspect all shipped
 assets; redirects from another domain do not hide the target Site URL.
