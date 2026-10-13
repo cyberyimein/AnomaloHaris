@@ -8,7 +8,7 @@ const backendUrl =
   process.env.ANOMALO_BACKEND_URL || // naming-compat: legacy Vite proxy override
   "http://127.0.0.1:8000";
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   root: ".",
   base: "/",
   plugins: [vue()],
@@ -36,8 +36,8 @@ export default defineConfig({
     port: 4173,
   },
   build: {
-    outDir: "../runtime-bundle/app/frontend",
+    outDir: mode === "demo" ? "../sites/anomaloharis-demo/dist" : "../runtime-bundle/app/frontend",
     emptyOutDir: true,
     sourcemap: false,
   },
-});
+}));

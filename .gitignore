@@ -40,3 +40,5 @@ data/
 artifacts/
 runtime-bundle/artifacts/
 archives/
+# Separate Sites source checkout; canonical demo source lives in frontend/src/demo.
+sites/anomaloharis-demo/

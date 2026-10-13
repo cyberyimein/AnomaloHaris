@@ -8,6 +8,9 @@
     "dev": "vite --host 127.0.0.1",
     "prebuild": "npm --prefix ../packages/contracts run build",
     "build": "vite build",
+    "dev:demo": "vite --mode demo --host 127.0.0.1",
+    "build:demo": "vite build --mode demo",
+    "preview:demo": "vite preview --mode demo --host 127.0.0.1 --port 4174",
     "preview": "vite preview --host 127.0.0.1",
     "pretest": "npm --prefix ../packages/contracts run build",
     "test": "vitest run"
