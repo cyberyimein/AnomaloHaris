@@ -20,7 +20,7 @@ import { OpenAICompatibleAdapter } from '../apps/node-host/dist/model.js';
 if (existsSync('.env')) process.loadEnvFile('.env');
 const key = process.env.OPENROUTER_API_KEY;
 if (!key) throw new Error('OPENROUTER_API_KEY is not configured.');
-const modelName = process.env.OPENROUTER_MODEL ?? 'openai/gpt-4o-mini';
+const modelName = process.env.OPENROUTER_MODEL ?? 'deepseek/deepseek-v4.1-flash-1017';
 const baseUrl = process.env.OPENAI_BASE_URL ?? 'https://openrouter.ai/api/v1';
 if (new URL(baseUrl).hostname !== 'openrouter.ai') throw new Error('This script is limited to the configured OpenRouter endpoint.');
 const report = { model: modelName, provider: 'OpenRouter', checks: {}, requests: [], synthetic_data_only: true };

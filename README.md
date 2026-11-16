@@ -77,7 +77,7 @@ The Node Host loads the repository-root `.env` automatically, while explicitly i
 
 ```dotenv
 OPENROUTER_API_KEY=your-key-here
-OPENROUTER_MODEL=openai/gpt-4o-mini
+OPENROUTER_MODEL=deepseek/deepseek-v4.1-flash-1017
 ```
 
 Never commit `.env` or another file containing real credentials.
@@ -116,7 +116,7 @@ All runtime configuration comes from the root `.env`. The most commonly used var
 | `OPENROUTER_API_KEY` | Enables live LLM requests | unset (`provider_unavailable`) |
 | `OPENROUTER_MANAGEMENT_API_KEY` | Enables the credits widget | unset |
 | `OPENAI_BASE_URL` | OpenAI-compatible API base URL | OpenRouter |
-| `OPENROUTER_MODEL` | Model identifier | `openai/gpt-4o-mini` |
+| `OPENROUTER_MODEL` | Model identifier | `deepseek/deepseek-v4.1-flash-1017` |
 | `ANOMALOHARIS_SEARCH_MODE` | Default retrieval mode for new sessions: `native`, `subagent`, or `diy` | `diy` |
 | `WEB_RESEARCH_SUBAGENT_MODEL` | Fixed model used by the retrieval subagent | `deepseek/deepseek-v4-flash-0731` |
 | `SEARCH_MODE_TIMEOUT_SECONDS` | Timeout for Responses API retrieval calls | `90` |

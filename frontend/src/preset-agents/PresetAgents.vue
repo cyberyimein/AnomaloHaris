@@ -249,7 +249,7 @@ const saving = ref(false);
 const editing = ref(false);
 const notice = ref("");
 const noticeIsError = ref(false);
-const defaults = reactive({ model: "openai/gpt-4o-mini", temperature: 0.4 });
+const defaults = reactive({ model: "deepseek/deepseek-v4.1-flash-1017", temperature: 0.4 });
 const searchModeOptions = ref(fallbackSearchModeOptions());
 const form = reactive(emptyForm());
 const MAX_SKILL_FILE_BYTES = 256 * 1024;
@@ -270,7 +270,7 @@ function emptyForm() {
     system_prompt: "",
     skill_files: [],
     skill_format: "skills",
-    model: defaults?.model || "openai/gpt-4o-mini",
+    model: defaults?.model || "deepseek/deepseek-v4.1-flash-1017",
     temperature: defaults?.temperature ?? 0.4,
     tool_names: [],
     search_mode: "diy",
