@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { canonicalizePresetModelRef } from "@anomaloharis/contracts";
 
 export type ModelCatalogProvider = {
   adapter: string;
@@ -116,6 +117,7 @@ export class ModelCatalog {
   ) {
     this.db.exec("PRAGMA foreign_keys = ON;");
     this.db.exec(MODEL_CATALOG_SCHEMA);
+    this.migrateLegacyCatalogState();
   }
 
   listModels(): ModelCatalogEntry[] {
@@ -155,16 +157,17 @@ export class ModelCatalog {
     toolProtocol?: ModelCatalogProvider["toolProtocol"];
     capabilities?: Record<string, unknown> | undefined;
   }): ModelCatalogEntry {
+    const provider = normalizeProvider(input);
     validateModelIdentity(input.id, input.name);
-    validateProvider(input);
+    validateProvider(provider);
     return this.transaction(() => {
       if (this.getModel(input.id)) throw new Error("model_catalog_model_exists");
       const now = this.now();
       this.db.prepare(`
         INSERT INTO model_catalog(id,name,adapter,model,credential_ref,tool_protocol,capabilities_json,active,revision,created_at,updated_at)
         VALUES(?,?,?,?,?,?,?,1,1,?,?)
-      `).run(input.id, input.name.trim(), input.adapter, input.model.trim(), input.credentialRef ?? null,
-        input.toolProtocol ?? null, stringifyCapabilities(input.capabilities), now, now);
+      `).run(input.id, input.name.trim(), provider.adapter, provider.model, provider.credentialRef ?? null,
+        provider.toolProtocol ?? null, stringifyCapabilities(provider.capabilities), now, now);
       this.snapshot(input.id, 1, now);
       return this.getModel(input.id)!;
     });
@@ -183,25 +186,28 @@ export class ModelCatalog {
     return this.transaction(() => {
       const current = this.requireModel(id);
       this.requireRevision(patch.expectedRevision, current.revision);
-      const next = {
-        id,
-        name: patch.name?.trim() ?? current.name,
+      const nextProvider = normalizeProvider({
         adapter: patch.adapter?.trim() ?? current.adapter,
         model: patch.model?.trim() ?? current.model,
         credentialRef: patch.credentialRef === undefined ? current.credentialRef : patch.credentialRef ?? undefined,
         toolProtocol: patch.toolProtocol === undefined ? current.toolProtocol : patch.toolProtocol ?? undefined,
         capabilities: patch.capabilities === undefined ? current.capabilities : patch.capabilities ?? undefined,
+      });
+      const nextWithStatus = {
+        id,
+        name: patch.name?.trim() ?? current.name,
+        ...nextProvider,
         active: patch.active ?? current.active,
       };
-      validateModelIdentity(id, next.name);
-      validateProvider(next);
+      validateModelIdentity(id, nextWithStatus.name);
+      validateProvider(nextWithStatus);
       const revision = current.revision + 1;
       const now = this.now();
       this.db.prepare(`
         UPDATE model_catalog SET name=?, adapter=?, model=?, credential_ref=?, tool_protocol=?, capabilities_json=?, active=?, revision=?, updated_at=?
         WHERE id=? AND revision=?
-      `).run(next.name, next.adapter, next.model, next.credentialRef ?? null, next.toolProtocol ?? null,
-        stringifyCapabilities(next.capabilities), next.active ? 1 : 0, revision, now, id, patch.expectedRevision);
+      `).run(nextWithStatus.name, nextWithStatus.adapter, nextWithStatus.model, nextWithStatus.credentialRef ?? null, nextWithStatus.toolProtocol ?? null,
+        stringifyCapabilities(nextWithStatus.capabilities), nextWithStatus.active ? 1 : 0, revision, now, id, patch.expectedRevision);
       this.snapshot(id, revision, now);
       return this.getModel(id)!;
     });
@@ -472,7 +478,83 @@ export class ModelCatalog {
   }
 
   private get defaultPresetRef(): string {
-    return this.options.defaultPresetRef ?? DEFAULT_PRESET_REF;
+    return canonicalizePresetModelRef((this.options.defaultPresetRef ?? DEFAULT_PRESET_REF).trim().toLowerCase());
+  }
+
+  private migrateLegacyCatalogState(): void {
+    this.transaction(() => {
+      this.canonicalizePresetBindingRefs();
+
+      const implicitCredentialModels = this.listModels().filter((model) => !model.credentialRef);
+      for (const legacyModel of implicitCredentialModels) {
+        const current = this.getModel(legacyModel.id);
+        if (!current || current.credentialRef) continue;
+        const equivalent = this.listModels()
+          .filter((candidate) => candidate.id !== current.id
+            && candidate.adapter === current.adapter
+            && candidate.model === current.model
+            && candidate.toolProtocol === current.toolProtocol
+            && candidate.credentialRef === "openrouter-primary"
+            && candidate.active === current.active)
+          .sort((left, right) => right.usageCount - left.usageCount || left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id))[0];
+
+        if (equivalent) {
+          this.moveModelReferences(current.id, equivalent.id);
+          this.deactivateMigratedDuplicate(current);
+          continue;
+        }
+
+        this.updateModel(current.id, {
+          expectedRevision: current.revision,
+          credentialRef: "openrouter-primary",
+        });
+      }
+
+      const defaults = this.getDefaults();
+      if (defaults.defaultModelId && this.getModel(defaults.defaultModelId)) {
+        this.writePresetBinding(this.defaultPresetRef, defaults.defaultModelId);
+      }
+    });
+  }
+
+  private canonicalizePresetBindingRefs(): void {
+    const bindings = this.db.prepare("SELECT preset_ref,model_id,revision,updated_at FROM preset_model_catalog_bindings ORDER BY preset_ref")
+      .all() as Array<{ preset_ref: string; model_id: string; revision: number; updated_at: string }>;
+    for (const binding of bindings) {
+      const canonicalRef = canonicalizePresetModelRef(binding.preset_ref.trim().toLowerCase());
+      if (canonicalRef === binding.preset_ref) continue;
+      const canonicalBinding = this.db.prepare("SELECT model_id FROM preset_model_catalog_bindings WHERE preset_ref=?")
+        .get(canonicalRef) as { model_id: string } | undefined;
+      if (canonicalBinding) {
+        this.db.prepare("DELETE FROM preset_model_catalog_bindings WHERE preset_ref=?").run(binding.preset_ref);
+      } else {
+        this.db.prepare("UPDATE preset_model_catalog_bindings SET preset_ref=? WHERE preset_ref=?")
+          .run(canonicalRef, binding.preset_ref);
+      }
+    }
+  }
+
+  private moveModelReferences(sourceId: string, targetId: string): void {
+    const now = this.now();
+    this.db.prepare("UPDATE preset_model_catalog_bindings SET model_id=?,revision=revision+1,updated_at=? WHERE model_id=?")
+      .run(targetId, now, sourceId);
+    this.db.prepare(`
+      UPDATE model_catalog_defaults
+      SET default_model_id=CASE WHEN default_model_id=? THEN ? ELSE default_model_id END,
+          research_model_id=CASE WHEN research_model_id=? THEN ? ELSE research_model_id END,
+          revision=revision+1,updated_at=?
+      WHERE default_model_id=? OR research_model_id=?
+    `).run(sourceId, targetId, sourceId, targetId, now, sourceId, sourceId);
+  }
+
+  private deactivateMigratedDuplicate(model: ModelCatalogEntry): void {
+    const revision = model.revision + 1;
+    const now = this.now();
+    const marker = " [archived duplicate]";
+    const name = `${model.name.slice(0, 120 - marker.length).trimEnd()}${marker}`;
+    this.db.prepare("UPDATE model_catalog SET name=?,credential_ref='openrouter-primary',active=0,revision=?,updated_at=? WHERE id=? AND revision=?")
+      .run(name, revision, now, model.id, model.revision);
+    this.snapshot(model.id, revision, now);
   }
 
   private entry(row: ModelRow & { usage_count: number }): ModelCatalogEntry {
@@ -521,10 +603,11 @@ export class ModelCatalog {
 }
 
 function normalizeProvider(provider: ModelCatalogProvider): Required<Pick<ModelCatalogProvider, "adapter" | "model">> & ModelCatalogProvider {
+  const credentialRef = provider.credentialRef?.trim() || "openrouter-primary";
   return {
     adapter: provider.adapter.trim(),
     model: provider.model.trim(),
-    ...(provider.credentialRef ? { credentialRef: provider.credentialRef.trim() } : {}),
+    credentialRef,
     ...(provider.toolProtocol ? { toolProtocol: provider.toolProtocol } : {}),
     ...(provider.capabilities ? { capabilities: provider.capabilities } : {}),
   };

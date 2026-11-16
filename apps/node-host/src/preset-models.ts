@@ -152,7 +152,7 @@ export class SqlitePresetModelRegistry {
     this.resolvePrompt = options.resolvePrompt;
     this.bundledSkillSnapshot = options.bundledSkillSnapshot;
     this.allowLegacySnapshotRecompile = options.allowLegacySnapshotRecompile === true;
-    this.defaultPresetModelRef = options.defaultPresetModelRef ?? DEFAULT_PRESET_MODEL_REF;
+    this.defaultPresetModelRef = canonicalizePresetModelRef((options.defaultPresetModelRef ?? DEFAULT_PRESET_MODEL_REF).trim().toLowerCase());
     if (options.database) {
       this.db = options.database;
       this.ownsDatabase = false;

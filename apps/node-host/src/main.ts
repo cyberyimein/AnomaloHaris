@@ -24,7 +24,7 @@ import { asToolAdapter, CompositeToolRuntime, CoreToolRuntime, PluginToolAdapter
 import { SkillRuntime, SkillToolRuntime } from "./skills.js";
 import { WebToolRuntime } from "./web.js";
 import { ServiceAuth, SqliteComputeStore, SqliteNativeRunStore } from "./compute-api.js";
-import { legacyNamingAdapter } from "@anomaloharis/contracts";
+import { canonicalizePresetModelRef, legacyNamingAdapter } from "@anomaloharis/contracts";
 import { WorkflowRuntime } from "@anomaloharis/workflow-runtime";
 import { WorkflowRunStore } from "@anomaloharis/workflow-runtime";
 import { AgentRuntimeAdapter } from "./agent-runtime-adapter.js";
@@ -43,7 +43,7 @@ const databasePath = env("ANOMALOHARIS_SESSION_DB_PATH") || join(dataDir, "sessi
 const presetModelDatabasePath = env("ANOMALOHARIS_PRESET_MODEL_DB_PATH") || join(dataDir, "preset-models.sqlite3");
 const computeDatabasePath = env("ANOMALOHARIS_COMPUTE_DB_PATH") || join(dataDir, "compute.sqlite3");
 const modelName = process.env.OPENROUTER_MODEL ?? "deepseek/deepseek-v4.1-flash-1017";
-const defaultPresetModelRef = env("ANOMALOHARIS_DEFAULT_PRESET_MODEL") || DEFAULT_PRESET_MODEL_REF;
+const defaultPresetModelRef = canonicalizePresetModelRef((env("ANOMALOHARIS_DEFAULT_PRESET_MODEL") || DEFAULT_PRESET_MODEL_REF).trim().toLowerCase());
 const apiKey = process.env.OPENROUTER_API_KEY;
 const managementApiKey = process.env.OPENROUTER_MANAGEMENT_API_KEY;
 const baseUrl = process.env.OPENAI_BASE_URL ?? "https://openrouter.ai/api/v1";

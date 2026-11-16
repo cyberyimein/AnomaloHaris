@@ -110,6 +110,77 @@ describe("ModelCatalog", () => {
     registry.close();
   });
 
+  it("merges legacy default-provider duplicates and canonicalizes legacy default refs on restart", () => {
+    const aliasRegistry = new SqlitePresetModelRegistry(":memory:", { defaultPresetModelRef: "anomalo@1" }); // naming-compat
+    expect(aliasRegistry.defaultPresetModelRef).toBe("anomaloharis@1");
+    aliasRegistry.close();
+
+    const database = new DatabaseSync(":memory:");
+    const existing = new ModelCatalog(database);
+    const preferred = existing.createModel({
+      id: "flash-primary",
+      name: "Flash",
+      adapter: "openai-compatible",
+      model: "deepseek/flash",
+      credentialRef: "openrouter-primary",
+      toolProtocol: "auto",
+    });
+    const duplicate = existing.createModel({
+      id: "flash-implicit",
+      name: "Flash legacy",
+      adapter: "openai-compatible",
+      model: "deepseek/flash",
+      toolProtocol: "auto",
+    });
+    const implicitOnly = existing.createModel({
+      id: "research-implicit",
+      name: "Research",
+      adapter: "openai-compatible",
+      model: "deepseek/research",
+      toolProtocol: "auto",
+    });
+    const customCredential = existing.createModel({
+      id: "custom-credential",
+      name: "Custom credential",
+      adapter: "openai-compatible",
+      model: "deepseek/custom",
+      credentialRef: "custom-provider-credential",
+      toolProtocol: "auto",
+    });
+    for (const ref of ["preset-a@1", "preset-b@1"]) existing.bindPreset(ref, preferred.id);
+    for (const ref of ["urus-one@1", "urus-two@1"]) existing.bindPreset(ref, duplicate.id);
+    existing.bindPreset("custom@1", customCredential.id);
+    existing.setDefaults({ defaultModelId: preferred.id, researchModelId: preferred.id });
+    database.prepare("UPDATE model_catalog SET credential_ref=NULL WHERE id IN (?,?)").run(duplicate.id, implicitOnly.id);
+    database.prepare("INSERT INTO preset_model_catalog_bindings(preset_ref,model_id,revision,updated_at) VALUES(?,?,1,?)")
+      .run("anomalo@1", duplicate.id, "2026-11-17T00:00:00.000Z"); // naming-compat
+
+    const migrated = new ModelCatalog(database, { defaultPresetRef: "anomalo@1" }); // naming-compat
+    expect(migrated.resolvePresetBinding("anomaloharis@1")?.id).toBe(preferred.id);
+    expect(migrated.resolvePresetBinding("anomalo@1")).toBeUndefined(); // naming-compat
+    expect(migrated.listModelImpact(preferred.id)).toEqual({
+      modelId: preferred.id,
+      presetRefs: ["anomaloharis@1", "preset-a@1", "preset-b@1", "urus-one@1", "urus-two@1"],
+      defaultKeys: ["default_model_id", "research_model_id"],
+    });
+    expect(migrated.getModel(duplicate.id)).toMatchObject({ active: false, credentialRef: "openrouter-primary", usageCount: 0 });
+    expect(migrated.getModel(duplicate.id)?.name).toContain("archived duplicate");
+    expect(migrated.getModelHistory(duplicate.id).map(({ revision }) => revision)).toContain(2);
+    expect(migrated.getModel(implicitOnly.id)).toMatchObject({ active: true, credentialRef: "openrouter-primary", revision: 2 });
+    expect(migrated.getModel(customCredential.id)).toMatchObject({ active: true, credentialRef: "custom-provider-credential", revision: 1 });
+    expect(migrated.ensureModel("Flash alias", {
+      adapter: "openai-compatible",
+      model: "deepseek/flash",
+      toolProtocol: "auto",
+    })).toBe(preferred.id);
+
+    const restarted = new ModelCatalog(database, { defaultPresetRef: "anomalo@1" }); // naming-compat
+    expect(restarted.listModelImpact(preferred.id).presetRefs).toHaveLength(5);
+    expect(restarted.getModel(duplicate.id)).toMatchObject({ active: false, revision: 2 });
+    expect(restarted.getModel(implicitOnly.id)).toMatchObject({ active: true, revision: 2 });
+    database.close();
+  });
+
   it("seeds published preset bindings idempotently and deduplicates provider configuration", () => {
     const database = new DatabaseSync(":memory:");
     const catalog = new ModelCatalog(database);
