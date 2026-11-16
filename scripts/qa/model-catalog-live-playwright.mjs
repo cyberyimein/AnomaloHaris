@@ -97,6 +97,64 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+function modelOption(page, id) {
+  const escapedId = id.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
+  return page.locator(`[role="option"][data-model-id="${escapedId}"]`);
+}
+
+async function chooseByKeyboard(page, label, id, searchText = id) {
+  const combobox = page.getByRole('combobox', { name: label, exact: true });
+  await combobox.click();
+  const search = page.getByRole('searchbox', { name: 'Filter models', exact: true });
+  await search.fill(searchText);
+  await modelOption(page, id).waitFor({ state: 'visible' });
+  await search.press('ArrowDown');
+  await search.press('Enter');
+  await page.getByRole('listbox').waitFor({ state: 'hidden' });
+  return combobox;
+}
+
+async function assertNoNativeSelects(panel, label) {
+  const count = await panel.locator('select').count();
+  assert(count === 0, `${label} still contains ${count} native select control(s).`);
+}
+
+async function openModelCatalog(page) {
+  await page.getByRole('button', { name: 'Preset Models', exact: true }).click();
+  const topNavModels = page.locator('.app-nav').getByRole('button', { name: 'Models', exact: true });
+  assert(await topNavModels.count() === 0, 'Model catalog still has a separate Models top-level tab.');
+  const tab = page.getByRole('tab', { name: 'Model catalog', exact: true });
+  await tab.click();
+  assert(await tab.getAttribute('aria-selected') === 'true', 'The Model catalog subtab did not become active.');
+  await page.getByRole('heading', { name: 'System defaults' }).waitFor();
+}
+
+async function openPresets(page) {
+  await page.getByRole('button', { name: 'Preset Models', exact: true }).click();
+  const tab = page.getByRole('tab', { name: 'Presets', exact: true });
+  await tab.click();
+  assert(await tab.getAttribute('aria-selected') === 'true', 'The Presets subtab did not become active.');
+}
+
+async function assertListboxFitsViewport(page, width, label) {
+  const bounds = await page.getByRole('listbox').evaluate((element) => {
+    const { left, right, top, bottom } = element.getBoundingClientRect();
+    return { left, right, top, bottom, viewportWidth: document.documentElement.clientWidth, viewportHeight: window.innerHeight };
+  });
+  assert(bounds.left >= 0 && bounds.right <= bounds.viewportWidth && bounds.top >= 0 && bounds.bottom <= bounds.viewportHeight, `${label} listbox overflows at ${width}px: ${JSON.stringify(bounds)}`);
+}
+
+async function assertPopupAnchored(page, trigger, width, label) {
+  const triggerBox = await trigger.boundingBox();
+  const popupBox = await page.locator('.search-select-popup').boundingBox();
+  assert(triggerBox && popupBox, `${label} trigger or popup is not visible at ${width}px.`);
+  const gapBelow = popupBox.y - (triggerBox.y + triggerBox.height);
+  const gapAbove = triggerBox.y - (popupBox.y + popupBox.height);
+  const gap = gapBelow >= 0 ? gapBelow : gapAbove;
+  assert(gap >= 0 && gap <= 12, `${label} popup is detached from its trigger at ${width}px: ${JSON.stringify({ triggerBox, popupBox, gapBelow, gapAbove })}`);
+  return { side: gapBelow >= 0 ? 'below' : 'above', gapPx: Math.round(gap * 100) / 100 };
+}
+
 try {
   backendProcess = startProcess(process.execPath, [backendEntry], {
     cwd: repositoryRoot,
@@ -163,14 +221,18 @@ try {
   await page.addInitScript((token) => localStorage.setItem('anomaloharis.adminToken', token), adminToken);
   await page.goto(frontendUrl, { waitUntil: 'domcontentloaded' });
 
-  await page.getByRole('button', { name: 'Models', exact: true }).click();
-  await page.getByRole('heading', { name: 'System defaults' }).waitFor();
+  await openModelCatalog(page);
+  const catalogPanel = page.getByRole('tabpanel', { name: 'Model catalog', exact: true });
+  await assertNoNativeSelects(catalogPanel, 'Model catalog');
   await page.getByRole('button', { name: 'Add model' }).click();
   await page.getByLabel('Stable ID').fill('qa-catalog-source');
   await page.getByLabel('Display name').fill('QA Catalog Source');
   await page.getByLabel('Actual model ID').fill('qa-provider/source-v1');
   await page.getByRole('button', { name: 'Create model' }).click();
   await page.getByText('Created QA Catalog Source.', { exact: true }).waitFor();
+  for (const label of ['Provider', 'Tool protocol']) {
+    await page.getByRole('combobox', { name: label, exact: true }).waitFor({ state: 'visible' });
+  }
 
   await page.getByRole('button', { name: 'Add model' }).click();
   await page.getByLabel('Stable ID').fill('qa-catalog-target');
@@ -181,18 +243,20 @@ try {
 
   const sourceRows = await api('/api/manage/model-catalog');
   const sourceModel = sourceRows.models.find((model) => model.id === 'qa-catalog-source');
-  await page.getByLabel('Default model').selectOption('qa-catalog-source');
+  await chooseByKeyboard(page, 'Default model', 'qa-catalog-source', 'QA Catalog Source');
   await page.getByRole('button', { name: 'Save defaults' }).click();
   await page.getByText('System defaults saved.', { exact: true }).waitFor();
 
-  await page.getByRole('button', { name: 'Preset Models', exact: true }).click();
+  await openPresets(page);
+  const presetsPanel = page.getByRole('tabpanel', { name: 'Presets', exact: true });
+  await assertNoNativeSelects(presetsPanel, 'Preset model editor');
   await page.locator('.preset-agent-card-copy strong').first().waitFor({ state: 'visible' });
   const presetNames = await page.locator('.preset-agent-card-copy strong').allTextContents();
   const presetIndex = presetNames.findIndex((name) => name.trim() === defaultPreset.name);
   assert(presetIndex >= 0, `Could not find the seeded preset card named ${defaultPreset.name}.`);
   await page.locator('.preset-agent-card').nth(presetIndex).click();
-  await page.getByLabel('Filter model catalog').fill('QA Catalog Source');
-  await page.getByLabel('Select model catalog entry').selectOption('qa-catalog-source');
+  await page.getByRole('combobox', { name: 'Model', exact: true }).waitFor({ state: 'visible' });
+  await chooseByKeyboard(page, 'Model', 'qa-catalog-source', 'QA Catalog Source');
   const presetSaveButton = page.getByRole('button', { name: 'Save model', exact: true });
   const presetSaveDisabled = await presetSaveButton.isDisabled();
   const presetSaveResponsePromise = page.waitForResponse((response) => (
@@ -213,8 +277,7 @@ try {
   assert(changedPreset.provider_model === 'qa-provider/source-v1', 'Preset response did not resolve the current catalog model.');
   assert(changedPreset.compiled_hash === defaultPreset.compiled_hash, 'Changing the preset catalog binding changed its compiled hash.');
 
-  await page.getByRole('button', { name: 'Models', exact: true }).click();
-  await page.getByRole('heading', { name: 'System defaults' }).waitFor();
+  await openModelCatalog(page);
   await page.getByRole('button', { name: /QA Catalog Source/ }).click();
 
   const impact = await api('/api/manage/model-catalog/qa-catalog-source/impact');
@@ -225,7 +288,7 @@ try {
 
   await page.getByRole('button', { name: 'Replace references…' }).click();
   await page.getByRole('heading', { name: 'Replace QA Catalog Source' }).waitFor();
-  await page.getByLabel('Move to').selectOption('qa-catalog-target');
+  await chooseByKeyboard(page, 'Move to', 'qa-catalog-target', 'QA Catalog Target');
   const referenceChecks = page.locator('.catalog-modal .catalog-check input[type="checkbox"]');
   assert(await referenceChecks.count() === 2, 'Replacement preview should show the preset and system default references.');
   await page.getByRole('button', { name: 'Apply replacement' }).click();
@@ -255,6 +318,17 @@ try {
   const restoreRequest = mutationRequests.findLast((request) => request.method === 'POST' && request.url.endsWith('/qa-catalog-source/restore'));
   assert(restoreRequest?.body.revision === 1 && restoreRequest.body.expected_revision === 2, 'Restore omitted its historical and expected revisions.');
 
+  await page.setViewportSize({ width: 375, height: 667 });
+  await assertNoNativeSelects(page.getByRole('tabpanel', { name: 'Model catalog', exact: true }), 'Mobile model catalog');
+  const mobileDefault = page.getByRole('combobox', { name: 'Default model', exact: true });
+  await mobileDefault.click();
+  await page.getByRole('listbox').waitFor({ state: 'visible' });
+  const mobilePopupAnchor = await assertPopupAnchored(page, mobileDefault, 375, 'Default model');
+  await assertListboxFitsViewport(page, 375, 'Model catalog');
+  await page.keyboard.press('Escape');
+  await page.getByRole('listbox').waitFor({ state: 'hidden' });
+  await page.setViewportSize({ width: 1280, height: 900 });
+
   assert(pageErrors.length === 0, `Browser errors: ${pageErrors.join('; ')}`);
   const reportPath = process.env.MODEL_CATALOG_LIVE_REPORT || `${reportBase}.json`;
   const screenshotPath = process.env.MODEL_CATALOG_LIVE_SCREENSHOT || `${reportBase}.png`;
@@ -263,7 +337,7 @@ try {
   const screenshot = await page.screenshot({ fullPage: true });
   await writeFile(screenshotPath, screenshot, { flag: 'wx' });
   const report = {
-    checks: ['real temporary SQLite catalog', 'model create and edit', 'impact preview', 'defaults update with expected revision', 'existing builtin preset dropdown save', 'preset version and compiled hash preserved', 'reference replacement', 'history restore as new revision'],
+    checks: ['no Models top-level tab', 'model catalog embedded in Preset Models', 'catalog and preset editors have no native selects', 'searchable keyboard selection', 'mobile listbox viewport bounds', 'real temporary SQLite catalog', 'model create and edit', 'impact preview', 'defaults update with expected revision', 'existing builtin preset binding', 'preset version and compiled hash preserved', 'reference replacement', 'history restore as new revision'],
     preset: defaultPreset.ref,
     finalSourceRevision: restoredSource.revision,
     finalDefaultModelId: defaultsAfter.default_model_id,
@@ -271,6 +345,7 @@ try {
     screenshot: screenshotPath,
     noProviderCalls: true,
     noUncaughtBrowserErrors: true,
+    mobilePopupAnchor,
   };
   await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, { flag: 'wx' });
   console.log(JSON.stringify({ ...report, report: reportPath }, null, 2));

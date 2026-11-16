@@ -4,14 +4,20 @@ import { dirname, resolve } from 'node:path';
 const playwrightPath = process.env.PLAYWRIGHT_MODULE || process.env.BUDDY_PLAYWRIGHT_MODULE;
 const { chromium } = playwrightPath ? await import(playwrightPath) : await import('playwright');
 const baseUrl = process.env.MODEL_CATALOG_BASE_URL || 'http://127.0.0.1:5173';
-const outputPath = process.env.MODEL_CATALOG_REPORT || 'output/playwright/model-catalog-report.json';
+const runStamp = Date.now();
+const outputPath = process.env.MODEL_CATALOG_REPORT || `output/playwright/model-catalog-report-${runStamp}.json`;
+const desktopScreenshotPath = process.env.MODEL_CATALOG_SCREENSHOT || `output/playwright/model-catalog-desktop-${runStamp}.png`;
+const embeddedScreenshotPath = `output/playwright/model-catalog-embedded-${runStamp}.png`;
+const defaultDropdownScreenshotPath = `output/playwright/model-catalog-default-dropdown-${runStamp}.png`;
+const mobileDropdownScreenshotPath = `output/playwright/model-catalog-mobile-dropdown-${runStamp}.png`;
 
 const models = [
   { id: 'deepseek-flash', name: 'DeepSeek Flash', adapter: 'openai-compatible', model: 'deepseek/deepseek-v4.1-flash-1017', credential_ref: 'openrouter-primary', tool_protocol: 'auto', active: true, revision: 1, usage_count: 2, created_at: '2026-11-16T00:00:00Z', updated_at: '2026-11-16T00:00:00Z' },
   { id: 'research-model', name: 'Research Model', adapter: 'openai-compatible', model: 'deepseek/deepseek-v4-flash-0731', credential_ref: 'openrouter-primary', tool_protocol: 'auto', active: true, revision: 3, usage_count: 1, created_at: '2026-11-16T00:00:00Z', updated_at: '2026-11-16T00:00:00Z' },
-  { id: 'unused-model', name: 'Unused Model', adapter: 'openai-compatible', model: 'provider/unused', active: true, revision: 1, usage_count: 0, created_at: '2026-11-16T00:00:00Z', updated_at: '2026-11-16T00:00:00Z' },
+  { id: 'unused-model', name: 'provider/unused', adapter: 'openai-compatible', model: 'provider/unused', active: true, revision: 1, usage_count: 0, created_at: '2026-11-16T00:00:00Z', updated_at: '2026-11-16T00:00:00Z' },
+  { id: 'disabled-model', name: 'Disabled Model', adapter: 'openai-compatible', model: 'provider/disabled', active: false, revision: 1, usage_count: 0, created_at: '2026-11-16T00:00:00Z', updated_at: '2026-11-16T00:00:00Z' },
 ];
-let defaults = { default_model_id: 'deepseek-flash', research_model_id: 'research-model', revision: 2 };
+let defaults = { default_model_id: 'deepseek-flash', research_model_id: 'disabled-model', revision: 2 };
 let catalogUnavailable = false;
 let forceRevisionConflict = false;
 let delayedImpact = null;
@@ -209,14 +215,133 @@ async function assertHeaderNoOverlap(width) {
   }
 }
 
+function modelOption(page, id) {
+  const escapedId = id.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
+  return page.locator(`[role="option"][data-model-id="${escapedId}"]`);
+}
+
+async function chooseByKeyboard(page, label, id, searchText = id) {
+  const combobox = page.getByRole('combobox', { name: label, exact: true });
+  await combobox.click();
+  const search = page.getByRole('searchbox', { name: 'Filter models', exact: true });
+  await search.fill(searchText);
+  const option = modelOption(page, id);
+  await option.waitFor({ state: 'visible' });
+  await search.press('ArrowDown');
+  await search.press('Enter');
+  const disabledListbox = page.getByRole('listbox');
+  if (await disabledListbox.isVisible()) await search.press('Escape');
+  await disabledListbox.waitFor({ state: 'hidden' });
+  return combobox;
+}
+
+async function assertNoNativeSelects(panel, label) {
+  const count = await panel.locator('select').count();
+  if (count) throw new Error(`${label} still contains ${count} native select control(s).`);
+}
+
+async function assertPopupAnchored(page, trigger, width, label) {
+  const triggerBox = await trigger.boundingBox();
+  const popupBox = await page.locator('.search-select-popup').boundingBox();
+  if (!triggerBox || !popupBox) throw new Error(`${label} trigger or popup is not visible at ${width}px.`);
+  const gapBelow = popupBox.y - (triggerBox.y + triggerBox.height);
+  const gapAbove = triggerBox.y - (popupBox.y + popupBox.height);
+  const isBelow = gapBelow >= 0;
+  const gap = isBelow ? gapBelow : gapAbove;
+  if (gap < 0 || gap > 12) {
+    throw new Error(`${label} popup is detached from its trigger at ${width}px: ${JSON.stringify({ triggerBox, popupBox, gapBelow, gapAbove })}`);
+  }
+  return { side: isBelow ? 'below' : 'above', gapPx: Math.round(gap * 100) / 100 };
+}
+
+async function openModelCatalog(page) {
+  await page.getByRole('button', { name: 'Preset Models', exact: true }).click();
+  const topNavModels = page.locator('.app-nav').getByRole('button', { name: 'Models', exact: true });
+  if (await topNavModels.count()) throw new Error('Model catalog still has a separate Models top-level tab.');
+  const tab = page.getByRole('tab', { name: 'Model catalog', exact: true });
+  await tab.click();
+  if (await tab.getAttribute('aria-selected') !== 'true') throw new Error('The Model catalog subtab did not become active.');
+  await page.getByRole('heading', { name: 'System defaults' }).waitFor();
+}
+
+async function openPresets(page) {
+  await page.getByRole('button', { name: 'Preset Models', exact: true }).click();
+  const tab = page.getByRole('tab', { name: 'Presets', exact: true });
+  await tab.click();
+  if (await tab.getAttribute('aria-selected') !== 'true') throw new Error('The Presets subtab did not become active.');
+}
+
 try {
   await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
-  await page.getByRole('button', { name: 'Models', exact: true }).click();
-  await page.getByRole('heading', { name: 'System defaults' }).waitFor();
+  await openModelCatalog(page);
+  const catalogPanel = page.getByRole('tabpanel', { name: 'Model catalog', exact: true });
+  await assertNoNativeSelects(catalogPanel, 'Model catalog');
   await page.getByRole('button', { name: /DeepSeek Flash/ }).waitFor();
   await page.getByRole('button', { name: 'Save defaults' }).waitFor();
 
+  const duplicateNameRow = page.locator('[data-model-catalog-row][data-model-id="unused-model"]');
+  const duplicateNameText = await duplicateNameRow.innerText();
+  if ((duplicateNameText.match(/provider\/unused/g) || []).length !== 1) {
+    throw new Error(`A model with identical name and actual ID should be shown once: ${duplicateNameText}`);
+  }
+  await mkdir('output/playwright', { recursive: true });
+  await writeFile(embeddedScreenshotPath, await page.screenshot({ fullPage: true }), { flag: 'wx' });
+
+  const defaultCombo = page.getByRole('combobox', { name: 'Default model', exact: true });
+  await defaultCombo.click();
+  let search = page.getByRole('searchbox', { name: 'Filter models', exact: true });
+  await search.fill('provider/unused');
+  await modelOption(page, 'unused-model').waitFor({ state: 'visible' });
+  await writeFile(defaultDropdownScreenshotPath, await page.screenshot(), { flag: 'wx' });
+  await search.press('Escape');
+  await page.getByRole('listbox').waitFor({ state: 'hidden' });
+
+  await defaultCombo.click();
+  search = page.getByRole('searchbox', { name: 'Filter models', exact: true });
+  await search.fill('Research Model');
+  if (await page.getByRole('listbox').getByRole('option').count() !== 1) {
+    throw new Error('Model search did not filter the list to the matching option.');
+  }
+  await search.press('ArrowDown');
+  await search.press('Enter');
+  const disabledListbox = page.getByRole('listbox');
+  if (await disabledListbox.isVisible()) await search.press('Escape');
+  await disabledListbox.waitFor({ state: 'hidden' });
+
+  const researchCombo = page.getByRole('combobox', { name: 'Research subagent', exact: true });
+  await researchCombo.click();
+  search = page.getByRole('searchbox', { name: 'Filter models', exact: true });
+  await search.fill('Disabled Model');
+  const disabledOption = modelOption(page, 'disabled-model');
+  await disabledOption.waitFor({ state: 'visible' });
+  const disabledOptionAria = await disabledOption.getAttribute('aria-disabled');
+  if (disabledOptionAria !== 'true' && !(await disabledOption.isDisabled())) {
+    throw new Error('An inactive model is not marked disabled in the searchable dropdown.');
+  }
+  await search.press('ArrowDown');
+  await search.press('Enter');
+  const inactiveListbox = page.getByRole('listbox');
+  if (await inactiveListbox.isVisible()) await search.press('Escape');
+  await inactiveListbox.waitFor({ state: 'hidden' });
+  if (!(await researchCombo.innerText()).includes('Disabled Model')) {
+    throw new Error('Keyboard selection accepted an inactive model.');
+  }
+
+  await defaultCombo.click();
+  search = page.getByRole('searchbox', { name: 'Filter models', exact: true });
+  await search.fill('Research');
+  await search.press('Escape');
+  await page.getByRole('listbox').waitFor({ state: 'hidden' });
+  await defaultCombo.click();
+  search = page.getByRole('searchbox', { name: 'Filter models', exact: true });
+  await search.fill('Research');
+  await page.getByRole('heading', { name: 'System defaults' }).click();
+  await page.getByRole('listbox').waitFor({ state: 'hidden' });
+
   await page.getByRole('button', { name: /DeepSeek Flash/ }).click();
+  for (const label of ['Provider', 'Tool protocol']) {
+    await page.getByRole('combobox', { name: label, exact: true }).waitFor({ state: 'visible' });
+  }
   if (!(await page.getByRole('button', { name: 'Delete', exact: true }).isDisabled())) {
     throw new Error('Referenced catalog entries must not be deletable.');
   }
@@ -230,7 +355,7 @@ try {
 
   await page.getByRole('button', { name: 'Replace references…' }).click();
   await page.getByRole('heading', { name: 'Replace DeepSeek Flash' }).waitFor();
-  await page.getByLabel('Move to').selectOption('research-model');
+  await chooseByKeyboard(page, 'Move to', 'research-model', 'Research Model');
   await page.getByRole('button', { name: 'Apply replacement' }).click();
   await page.getByText('References replaced. Preset versions were preserved.', { exact: true }).waitFor();
   const replacement = calls.findLast((call) => call.method === 'POST' && call.pathname.endsWith('/deepseek-flash/replace'));
@@ -238,7 +363,7 @@ try {
     throw new Error('Replacement did not include the selected preset/defaults.');
   }
 
-  await page.getByLabel('Default model').selectOption('deepseek-flash');
+  await chooseByKeyboard(page, 'Default model', 'deepseek-flash', 'DeepSeek Flash');
   await page.getByRole('button', { name: 'Save defaults' }).click();
   await page.getByText('System defaults saved.', { exact: true }).waitFor();
   const defaultSave = calls.findLast((call) => call.method === 'PUT' && call.pathname.endsWith('/model-catalog/defaults'));
@@ -257,11 +382,25 @@ try {
     throw new Error('Disabled catalog entries are not visibly marked.');
   }
 
-  await page.getByRole('button', { name: 'Preset Models', exact: true }).click();
+  await openPresets(page);
+  const presetsPanel = page.getByRole('tabpanel', { name: 'Presets', exact: true });
+  await assertNoNativeSelects(presetsPanel, 'Preset model editor');
   await page.getByRole('button', { name: /Default assistant/ }).waitFor();
   await page.getByRole('button', { name: /Default assistant/ }).click();
-  await page.getByRole('searchbox', { name: 'Filter model catalog' }).fill('Unused');
-  await page.getByLabel('Select model catalog entry').selectOption('unused-model');
+  const presetModelCombo = page.getByRole('combobox', { name: 'Model', exact: true });
+  await presetModelCombo.waitFor({ state: 'visible' });
+  await presetModelCombo.click();
+  search = page.getByRole('searchbox', { name: 'Filter models', exact: true });
+  await search.fill('provider/unused');
+  const duplicateNameOption = modelOption(page, 'unused-model');
+  await duplicateNameOption.waitFor({ state: 'visible' });
+  const duplicateOptionText = await duplicateNameOption.innerText();
+  if ((duplicateOptionText.match(/provider\/unused/g) || []).length !== 1) {
+    throw new Error(`A model whose display and actual names match was repeated in the dropdown: ${duplicateOptionText}`);
+  }
+  await search.press('ArrowDown');
+  await search.press('Enter');
+  await page.getByRole('listbox').waitFor({ state: 'hidden' });
   await page.getByRole('button', { name: 'Save model', exact: true }).click();
   await page.getByText('Saved anomaloharis@1.', { exact: true }).waitFor();
   const presetSave = calls.findLast((call) => call.method === 'PUT' && call.pathname.endsWith('/versions/1'));
@@ -270,16 +409,31 @@ try {
   }
   if (preset.provider_model !== models.find((model) => model.id === 'unused-model').model) throw new Error('Preset response did not resolve the new catalog model.');
 
-  await page.getByRole('button', { name: 'Models', exact: true }).click();
-  await page.getByRole('heading', { name: 'System defaults' }).waitFor();
+  await openModelCatalog(page);
   for (const width of [375, 320]) {
     await page.setViewportSize({ width, height: 900 });
     await assertNoHorizontalOverflow(width);
   }
+  await page.setViewportSize({ width: 375, height: 667 });
+  await defaultCombo.click();
+  const mobileListbox = page.getByRole('listbox');
+  await mobileListbox.waitFor({ state: 'visible' });
+  const mobilePopupAnchor = await assertPopupAnchored(page, defaultCombo, 375, 'Default model');
+  const mobileListboxBounds = await mobileListbox.evaluate((element) => {
+    const { left, right, top, bottom } = element.getBoundingClientRect();
+    return { left, right, top, bottom, viewportWidth: document.documentElement.clientWidth, viewportHeight: window.innerHeight };
+  });
+  if (mobileListboxBounds.left < 0 || mobileListboxBounds.right > mobileListboxBounds.viewportWidth
+      || mobileListboxBounds.top < 0 || mobileListboxBounds.bottom > mobileListboxBounds.viewportHeight) {
+    throw new Error(`The searchable model listbox overflows the mobile viewport: ${JSON.stringify(mobileListboxBounds)}`);
+  }
+  await writeFile(mobileDropdownScreenshotPath, await page.screenshot(), { flag: 'wx' });
+  await page.getByRole('searchbox', { name: 'Filter models', exact: true }).press('Escape');
+  await mobileListbox.waitFor({ state: 'hidden' });
   await page.setViewportSize({ width: 1280, height: 900 });
   await assertHeaderNoOverlap(1280);
-  await mkdir('output/playwright', { recursive: true });
-  await page.screenshot({ path: 'output/playwright/model-catalog-desktop.png', fullPage: true });
+  await mkdir(dirname(resolve(desktopScreenshotPath)), { recursive: true });
+  await writeFile(desktopScreenshotPath, await page.screenshot({ fullPage: true }), { flag: 'wx' });
 
   await page.setViewportSize({ width: 1024, height: 900 });
   await assertHeaderNoOverlap(1024);
@@ -292,13 +446,13 @@ try {
   await page.getByText('This model changed elsewhere. Refresh and review the latest configuration.', { exact: true }).waitFor();
 
   catalogUnavailable = true;
-  await page.getByRole('button', { name: 'Refresh model catalog' }).click();
+  await page.getByRole('button', { name: /Refresh.*model catalog/ }).click();
   await page.getByText(/Catalog temporarily unavailable/).waitFor();
   if (!(await page.getByRole('button', { name: 'Add model' }).isDisabled())) throw new Error('Create remained enabled while the catalog was unavailable.');
   await assertNoHorizontalOverflow(320);
 
   catalogUnavailable = false;
-  await page.getByRole('button', { name: 'Refresh model catalog' }).click();
+  await page.getByRole('button', { name: /Refresh.*model catalog/ }).click();
   await page.getByRole('button', { name: 'Add model' }).click();
   await page.getByLabel('Stable ID').fill('temporary-model');
   await page.getByLabel('Display name').fill('Temporary Model');
@@ -314,7 +468,7 @@ try {
   const delayed = deferImpact('deepseek-flash', 503);
   await page.getByRole('button', { name: /DeepSeek Flash/ }).click();
   await delayed.started;
-  await page.getByRole('button', { name: /Research Model/ }).click();
+  await page.getByRole('button', { name: /Disabled Model/ }).click();
   await page.getByText('1 reference use this model', { exact: true }).waitFor();
   delayed.release();
   await page.waitForTimeout(80);
@@ -322,11 +476,17 @@ try {
 
   if (pageErrors.length) throw new Error(`Uncaught browser errors: ${pageErrors.join('; ')}`);
   const report = {
-    checks: ['catalog CRUD', 'expected revisions', 'impact preview', 'reference replacement', 'history restore', 'disabled bindings', 'preset dropdown', 'versions preserved', 'catalog unavailable state', '320px and 375px layouts', 'desktop and tablet header spacing', 'stale impact response guard'],
+    checks: ['no Models top-level tab', 'model catalog embedded in Preset Models', 'model catalog and preset editors have no native selects', 'search and keyboard selection', 'Escape and outside-click close', 'inactive option stays disabled', 'matching display and actual model names shown once', 'mobile listbox viewport bounds', 'catalog CRUD', 'expected revisions', 'impact preview', 'reference replacement', 'history restore', 'preset versions preserved', 'catalog unavailable state', '320px and 375px layouts', 'desktop and tablet header spacing', 'stale impact response guard'],
     calls: calls.length,
     noHorizontalOverflowAt: [320, 375],
     noUncaughtBrowserErrors: true,
-    screenshot: 'output/playwright/model-catalog-desktop.png',
+    screenshot: desktopScreenshotPath,
+    screenshots: {
+      embeddedCatalog: embeddedScreenshotPath,
+      duplicateNameDefaultDropdown: defaultDropdownScreenshotPath,
+      mobileDropdown: mobileDropdownScreenshotPath,
+    },
+    mobilePopupAnchor,
   };
   await mkdir(dirname(resolve(outputPath)), { recursive: true });
   await writeFile(outputPath, `${JSON.stringify(report, null, 2)}\n`);

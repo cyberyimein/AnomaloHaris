@@ -8,9 +8,9 @@ const { chromium } = playwrightPath ? await import(playwrightPath) : await impor
 const outputBase = `output/playwright/model-catalog-production-${Date.now()}`;
 const reportPath = process.env.MODEL_CATALOG_PRODUCTION_REPORT || `${outputBase}.json`;
 const screenshots = {
-  modelsDesktop: process.env.MODEL_CATALOG_PRODUCTION_MODELS_SCREENSHOT || `${outputBase}-models-desktop.png`,
+  catalogDesktop: process.env.MODEL_CATALOG_PRODUCTION_CATALOG_SCREENSHOT || `${outputBase}-catalog-desktop.png`,
   presetDesktop: process.env.MODEL_CATALOG_PRODUCTION_PRESET_SCREENSHOT || `${outputBase}-preset-desktop.png`,
-  modelsMobile: process.env.MODEL_CATALOG_PRODUCTION_MODELS_MOBILE_SCREENSHOT || `${outputBase}-models-mobile.png`,
+  catalogMobile: process.env.MODEL_CATALOG_PRODUCTION_CATALOG_MOBILE_SCREENSHOT || `${outputBase}-catalog-mobile.png`,
   presetMobile: process.env.MODEL_CATALOG_PRODUCTION_PRESET_MOBILE_SCREENSHOT || `${outputBase}-preset-mobile.png`,
 };
 
@@ -94,6 +94,56 @@ async function saveScreenshot(page, path) {
   await writeFile(path, screenshot, { flag: 'wx' });
 }
 
+async function openModelCatalog(page) {
+  await page.getByRole('button', { name: 'Preset Models', exact: true }).click();
+  const topNavModels = page.locator('.app-nav').getByText('Models', { exact: true });
+  assert(await topNavModels.count() === 0, 'The deployed UI still has a Models top-level navigation item.');
+  const tab = page.getByRole('tab', { name: 'Model catalog', exact: true });
+  await tab.click();
+  assert(await tab.getAttribute('aria-selected') === 'true', 'The Model catalog subtab did not become active.');
+  await page.getByRole('heading', { name: 'System defaults' }).waitFor();
+}
+
+async function openPresets(page) {
+  await page.getByRole('button', { name: 'Preset Models', exact: true }).click();
+  const tab = page.getByRole('tab', { name: 'Presets', exact: true });
+  await tab.click();
+  assert(await tab.getAttribute('aria-selected') === 'true', 'The Presets subtab did not become active.');
+}
+
+async function assertNoNativeSelects(panel, label) {
+  const count = await panel.locator('select').count();
+  assert(count === 0, `${label} contains ${count} native select control(s).`);
+}
+
+async function assertListboxFitsViewport(page, width, label) {
+  const bounds = await page.getByRole('listbox').evaluate((element) => {
+    const { left, right, top, bottom } = element.getBoundingClientRect();
+    return { left, right, top, bottom, viewportWidth: document.documentElement.clientWidth, viewportHeight: window.innerHeight };
+  });
+  assert(bounds.left >= 0 && bounds.right <= bounds.viewportWidth && bounds.top >= 0 && bounds.bottom <= bounds.viewportHeight, `${label} listbox overflows at ${width}px: ${JSON.stringify(bounds)}`);
+}
+
+async function assertPopupAnchored(page, trigger, width, label) {
+  const triggerBox = await trigger.boundingBox();
+  const popupBox = await page.locator('.search-select-popup').boundingBox();
+  assert(triggerBox && popupBox, `${label} trigger or popup is not visible at ${width}px.`);
+  const gapBelow = popupBox.y - (triggerBox.y + triggerBox.height);
+  const gapAbove = triggerBox.y - (popupBox.y + popupBox.height);
+  const gap = gapBelow >= 0 ? gapBelow : gapAbove;
+  assert(gap >= 0 && gap <= 12, `${label} popup is detached from its trigger at ${width}px: ${JSON.stringify({ triggerBox, popupBox, gapBelow, gapAbove })}`);
+  return { side: gapBelow >= 0 ? 'below' : 'above', gapPx: Math.round(gap * 100) / 100 };
+}
+
+async function openSearchableCombobox(page, label, filterText) {
+  await page.getByRole('combobox', { name: label, exact: true }).click();
+  const search = page.getByRole('searchbox', { name: 'Filter models', exact: true });
+  await search.fill(filterText);
+  const options = page.getByRole('listbox').getByRole('option');
+  assert(await options.count() > 0, `${label} returned no result for its filter.`);
+  return { search, options };
+}
+
 const adminToken = await readAdminToken();
 const blockedMutations = [];
 const pageErrors = [];
@@ -107,6 +157,13 @@ try {
   });
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   page.on('pageerror', (error) => pageErrors.push(error.message.replaceAll(adminToken, '[redacted]')));
+  let resolveCatalogModels;
+  const catalogModelsPromise = new Promise((resolvePromise) => { resolveCatalogModels = resolvePromise; });
+  page.on('response', (response) => {
+    const request = response.request();
+    if (request.method() !== 'GET' || new URL(response.url()).pathname !== '/api/manage/model-catalog') return;
+    response.json().then((payload) => resolveCatalogModels(payload.models || [])).catch(() => resolveCatalogModels([]));
+  });
   await page.route('**/api/**', async (route) => {
     const request = route.request();
     const method = request.method().toUpperCase();
@@ -122,30 +179,53 @@ try {
   await page.addInitScript((token) => localStorage.setItem('anomaloharis.adminToken', token), adminToken);
   await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
 
-  await page.getByRole('button', { name: 'Models', exact: true }).click();
-  await page.getByRole('heading', { name: 'System defaults' }).waitFor();
+  await openModelCatalog(page);
+  const catalogApiModels = await catalogModelsPromise;
+  const catalogPanel = page.getByRole('tabpanel', { name: 'Model catalog', exact: true });
+  await assertNoNativeSelects(catalogPanel, 'Model catalog');
   await page.locator('.catalog-row').first().waitFor({ state: 'visible' });
   const modelCount = await page.locator('.catalog-row').count();
   assert(modelCount > 0, 'The deployed model catalog is empty.');
-  const modelRows = await page.locator('.catalog-row').evaluateAll((rows) => rows.map((row) => ({
-    name: row.querySelector('.catalog-row-main strong')?.textContent?.trim() || '',
-    model: row.querySelector('.catalog-row-main code')?.textContent?.trim() || '',
+  const renderedRows = await page.locator('[data-model-catalog-row][data-model-id]').evaluateAll((rows) => rows.map((row) => ({
+    id: row.getAttribute('data-model-id') || '',
     status: row.querySelector('.catalog-status')?.textContent?.trim() || '',
+    text: row.innerText,
   })));
+  const catalogModelById = new Map(catalogApiModels.map((model) => [model.id, model]));
+  const modelRows = renderedRows.map((row) => {
+    const model = catalogModelById.get(row.id);
+    return { ...row, name: model?.name || '', model: model?.model || '' };
+  });
+  assert(modelRows.length === modelCount && modelRows.every((row) => row.name && row.model), 'Not every catalog row resolves to a model from its read-only API response.');
+  for (const row of modelRows.filter((entry) => entry.name && entry.name === entry.model)) {
+    const occurrences = row.text.split(row.name).length - 1;
+    assert(occurrences === 1, `The matching display and actual model names repeat in catalog row ${row.id}.`);
+  }
   const defaults = {};
   for (const [key, label] of [['default_model_id', 'Default model'], ['research_model_id', 'Research subagent']]) {
-    const select = page.getByLabel(label);
-    const id = await select.inputValue();
-    const selectedLabel = await select.locator('option:checked').textContent();
-    assert(id, `${label} has no current catalog binding.`);
-    assert(selectedLabel?.trim(), `${label} has no selected option.`);
-    defaults[key] = { id, label: selectedLabel.trim() };
+    const combobox = page.getByRole('combobox', { name: label, exact: true });
+    const display = (await combobox.innerText()).trim();
+    assert(display, `${label} has no visible current catalog binding.`);
+    const { search, options } = await openSearchableCombobox(page, label, '');
+    await assertListboxFitsViewport(page, 1280, label);
+    const selectedOption = page.locator('[role="option"][aria-selected="true"]');
+    const id = await selectedOption.getAttribute('data-model-id').catch(() => null);
+    assert(await options.count() > 0, `${label} dropdown has no model options.`);
+    await search.press('Escape');
+    await page.getByRole('listbox').waitFor({ state: 'hidden' });
+    defaults[key] = { id: id || '', label: display };
+  }
+  await page.locator('.catalog-row').first().click();
+  for (const label of ['Provider', 'Tool protocol']) {
+    await page.getByRole('combobox', { name: label, exact: true }).waitFor({ state: 'visible' });
   }
   await assertNoHorizontalOverflow(page, 1280, 'Model catalog');
   await assertHeaderDoesNotOverlap(page, 1280);
-  await saveScreenshot(page, screenshots.modelsDesktop);
+  await saveScreenshot(page, screenshots.catalogDesktop);
 
-  await page.getByRole('button', { name: 'Preset Models', exact: true }).click();
+  await openPresets(page);
+  const presetsPanel = page.getByRole('tabpanel', { name: 'Presets', exact: true });
+  await assertNoNativeSelects(presetsPanel, 'Preset editor');
   await page.locator('.preset-agent-card-copy strong').first().waitFor({ state: 'visible' });
   const presetNames = await page.locator('.preset-agent-card-copy strong').allTextContents();
   const defaultPresetIndex = presetNames.findIndex((name) => name.trim().toLowerCase() === 'anomaloharis');
@@ -153,33 +233,63 @@ try {
   const presetName = presetNames[presetIndex]?.trim();
   assert(presetName, 'No existing preset is available to inspect.');
   await page.locator('.preset-agent-card').nth(presetIndex).click();
-  await page.getByLabel('Select model catalog entry').waitFor({ state: 'visible' });
-  const modelSelect = page.getByLabel('Select model catalog entry');
-  assert(!(await modelSelect.isDisabled()), 'The preset model selector is unavailable.');
-  const presetModelId = await modelSelect.inputValue();
-  const presetOption = modelSelect.locator('option:checked');
-  const presetOptionLabel = (await presetOption.textContent())?.trim() || '';
+  await page.getByRole('combobox', { name: 'Model', exact: true }).waitFor({ state: 'visible' });
+  const modelCombo = page.getByRole('combobox', { name: 'Model', exact: true });
+  await modelCombo.waitFor({ state: 'visible' });
+  assert(!(await modelCombo.isDisabled()), 'The preset model selector is unavailable.');
+  const presetOptionLabel = (await modelCombo.innerText()).trim();
+  const { search: presetSearch } = await openSearchableCombobox(page, 'Model', '');
+  await assertListboxFitsViewport(page, 1280, 'Preset model');
+  const selectedPresetOption = page.locator('[role="option"][aria-selected="true"]');
+  const presetModelId = await selectedPresetOption.getAttribute('data-model-id').catch(() => null) || '';
+  await presetSearch.press('Escape');
+  await page.getByRole('listbox').waitFor({ state: 'hidden' });
   const currentProviderText = await page.locator('.preset-field-model small').filter({ hasText: 'Current provider model:' }).textContent().catch(() => '');
   const presetRefText = await page.locator('.preset-api-callout small').textContent().catch(() => '');
-  assert(presetModelId, 'The existing preset has no selected catalog model ID.');
+  assert(presetOptionLabel, 'The existing preset has no visible selected catalog model.');
   assert(presetOptionLabel, 'The existing preset selection has no visible model value.');
   assert(currentProviderText?.includes('Current provider model:'), 'The current provider model value is not visible in the preset editor.');
+  const matchingNameModel = modelRows.find((row) => row.name === row.model);
+  if (matchingNameModel) {
+    await modelCombo.click();
+    await presetSearch.fill(matchingNameModel.model);
+    const matchingOption = page.locator(`[role="option"][data-model-id="${matchingNameModel.id}"]`);
+    await matchingOption.waitFor({ state: 'visible' });
+    const matchingOptionText = await matchingOption.innerText();
+    const occurrences = matchingOptionText.split(matchingNameModel.model).length - 1;
+    assert(occurrences === 1, `The matching name and actual ID repeat in preset option ${matchingNameModel.id}.`);
+    await presetSearch.press('Escape');
+    await page.getByRole('listbox').waitFor({ state: 'hidden' });
+  }
   await assertNoHorizontalOverflow(page, 1280, 'Preset editor');
   await assertHeaderDoesNotOverlap(page, 1280);
   await saveScreenshot(page, screenshots.presetDesktop);
 
-  await page.setViewportSize({ width: 375, height: 900 });
-  await page.getByRole('button', { name: 'Models', exact: true }).click();
-  await page.getByRole('heading', { name: 'System defaults' }).waitFor();
+  await page.setViewportSize({ width: 375, height: 667 });
+  await openModelCatalog(page);
+  const mobileCatalogCombo = page.getByRole('combobox', { name: 'Default model', exact: true });
+  await mobileCatalogCombo.click();
+  await page.getByRole('listbox').waitFor({ state: 'visible' });
+  const mobileCatalogAnchor = await assertPopupAnchored(page, mobileCatalogCombo, 375, 'Default model');
+  await assertListboxFitsViewport(page, 375, 'Model catalog');
+  await page.getByRole('searchbox', { name: 'Filter models', exact: true }).press('Escape');
+  await page.getByRole('listbox').waitFor({ state: 'hidden' });
   await assertNoHorizontalOverflow(page, 375, 'Model catalog');
-  await saveScreenshot(page, screenshots.modelsMobile);
-  await page.getByRole('button', { name: 'Preset Models', exact: true }).click();
+  await saveScreenshot(page, screenshots.catalogMobile);
+  await openPresets(page);
   await page.locator('.preset-agent-card-copy strong').first().waitFor({ state: 'visible' });
   const mobilePresetNames = await page.locator('.preset-agent-card-copy strong').allTextContents();
   const mobilePresetIndex = mobilePresetNames.findIndex((name) => name.trim() === presetName);
   assert(mobilePresetIndex >= 0, 'The selected preset is missing from the mobile preset list.');
   await page.locator('.preset-agent-card').nth(mobilePresetIndex).click();
-  await page.getByLabel('Select model catalog entry').waitFor({ state: 'visible' });
+  const mobilePresetCombo = page.getByRole('combobox', { name: 'Model', exact: true });
+  await mobilePresetCombo.waitFor({ state: 'visible' });
+  await mobilePresetCombo.click();
+  await page.getByRole('listbox').waitFor({ state: 'visible' });
+  const mobilePresetAnchor = await assertPopupAnchored(page, mobilePresetCombo, 375, 'Preset model');
+  await assertListboxFitsViewport(page, 375, 'Preset model');
+  await page.getByRole('searchbox', { name: 'Filter models', exact: true }).press('Escape');
+  await page.getByRole('listbox').waitFor({ state: 'hidden' });
   await assertNoHorizontalOverflow(page, 375, 'Preset editor');
   await saveScreenshot(page, screenshots.presetMobile);
 
@@ -188,12 +298,13 @@ try {
 
   const report = {
     baseUrl,
-    checks: ['model catalog count', 'current default selections', 'existing preset model selection', 'current provider model display', '1280px and 375px layouts', 'no non-GET API requests'],
+    checks: ['no Models top-level tab', 'model catalog embedded in Preset Models', 'catalog and preset pages have no native selects', 'searchable model controls and selected values', 'equal display/actual names shown once when present', 'desktop and mobile listbox viewport bounds', 'current default selections', 'existing preset model selection', 'current provider model display', '1280px and 375px layouts', 'no non-GET API requests'],
     modelCount,
     models: modelRows,
     defaults,
     preset: { name: presetName, ref: presetRefText.replace(/^Model Ref:\s*/, '').trim(), modelId: presetModelId, selectedLabel: presetOptionLabel, currentProviderModel: currentProviderText.replace(/^\s*Current provider model:\s*/, '').trim() },
     viewportWidths: [1280, 375],
+    mobilePopupAnchors: { modelCatalog: mobileCatalogAnchor, presetModel: mobilePresetAnchor },
     apiMethods: [...new Set(readMethods.map((request) => request.method))],
     blockedMutations,
     noUncaughtBrowserErrors: true,

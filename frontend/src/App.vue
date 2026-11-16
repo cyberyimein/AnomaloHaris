@@ -40,14 +40,6 @@
           </button>
           <button
             class="nav-tab"
-            :class="{ active: activeView === 'models' }"
-            type="button"
-            @click="setActiveView('models')"
-          >
-            Models
-          </button>
-          <button
-            class="nav-tab"
             :class="{ active: activeView === 'workflows' }"
             type="button"
             @click="setActiveView('workflows')"
@@ -129,12 +121,12 @@
             <span>Refresh</span>
           </button>
           <button
-            v-else-if="activeView === 'models'"
+            v-else-if="activeView === 'preset-agents'"
             class="toolbar-button"
             type="button"
-            title="Refresh model catalog"
-            aria-label="Refresh model catalog"
-            @click="refreshModelCatalog"
+            title="Refresh presets or model catalog"
+            aria-label="Refresh presets or model catalog"
+            @click="refreshPresetModels"
           >
             <RefreshCw :size="17" />
             <span>Refresh</span>
@@ -345,13 +337,6 @@
       <PresetAgents
         v-else-if="activeView === 'preset-agents'"
         ref="presetAgentsEl"
-        :management="managementAccess"
-        @save-management-token="saveManagementToken"
-      />
-
-      <ModelCatalog
-        v-else-if="activeView === 'models'"
-        ref="modelCatalogEl"
         :management="managementAccess"
         @save-management-token="saveManagementToken"
       />
@@ -1111,7 +1096,6 @@ import CapabilityDashboard from "./dashboard/CapabilityDashboard.vue";
 import { createBuddyDashboardController } from "./dashboard/buddyDashboardController";
 import { createManagementAccess } from "./management/managementAccess";
 import { createSearchModeController } from "./management/searchModeController";
-import ModelCatalog from "./management/ModelCatalog.vue";
 import BotPage from "./bot/BotPage.vue";
 import PresetAgents from "./preset-agents/PresetAgents.vue";
 import Workflows from "./workflows/Workflows.vue";
@@ -1125,7 +1109,6 @@ const historyOpen = ref(false);
 const composerActionsOpen = ref(false);
 const activeView = ref("agent");
 const presetAgentsEl = ref(null);
-const modelCatalogEl = ref(null);
 const workflowsEl = ref(null);
 const capabilityDashboardEl = ref(null);
 const managementAccess = createManagementAccess();
@@ -1133,13 +1116,13 @@ const { input: managementTokenInput } = managementAccess.state;
 const fetchJson = managementAccess.requestJson;
 const refreshDashboard = () => capabilityDashboardEl.value?.refresh();
 const refreshWorkflows = () => workflowsEl.value?.refresh();
+const refreshPresetModels = () => presetAgentsEl.value?.refresh();
 const buddyDashboard = createBuddyDashboardController({
   requestJson: fetchJson,
   markAccessError: managementAccess.markError,
   clearAccessError: () => { managementAccess.state.accessRequired.value = false; },
 });
 const refreshBuddyDashboard = buddyDashboard.refresh;
-const refreshModelCatalog = () => modelCatalogEl.value?.refresh();
 
 const tools = ref([]);
 const historySessions = ref([]);
@@ -1451,9 +1434,6 @@ function saveManagementToken() {
   if (activeView.value === "preset-agents") {
     void presetAgentsEl.value?.refresh();
   }
-  if (activeView.value === "models") {
-    void refreshModelCatalog();
-  }
   if (activeView.value === "workflows") {
     void workflowsEl.value?.refresh();
   }
@@ -1470,11 +1450,11 @@ function clearManagementToken() {
   if (activeView.value === "buddy") {
     void refreshBuddyDashboard();
   }
+  if (activeView.value === "preset-agents") {
+    void presetAgentsEl.value?.refresh();
+  }
   if (activeView.value === "workflows") {
     void workflowsEl.value?.refresh();
-  }
-  if (activeView.value === "models") {
-    void refreshModelCatalog();
   }
 }
 

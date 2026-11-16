@@ -2,12 +2,8 @@
   <section class="preset-agents-view">
     <div class="preset-agents-shell">
       <header class="preset-agents-hero">
-        <div>
-          <span>Reusable AI services</span>
-          <h2>Preset Models</h2>
-          <p>Define a fixed prompt, provider and plugin combination, then call it by name and version.</p>
-        </div>
-        <button class="preset-primary-button" type="button" @click="beginCreate">
+        <h2>Preset Models</h2>
+        <button v-if="activeSection === 'presets'" class="preset-primary-button" type="button" @click="beginCreate">
           <Plus :size="17" />
           New model
         </button>
@@ -31,42 +27,70 @@
         <button type="submit">Save token</button>
       </form>
 
-      <div v-if="notice" class="preset-notice" :class="{ error: noticeIsError }">
-        {{ notice }}
-      </div>
-
-      <div v-if="loading" class="preset-empty">Loading preset models…</div>
-      <div v-else-if="!agents.length && !editing" class="preset-empty">
-        <Ghost :size="30" />
-        <strong>No preset models yet</strong>
-        <span>Create one for your coding workflow or another external application.</span>
-      </div>
-
-      <div v-else class="preset-agent-grid">
+      <div class="preset-section-tabs" role="tablist" aria-label="Preset model sections">
         <button
-          v-for="agent in agents"
-          :key="agent.id"
-          class="preset-agent-card"
-          :class="{ selected: form.id === agent.id }"
+          id="preset-model-tab-presets"
+          class="preset-section-tab"
+          :class="{ active: activeSection === 'presets' }"
           type="button"
-          @click="editAgent(agent)"
-        >
-          <span class="preset-agent-ghost">{{ agent.ghost || "👻" }}</span>
-          <span class="preset-agent-card-copy">
-            <strong>{{ agent.name }}</strong>
-            <span>{{ agent.description || "No description" }}</span>
-          </span>
-          <span class="preset-agent-card-meta">
-            {{ agent.model }} · {{ agent.tool_names.length }} tools
-            <span v-if="agent.status"> · {{ agent.status }}</span>
-            <span v-if="agent.search_mode"> · {{ searchModeLabel(agent.search_mode) }}</span>
-            <span v-if="agent.bootstrap_tools?.length"> · {{ agent.bootstrap_tools.length }} startup</span>
-          </span>
-          <ChevronRight :size="18" />
-        </button>
+          role="tab"
+          aria-controls="preset-model-panel"
+          :aria-selected="activeSection === 'presets'"
+          :tabindex="activeSection === 'presets' ? 0 : -1"
+          @click="setActiveSection('presets')"
+          @keydown="onSectionTabKeydown"
+        >Presets</button>
+        <button
+          id="preset-model-tab-catalog"
+          class="preset-section-tab"
+          :class="{ active: activeSection === 'catalog' }"
+          type="button"
+          role="tab"
+          aria-controls="preset-model-panel"
+          :aria-selected="activeSection === 'catalog'"
+          :tabindex="activeSection === 'catalog' ? 0 : -1"
+          @click="setActiveSection('catalog')"
+          @keydown="onSectionTabKeydown"
+        >Model catalog</button>
       </div>
 
-      <form v-if="editing" class="preset-editor" @submit.prevent="saveAgent">
+      <div v-if="activeSection === 'presets'" id="preset-model-panel" class="preset-section-panel" role="tabpanel" aria-labelledby="preset-model-tab-presets" tabindex="0">
+        <div v-if="notice" class="preset-notice" :class="{ error: noticeIsError }">
+          {{ notice }}
+        </div>
+
+        <div v-if="loading" class="preset-empty">Loading preset models…</div>
+        <div v-else-if="!agents.length && !editing" class="preset-empty">
+          <Ghost :size="30" />
+          <strong>No preset models yet</strong>
+          <span>Create one for your coding workflow or another external application.</span>
+        </div>
+
+        <div v-else class="preset-agent-grid">
+          <button
+            v-for="agent in agents"
+            :key="agent.id"
+            class="preset-agent-card"
+            :class="{ selected: form.id === agent.id }"
+            type="button"
+            @click="editAgent(agent)"
+          >
+            <span class="preset-agent-ghost">{{ agent.ghost || "👻" }}</span>
+            <span class="preset-agent-card-copy">
+              <strong>{{ agent.name }}</strong>
+              <span>{{ agent.description || "No description" }}</span>
+            </span>
+            <span class="preset-agent-card-meta">
+              {{ agent.model }} · {{ agent.tool_names.length }} tools
+              <span v-if="agent.status"> · {{ agent.status }}</span>
+              <span v-if="agent.search_mode"> · {{ searchModeLabel(agent.search_mode) }}</span>
+              <span v-if="agent.bootstrap_tools?.length"> · {{ agent.bootstrap_tools.length }} startup</span>
+            </span>
+            <ChevronRight :size="18" />
+          </button>
+        </div>
+
+        <form v-if="editing" class="preset-editor" @submit.prevent="saveAgent">
         <header>
           <div>
             <span>{{ form.id ? "Edit preset model" : "Create preset model" }}</span>
@@ -129,32 +153,20 @@
               ></textarea>
             </article>
           </div>
-          <div class="preset-field preset-field-model">
+          <label class="preset-field preset-field-model">
             <span>Model</span>
-            <input v-model.trim="modelSearch" type="search" aria-label="Filter model catalog" placeholder="Filter models" :disabled="!modelCatalogLoaded" />
-            <select
+            <SearchSelect
               v-model="form.provider_model_id"
-              :required="!form.id"
+              aria-label="Model"
+              search-label="Filter models"
+              placeholder="Choose a model"
               :disabled="!modelCatalogLoaded"
-              aria-label="Select model catalog entry"
+              :options="modelOptions"
               @change="applySelectedCatalogModel"
-            >
-              <option value="" disabled>Choose a model</option>
-              <option
-                v-for="model in filteredCatalogModels"
-                :key="model.id"
-                :value="model.id"
-                :disabled="!model.active && model.id !== form.provider_model_id"
-              >
-                {{ model.name }} · {{ model.model }}{{ model.active ? "" : " · Disabled" }}
-              </option>
-              <option v-if="form.provider_model_id && !modelCatalogModels.some((model) => model.id === form.provider_model_id)" :value="form.provider_model_id" disabled>
-                Unavailable · {{ form.provider_model_id }}
-              </option>
-            </select>
+            />
             <small v-if="form.model">Current provider model: {{ form.model }}</small>
             <small v-if="modelCatalogError" class="preset-model-catalog-error">{{ modelCatalogError }} The existing model value is preserved.</small>
-          </div>
+          </label>
           <label class="preset-field preset-field-temperature">
             <span>Temperature</span>
             <input v-model.number="form.temperature" type="number" min="0" max="2" step="0.1" />
@@ -240,7 +252,12 @@
             {{ saving ? "Saving…" : form.id ? "Save model" : "Create model" }}
           </button>
         </footer>
-      </form>
+        </form>
+      </div>
+
+      <div v-else id="preset-model-panel" class="preset-section-panel" role="tabpanel" aria-labelledby="preset-model-tab-catalog" tabindex="0">
+        <ModelCatalog ref="modelCatalogEl" :management="management" :embedded="true" />
+      </div>
     </div>
   </section>
 </template>
@@ -254,7 +271,9 @@ import {
   Trash2,
   X,
 } from "@lucide/vue";
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, nextTick, onMounted, reactive, ref } from "vue";
+import SearchSelect from "../components/SearchSelect.vue";
+import ModelCatalog from "../management/ModelCatalog.vue";
 import { pluginBindingsForTools } from "./pluginBindings.js";
 import { buildSkillPayload } from "./skillPayload.js";
 
@@ -275,7 +294,8 @@ const modelCatalogModels = ref([]);
 const modelCatalogDefaults = ref({ default_model_id: "" });
 const modelCatalogLoaded = ref(false);
 const modelCatalogError = ref("");
-const modelSearch = ref("");
+const activeSection = ref("presets");
+const modelCatalogEl = ref(null);
 const originalDefinition = ref(null);
 const originalFormFields = ref(null);
 const searchModeOptions = ref(fallbackSearchModeOptions());
@@ -349,13 +369,44 @@ function cloneJson(value) {
 }
 
 const retrievalToolSelected = computed(() => form.tool_names.includes("web_search"));
-const filteredCatalogModels = computed(() => {
-  const query = modelSearch.value.trim().toLowerCase();
-  const models = modelCatalogModels.value.filter((model) => model.active || model.id === form.provider_model_id);
-  return query
-    ? models.filter((model) => model.id === form.provider_model_id || `${model.name} ${model.id} ${model.model} ${model.adapter}`.toLowerCase().includes(query))
-    : models;
+const modelOptions = computed(() => {
+  const options = modelCatalogModels.value
+    .filter((model) => model.active || model.id === form.provider_model_id)
+    .map((model) => {
+      const label = model.name || model.model || model.id;
+      const sameName = String(label).trim().toLocaleLowerCase() === String(model.model || "").trim().toLocaleLowerCase();
+      return {
+        value: model.id,
+        label,
+        detail: sameName ? "" : model.model,
+        status: model.active ? "" : "Disabled",
+        disabled: !model.active,
+      };
+    });
+  if (form.provider_model_id && !modelCatalogModels.value.some((model) => model.id === form.provider_model_id)) {
+    options.push({ value: form.provider_model_id, label: "Unavailable model", detail: form.provider_model_id, status: "Unavailable", disabled: true });
+  }
+  return options;
 });
+
+function setActiveSection(section) {
+  if (activeSection.value === section) return;
+  activeSection.value = section;
+  if (section === "presets") void load();
+}
+
+function onSectionTabKeydown(event) {
+  let nextSection = "";
+  if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
+    nextSection = activeSection.value === "presets" ? "catalog" : "presets";
+  }
+  else if (event.key === "Home") nextSection = "presets";
+  else if (event.key === "End") nextSection = "catalog";
+  if (!nextSection) return;
+  event.preventDefault();
+  setActiveSection(nextSection);
+  nextTick(() => document.getElementById(`preset-model-tab-${nextSection}`)?.focus());
+}
 
 function beginCreate() {
   if (!modelCatalogLoaded.value) {
@@ -734,18 +785,31 @@ function fallbackSearchModeOptions() {
   ];
 }
 
-onMounted(load);
+async function refresh() {
+  if (activeSection.value === "catalog") {
+    await nextTick();
+    return modelCatalogEl.value?.refresh?.();
+  }
+  return load();
+}
 
-defineExpose({ refresh: load });
+onMounted(refresh);
+
+defineExpose({ refresh });
 </script>
 
 <style scoped>
 .preset-agents-view { min-height: 0; overflow: auto; padding: 34px clamp(18px, 5vw, 64px) 42px; }
 .preset-agents-shell { width: min(1180px, 100%); margin: 0 auto; }
-.preset-agents-hero { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 24px; }
-.preset-agents-hero span, .preset-editor header span, .preset-api-callout > span { color: var(--muted); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; }
-.preset-agents-hero h2 { margin: 6px 0 4px; font-size: clamp(27px, 4vw, 42px); font-weight: 500; }
-.preset-agents-hero p { max-width: 620px; margin: 0; color: var(--muted); }
+.preset-agents-hero { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 18px; }
+.preset-agents-hero h2 { margin: 0; font-size: clamp(27px, 4vw, 38px); font-weight: 500; }
+.preset-editor header span, .preset-api-callout > span { color: var(--muted); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; }
+.preset-section-tabs { display: inline-flex; gap: 3px; margin-bottom: 20px; border: 1px solid #ded9ce; border-radius: 11px; background: #f3f0e9; padding: 4px; }
+.preset-section-tab { min-height: 36px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--muted); padding: 0 14px; font: inherit; font-size: 13px; cursor: pointer; transition: background .15s ease, box-shadow .15s ease, color .15s ease; }
+.preset-section-tab:hover { color: var(--text); }
+.preset-section-tab.active { border-color: #e4dfd5; background: var(--surface); color: var(--text); box-shadow: 0 1px 3px #302b2110; }
+.preset-section-tab:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+.preset-section-panel { min-width: 0; outline: none; }
 .preset-primary-button, .preset-secondary-button, .preset-danger-button, .preset-access-card button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 40px; border: 1px solid var(--line); border-radius: 9px; padding: 0 14px; font: inherit; cursor: pointer; }
 .preset-primary-button { border-color: var(--text); background: var(--text); color: var(--surface); }
 .preset-secondary-button, .preset-danger-button { background: var(--surface); color: var(--text); }
@@ -815,7 +879,7 @@ defineExpose({ refresh: load });
 .preset-editor footer { display: flex; align-items: center; gap: 10px; margin-top: 22px; }
 .preset-footer-spacer { flex: 1; }
 @media (max-width: 720px) {
-  .preset-agents-hero { align-items: start; flex-direction: column; }
+  .preset-agents-hero { align-items: center; }
   .preset-access-card { grid-template-columns: 1fr; }
   .preset-form-grid { grid-template-columns: 84px 1fr; }
   .preset-field-wide, .preset-field-model { grid-column: 1 / -1; }

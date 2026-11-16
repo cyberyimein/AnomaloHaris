@@ -42,11 +42,12 @@ node scripts/qa/model-catalog-playwright.mjs
 
 `PLAYWRIGHT_MODULE` and `CHROME_EXECUTABLE_PATH` are optional when Playwright
 and Chromium are available through the local Node environment. The script
-stubs the APIs and does not call a model provider. It verifies catalog create,
-edit and delete; defaults, impact preview and reference replacement; history
-restore; preset binding without changing its version; conflict and API error
-states; and 320/375 px layouts. Its screenshot and JSON report are written to
-Git-ignored `output/playwright/`.
+stubs the APIs and does not call a model provider. It verifies that the catalog
+is a section inside Preset Models, custom searchable combobox behavior and
+keyboard dismissal, disabled options, de-duplicated matching names, catalog
+CRUD/defaults/replacement/history restore, preset binding without changing its
+version, conflict and API error states, and 320/375 px layouts. It writes a
+unique screenshot and JSON report under Git-ignored `output/playwright/`.
 
 ## Real temporary backend
 
@@ -63,9 +64,29 @@ node scripts/qa/model-catalog-live-playwright.mjs
 The live script starts its own local Node Host and Vite server on ephemeral
 ports, seeds synthetic model IDs, uses a fresh temporary data directory and an
 ephemeral admin token, and never invokes a model provider. It exercises model
-creation/editing, preset selection without a version change, defaults,
-reference preview and replacement, and history restoration. It stops both
-servers and retains the temporary SQLite directory for inspection. The report
-and screenshot use unique paths under `output/playwright/`; set
+creation/editing, the searchable catalog and preset comboboxes, preset selection
+without a version change, defaults, reference preview and replacement, mobile
+dropdown bounds, and history restoration. It stops both servers and retains
+the temporary SQLite directory for inspection. The report and screenshot use
+unique paths under `output/playwright/`; set
 `MODEL_CATALOG_LIVE_REPORT` or `MODEL_CATALOG_LIVE_SCREENSHOT` to choose other
 non-existing paths.
+
+## Deployed read-only check
+
+After the redesigned frontend has been deployed, run the read-only production
+check with the private environment file that contains the existing admin token:
+
+```sh
+MODEL_CATALOG_ADMIN_ENV=/path/to/private/deployment.env \
+MODEL_CATALOG_BASE_URL=http://your-host:8000 \
+PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs \
+CHROME_EXECUTABLE_PATH=/path/to/chrome \
+node scripts/qa/model-catalog-production-playwright.mjs
+```
+
+The script only allows `GET` requests to `/api/**`; it aborts and reports any
+write request. It checks the embedded catalog navigation, searchable controls,
+duplicate labels, current defaults and preset model display, and desktop/mobile
+layouts. It does not save changes or call a model provider. Reports and four
+screenshots use unique paths under `output/playwright/`.

@@ -298,7 +298,7 @@ reuses it on resume.
 
 ### Preset Models
 
-The **Models** tab maintains the shared provider model catalog. Each entry has a stable ID,
+The **Model catalog** section inside **Preset Models** maintains the shared provider model catalog. Each entry has a stable ID,
 an editable display name and actual provider model ID, and a credential reference. Select
 entries from the Preset Models dropdown or the system default and research subagent selectors.
 Editing an entry upgrades all its references for subsequent runs without restarting the host

@@ -1,17 +1,14 @@
 <template>
   <section class="model-catalog-view">
     <div class="model-catalog-shell">
-      <header class="catalog-hero">
-        <div>
-          <span>Provider configuration</span>
-          <h2>Models</h2>
-        </div>
+      <header class="catalog-toolbar">
+        <span>{{ models.length }} {{ models.length === 1 ? 'model' : 'models' }}</span>
         <button class="catalog-primary" type="button" :disabled="loading || !catalogAvailable" @click="beginCreate">
           <Plus :size="16" /> Add model
         </button>
       </header>
 
-      <form v-if="management.state.accessRequired.value" class="catalog-access" @submit.prevent="$emit('save-management-token')">
+      <form v-if="management.state.accessRequired.value && !embedded" class="catalog-access" @submit.prevent="$emit('save-management-token')">
         <div><strong>Management access required</strong><span>{{ management.state.hint.value }}</span></div>
         <input v-model="management.state.input.value" type="password" autocomplete="current-password" placeholder="Admin token" />
         <button type="submit">Save token</button>
@@ -23,21 +20,29 @@
       <template v-else>
         <section class="catalog-defaults" aria-labelledby="catalog-defaults-heading">
           <div class="catalog-section-heading">
-            <div><span>Routing</span><h3 id="catalog-defaults-heading">System defaults</h3></div>
+            <div><h3 id="catalog-defaults-heading">System defaults</h3></div>
             <button class="catalog-secondary" type="button" :disabled="defaultsSaving || !catalogAvailable || !defaultsDirty" @click="saveDefaults">Save defaults</button>
           </div>
           <div class="catalog-default-grid">
             <label>
               <span>Default model</span>
-              <select v-model="defaultsDraft.default_model_id" :disabled="!catalogAvailable || !models.length">
-                <option v-for="model in defaultChoices('default_model_id')" :key="model.id" :value="model.id" :disabled="!model.active">{{ modelLabel(model) }}</option>
-              </select>
+              <SearchSelect
+                v-model="defaultsDraft.default_model_id"
+                aria-label="Default model"
+                placeholder="Choose a model"
+                :options="defaultOptions('default_model_id')"
+                :disabled="!catalogAvailable || !models.length"
+              />
             </label>
             <label>
               <span>Research subagent</span>
-              <select v-model="defaultsDraft.research_model_id" :disabled="!catalogAvailable || !models.length">
-                <option v-for="model in defaultChoices('research_model_id')" :key="model.id" :value="model.id" :disabled="!model.active">{{ modelLabel(model) }}</option>
-              </select>
+              <SearchSelect
+                v-model="defaultsDraft.research_model_id"
+                aria-label="Research subagent"
+                placeholder="Choose a model"
+                :options="defaultOptions('research_model_id')"
+                :disabled="!catalogAvailable || !models.length"
+              />
             </label>
           </div>
           <p v-if="defaultsError" class="catalog-inline-error">{{ defaultsError }}</p>
@@ -46,10 +51,10 @@
         <div class="catalog-content">
           <section class="catalog-list" aria-label="Model catalog">
             <div v-if="!models.length" class="catalog-empty">No models configured.</div>
-            <button v-for="model in models" :key="model.id" class="catalog-row" :class="{ selected: selectedId === model.id, inactive: !model.active }" type="button" @click="selectModel(model)">
+            <button v-for="model in models" :key="model.id" class="catalog-row" :class="{ selected: selectedId === model.id, inactive: !model.active }" :data-model-catalog-row="true" :data-model-id="model.id" type="button" @click="selectModel(model)">
               <span class="catalog-row-main">
-                <strong>{{ model.name }}</strong>
-                <code>{{ model.model }}</code>
+                <strong>{{ model.name || model.model || model.id }}</strong>
+                <code v-if="hasDistinctModel(model)">{{ model.model }}</code>
               </span>
               <span class="catalog-row-meta">
                 <span>{{ model.adapter }}</span>
@@ -61,17 +66,17 @@
 
           <section v-if="editing" class="catalog-editor" aria-label="Model details">
             <header class="catalog-editor-heading">
-              <div><span>{{ creating ? 'New catalog entry' : 'Model entry' }}</span><h3>{{ draft.name || 'Untitled model' }}</h3></div>
+              <div><h3>{{ draft.name || 'Untitled model' }}</h3></div>
               <button class="catalog-icon-button" type="button" aria-label="Close editor" @click="closeEditor">×</button>
             </header>
 
             <form class="catalog-fields" @submit.prevent="saveModel">
               <label v-if="creating"><span>Stable ID</span><input v-model.trim="draft.id" required pattern="[a-z][a-z0-9._-]{0,63}" placeholder="deepseek-flash" /></label>
               <label><span>Display name</span><input v-model.trim="draft.name" required maxlength="100" placeholder="DeepSeek Flash" /></label>
-              <label><span>Provider</span><select v-model="draft.adapter"><option value="openai-compatible">OpenAI compatible</option><option v-if="draft.adapter && draft.adapter !== 'openai-compatible'" :value="draft.adapter">{{ draft.adapter }}</option></select></label>
+              <label><span>Provider</span><SearchSelect v-model="draft.adapter" aria-label="Provider" :options="providerOptions" /></label>
               <label class="catalog-field-wide"><span>Actual model ID</span><input v-model.trim="draft.model" required placeholder="provider/model-version" /></label>
               <label><span>Credential reference</span><input v-model.trim="draft.credential_ref" placeholder="openrouter-primary" /></label>
-              <label><span>Tool protocol</span><select v-model="draft.tool_protocol"><option value="auto">Auto</option><option value="openai">OpenAI</option><option value="dsml">DeepSeek</option><option value="none">None</option></select></label>
+              <label><span>Tool protocol</span><SearchSelect v-model="draft.tool_protocol" aria-label="Tool protocol" :options="protocolOptions" /></label>
 
               <div v-if="!creating" class="catalog-impact catalog-field-wide">
                 <strong>Used by</strong>
@@ -108,7 +113,7 @@
       <div v-if="replacementOpen" class="catalog-modal-backdrop" @click.self="replacementOpen = false">
         <section class="catalog-modal" role="dialog" aria-modal="true" aria-labelledby="replacement-title">
           <header><div><span>Move references</span><h3 id="replacement-title">Replace {{ selectedModel?.name }}</h3></div><button class="catalog-icon-button" type="button" aria-label="Close" @click="replacementOpen = false">×</button></header>
-          <label><span>Move to</span><select v-model="replacementTarget"><option disabled value="">Choose a model</option><option v-for="model in models.filter((item) => item.active && item.id !== selectedId)" :key="model.id" :value="model.id">{{ modelLabel(model) }}</option></select></label>
+          <label><span>Move to</span><SearchSelect v-model="replacementTarget" aria-label="Move to" placeholder="Choose a model" :options="replacementOptions" /></label>
           <fieldset><legend>References to move</legend>
             <label v-for="ref in impactRefs" :key="ref" class="catalog-check"><input v-model="replacementRefs" type="checkbox" :value="ref" /><span>{{ ref }}</span></label>
             <label v-if="impactDefaults.length" class="catalog-check"><input v-model="replacementDefaults" type="checkbox" /><span>Move {{ impactDefaults.map(defaultLabel).join(' and ') }}</span></label>
@@ -125,8 +130,9 @@
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { Plus } from '@lucide/vue';
+import SearchSelect from '../components/SearchSelect.vue';
 
-const props = defineProps({ management: { type: Object, required: true } });
+const props = defineProps({ management: { type: Object, required: true }, embedded: { type: Boolean, default: false } });
 defineEmits(['save-management-token']);
 
 const target = '/api/manage/model-catalog';
@@ -154,6 +160,22 @@ const replacementDefaults = ref(false);
 const replacementError = ref('');
 let selectionRequestId = 0;
 const draft = reactive(emptyDraft());
+const providerOptions = computed(() => {
+  const options = [{ value: 'openai-compatible', label: 'OpenAI compatible' }];
+  if (draft.adapter && draft.adapter !== 'openai-compatible') {
+    options.push({ value: draft.adapter, label: draft.adapter });
+  }
+  return options;
+});
+const protocolOptions = [
+  { value: 'auto', label: 'Automatic' },
+  { value: 'openai', label: 'OpenAI' },
+  { value: 'dsml', label: 'DeepSeek' },
+  { value: 'none', label: 'None' },
+];
+const replacementOptions = computed(() => models.value
+  .filter((model) => model.active && model.id !== selectedId.value)
+  .map(toModelOption));
 
 const defaultsDirty = computed(() => defaultsDraft.default_model_id !== defaults.value.default_model_id || defaultsDraft.research_model_id !== defaults.value.research_model_id);
 const dirty = computed(() => !selectedModel.value || ['name', 'adapter', 'model', 'credential_ref', 'tool_protocol'].some((key) => value(draft[key]) !== value(selectedModel.value[key])));
@@ -176,17 +198,30 @@ watch(selectedModel, (model) => {
 function emptyDraft() { return { id: '', name: '', adapter: 'openai-compatible', model: '', credential_ref: '', tool_protocol: 'auto' }; }
 function value(input) { return String(input ?? ''); }
 function toDraft(model) { return { id: model.id, name: model.name || '', adapter: model.adapter || 'openai-compatible', model: model.model || '', credential_ref: model.credential_ref || '', tool_protocol: model.tool_protocol || 'auto' }; }
-function modelLabel(model) { return `${model.name} · ${model.model}${model.active ? '' : ' · Disabled'}`; }
+function hasDistinctModel(model) {
+  return Boolean(model.model && String(model.model).trim().toLocaleLowerCase() !== String(model.name || '').trim().toLocaleLowerCase());
+}
+function toModelOption(model) {
+  const label = model.name || model.model || model.id;
+  return {
+    value: model.id,
+    label,
+    detail: hasDistinctModel(model) ? model.model : '',
+    status: model.unavailable ? 'Unavailable' : model.active ? '' : 'Disabled',
+    disabled: !model.active,
+  };
+}
 function defaultLabel(key) { return key === 'default_model_id' ? 'System default' : 'Research subagent default'; }
 function defaultChoices(key) {
   const selectedId = defaultsDraft[key];
   const selected = models.value.find((model) => model.id === selectedId);
   if (selectedId && !selected) {
-    return [{ id: selectedId, name: 'Unavailable binding', model: selectedId, active: false }];
+    return [{ id: selectedId, name: 'Unavailable binding', model: selectedId, active: false, unavailable: true }];
   }
   const choices = models.value.filter((model) => model.active || model.id === selectedId);
   return selected && !choices.some((model) => model.id === selected.id) ? [selected, ...choices] : choices;
 }
+function defaultOptions(key) { return defaultChoices(key).map(toModelOption); }
 function setNotice(message, isError = false) { notice.value = message; noticeIsError.value = isError; }
 function handleError(error) {
   const code = String(error?.code || '').toLowerCase();
@@ -378,12 +413,11 @@ defineExpose({ refresh });
 </script>
 
 <style scoped>
-.model-catalog-view { min-height: 0; overflow: auto; padding: 34px clamp(18px, 5vw, 64px) 42px; }
+.model-catalog-view { min-height: 0; overflow: auto; padding: 0; }
 .model-catalog-shell { width: min(1180px, 100%); margin: 0 auto; }
-.catalog-hero, .catalog-section-heading, .catalog-editor-heading { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
-.catalog-hero { align-items: end; margin-bottom: 24px; }
-.catalog-hero>div>span, .catalog-section-heading>div>span, .catalog-editor-heading>div>span { color: var(--muted); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; }
-.catalog-hero h2 { margin: 6px 0 0; font-size: clamp(27px, 4vw, 42px); font-weight: 500; }
+.catalog-toolbar, .catalog-section-heading, .catalog-editor-heading { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+.catalog-toolbar { margin-bottom: 14px; color: var(--muted); font-size: 12px; }
+.catalog-section-heading>div>span, .catalog-editor-heading>div>span { color: var(--muted); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; }
 .catalog-section-heading h3, .catalog-editor-heading h3 { margin: 4px 0 0; font-size: 22px; font-weight: 500; }
 .catalog-primary, .catalog-secondary, .catalog-danger, .catalog-access button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 40px; border: 1px solid var(--line); border-radius: 9px; padding: 0 14px; color: var(--text); background: var(--surface); font: inherit; cursor: pointer; }
 .catalog-primary { border-color: var(--text); background: var(--text); color: var(--surface); }
@@ -446,12 +480,10 @@ defineExpose({ refresh });
   .catalog-access { grid-template-columns: 1fr; }
 }
 @media (max-width: 520px) {
-  .model-catalog-view { padding: 22px 14px 34px; }
   .catalog-defaults, .catalog-editor { padding: 15px; }
   .catalog-default-grid, .catalog-fields { grid-template-columns: 1fr; }
   .catalog-field-wide { grid-column: auto; }
   .catalog-actions>* { flex: 1 1 calc(50% - 8px); }
-  .catalog-hero { align-items: center; }
   .catalog-row-meta { gap: 6px 9px; }
 }
 </style>
