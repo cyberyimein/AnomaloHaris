@@ -2,7 +2,7 @@ import type { ToolCall, ToolDefinition, ToolResult } from "@anomaloharis/contrac
 
 import { WebResearchSubagent } from "./subagent.js";
 import type { ToolRuntime } from "./tools.js";
-import type { ToolContext } from "./types.js";
+import type { ModelBindingSnapshot, ToolContext } from "./types.js";
 import { DEFAULT_SEARCH_MODE, DEFAULT_SUBAGENT_MODEL, isSearchMode, type RetrievalSearchMode } from "./search-mode.js";
 
 export { DEFAULT_SEARCH_MODE, DEFAULT_SUBAGENT_MODEL, isSearchMode, SEARCH_MODES } from "./search-mode.js";
@@ -18,7 +18,7 @@ export type ResponsesSearchRuntimeOptions = {
   subagentModel?: string;
   timeoutMs?: number;
   subagentTimeoutMs?: number;
-  resolveProvider?: (context: ToolContext) => ResponsesSearchProvider | undefined;
+  resolveProvider?: (context: ToolContext, binding?: ModelBindingSnapshot) => ResponsesSearchProvider | undefined;
   fetchImpl?: typeof fetch;
 };
 
@@ -33,7 +33,7 @@ export class ResponsesSearchRuntime implements ToolRuntime {
   private readonly subagentModel: string;
   private readonly timeoutMs: number;
   private readonly subagentTimeoutMs: number;
-  private readonly resolveProvider: ((context: ToolContext) => ResponsesSearchProvider | undefined) | undefined;
+  private readonly resolveProvider: ((context: ToolContext, binding?: ModelBindingSnapshot) => ResponsesSearchProvider | undefined) | undefined;
   private readonly fetchImpl: typeof fetch;
   private readonly subagent: WebResearchSubagent;
 
@@ -65,11 +65,12 @@ export class ResponsesSearchRuntime implements ToolRuntime {
     const mode = normalizeSearchMode(context.searchMode);
     if (mode === "diy") return [];
     const isNative = mode === "native";
+    const subagentModel = context.researchModelBinding?.model ?? this.subagentModel;
     return [{
       name: SEARCH_TOOL_NAME,
       description: isNative
         ? "Use the active model to execute the Provider's native web retrieval capability."
-        : `Delegate research to an isolated ${this.subagentModel} subagent with web_search as its only capability.`,
+        : `Delegate research to an isolated ${subagentModel} subagent with web_search as its only capability.`,
       parameters: {
         type: "object",
         properties: {
@@ -92,7 +93,7 @@ export class ResponsesSearchRuntime implements ToolRuntime {
     if (mode === "diy") {
       return { name: call.name, ok: false, content: "Responses search mode is not active.", data: { error_code: "invalid_search_mode" } };
     }
-    if (mode === "subagent") return this.subagent.run(call, context, signal);
+    if (mode === "subagent") return this.runSubagent(call, context, signal);
     return this.searchDirect(call, context, signal);
   }
 
@@ -103,7 +104,7 @@ export class ResponsesSearchRuntime implements ToolRuntime {
     }
     const count = clampInteger(call.arguments.count, 5, 1, 10);
     const model = context.model;
-    const providerConfig = this.resolveProvider?.(context);
+    const providerConfig = this.resolveProvider?.(context, context.modelBinding);
     const apiKey = providerConfig ? providerConfig.apiKey?.trim() ?? "" : this.apiKey;
     const baseUrl = providerConfig ? providerConfig.baseUrl.trim().replace(/\/+$/, "") : this.baseUrl;
     const provider = "model_native_responses";
@@ -185,6 +186,50 @@ export class ResponsesSearchRuntime implements ToolRuntime {
         },
       };
     }
+  }
+
+  private runSubagent(call: ToolCall, context: ToolContext, signal: AbortSignal): Promise<ToolResult> {
+    const binding = context.researchModelBinding;
+    if (!binding) return this.subagent.run(call, context, signal);
+    const baseData = {
+      trace_kind: "web_search",
+      provider: "responses_api_subagent",
+      search_mode: "subagent",
+      model: binding.model,
+      query: String(call.arguments.query ?? "").trim(),
+      results: [],
+      parent_run_id: context.runId,
+      ...(context.toolCallId ? { parent_tool_call_id: context.toolCallId } : {}),
+    };
+    if (!binding.active) {
+      return Promise.resolve({
+        name: call.name,
+        ok: false,
+        content: `Web research model ${binding.id} is disabled. Choose an active model in Model Catalog.`,
+        data: { ...baseData, capability_status: "unavailable", error_code: "model_catalog_model_inactive" },
+      });
+    }
+    if (binding.adapter !== "openai-compatible") {
+      return Promise.resolve({
+        name: call.name,
+        ok: false,
+        content: `Web research model provider ${binding.adapter} is not supported.`,
+        data: { ...baseData, capability_status: "unavailable", error_code: "provider_adapter_unsupported" },
+      });
+    }
+    const provider = this.resolveProvider?.(context, binding) ?? { baseUrl: this.baseUrl, apiKey: this.apiKey };
+    const subagent = new WebResearchSubagent({
+      model: binding.model,
+      apiKey: provider.apiKey ?? "",
+      baseUrl: provider.baseUrl,
+      webSearch: this,
+      timeoutMs: this.subagentTimeoutMs,
+      toolTimeoutMs: this.timeoutMs,
+      ...(binding.toolProtocol ? { toolProtocol: binding.toolProtocol } : {}),
+      modelBinding: binding,
+      fetchImpl: this.fetchImpl,
+    });
+    return subagent.run(call, context, signal);
   }
 
   async status(_context: ToolContext): Promise<Record<string, unknown>[]> {

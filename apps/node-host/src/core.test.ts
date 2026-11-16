@@ -270,6 +270,8 @@ describe("AgentCore", () => {
       ...input,
       runId: "run-stop" as AgentRunInput["runId"],
       model: "frozen-model",
+      modelBinding: { id: "flash", adapter: "openai-compatible", model: "frozen-model", credentialRef: "primary", toolProtocol: "auto", revision: 3, active: true },
+      researchModelBinding: { id: "research", adapter: "openai-compatible", model: "frozen-research", credentialRef: "research", toolProtocol: "auto", revision: 2, active: true },
       temperature: 0.2,
       systemPrompt: "Keep this system instruction.",
       allowedToolNames: new Set(["echo"]),
@@ -278,6 +280,11 @@ describe("AgentCore", () => {
       if (event.type === "run.started") await controller.stop(input.sessionId, "user_stop");
     }
     expect(events.at(-1)?.type).toBe("run.stopped");
+    expect((await sessions.open(input.sessionId)).checkpoint?.state).toMatchObject({
+      model: "frozen-model",
+      modelBinding: { id: "flash", revision: 3 },
+      researchModelBinding: { id: "research", revision: 2 },
+    });
 
     const resumed = [];
     for await (const event of controller.start({
@@ -286,6 +293,8 @@ describe("AgentCore", () => {
       message: null,
       resume: true,
       model: "new-model",
+      modelBinding: { id: "flash", adapter: "openai-compatible", model: "new-model", credentialRef: "primary", toolProtocol: "auto", revision: 4, active: true },
+      researchModelBinding: { id: "research", adapter: "openai-compatible", model: "new-research", credentialRef: "research", toolProtocol: "auto", revision: 3, active: true },
       temperature: 0.9,
       systemPrompt: "Replace this system instruction.",
       allowedToolNames: new Set(["other"]),
@@ -293,6 +302,7 @@ describe("AgentCore", () => {
     expect(resumed.at(-1)?.type).toBe("run.finished");
     expect(resumed.at(-1)?.data.final_text).toBe("resumed");
     expect(model.streamCalls[1]?.model).toBe("frozen-model");
+    expect(model.streamCalls[1]?.modelBinding).toMatchObject({ id: "flash", model: "frozen-model", revision: 3 });
     expect(model.streamCalls[1]?.temperature).toBe(0.2);
     expect(model.streamCalls[1]?.messages[0]).toEqual({ role: "system", content: "Keep this system instruction." });
   });

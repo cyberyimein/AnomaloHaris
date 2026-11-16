@@ -298,6 +298,22 @@ reuses it on resume.
 
 ### Preset Models
 
+The **Models** tab maintains the shared provider model catalog. Each entry has a stable ID,
+an editable display name and actual provider model ID, and a credential reference. Select
+entries from the Preset Models dropdown or the system default and research subagent selectors.
+Editing an entry upgrades all its references for subsequent runs without restarting the host
+or changing preset versions. The editor shows affected references; selected references can
+also be moved to another entry. History restores create a new revision. Referenced entries
+cannot be deleted, and disabled entries cannot start new runs. Credentials remain in the
+deployment environment; this page does not store API keys.
+
+Catalog entries, history, bindings, and system selections persist in
+`ANOMALOHARIS_DATA_DIR/preset-models.sqlite3`. Existing published presets are automatically
+bound on first startup. `OPENROUTER_MODEL` and `WEB_RESEARCH_SUBAGENT_MODEL` seed initial
+selections; saved catalog selections take precedence afterward. In-progress, queued, and
+resumed runs retain their resolved model snapshot. Existing workflow dependency hashes
+remain valid when an entry's actual model changes.
+
 The **Preset Models** tab manages versioned Agent capability bundles. Saving edits keeps the
 current version number; change the Version field explicitly to create a new version. A Preset Model
 fixes the prompt, plugin set, provider model, tool policy, and runtime limits; callers select it

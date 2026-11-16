@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { assertLegalRunTransition, RunControl, type ExecutionRuntimeAdapter, type RunContext, type RuntimeResolveOptions } from "./run-control.js";
+import { assertLegalRunTransition, RunControl, type ExecutionRuntimeAdapter, type RunContext, type RunRequest, type RuntimeResolveOptions } from "./run-control.js";
 import { RuntimeCatalog } from "./runtime-catalog.js";
 
 const databases: DatabaseSync[] = [];
@@ -48,6 +48,33 @@ describe("RunControl", () => {
     const control = new RunControl(database, catalog);
     control.start({ kind: "workflow", ref: "demo@1" }, { clientId: "urus", input: { value: 1 }, idempotency_key: "operation-1" });
     expect(() => control.start({ kind: "workflow", ref: "demo@1" }, { clientId: "urus", input: { value: 2 }, idempotency_key: "operation-1" })).toThrow("idempotency key");
+  });
+
+  it("freezes prepared model input while queued and reuses it for an idempotent retry", async () => {
+    const database = new DatabaseSync(":memory:");
+    databases.push(database);
+    const catalog = new RuntimeCatalog();
+    const adapter = new SnapshotCapacityAdapter();
+    catalog.register(adapter);
+    const control = new RunControl(database, catalog, { maxConcurrency: 1 });
+
+    const blocker = control.start({ kind: "preset_model", ref: "agent@1" }, { clientId: "one", input: { hold: true } });
+    await adapter.firstRunStarted;
+    const queuedRequest = { clientId: "two", input: { message: "queued" }, idempotency_key: "queued-model-run" };
+    const queued = control.start({ kind: "preset_model", ref: "agent@1" }, queuedRequest);
+    expect(control.get(queued.runId).input).toMatchObject({ model_snapshot: { model: "model-v1" } });
+
+    adapter.model = "model-v2";
+    const retry = control.start({ kind: "preset_model", ref: "agent@1" }, queuedRequest);
+    expect(retry).toMatchObject({ runId: queued.runId, existing: true });
+    expect(control.get(retry.runId).input).toMatchObject({ model_snapshot: { model: "model-v1" } });
+
+    adapter.releaseFirstRun();
+    await Promise.all([collect(blocker), collect(queued)]);
+    expect(adapter.startedInputs).toEqual([
+      { hold: true, model_snapshot: { model: "model-v1" } },
+      { message: "queued", model_snapshot: { model: "model-v1" } },
+    ]);
   });
 
   it("converges residual running runs after a Host restart", async () => {
@@ -234,6 +261,31 @@ class CapacityAdapter implements ExecutionRuntimeAdapter {
     yield { type: "agent.run.finished", data: { output: input }, terminal: "succeeded" as const };
   }
   stop(): void {}
+}
+
+class SnapshotCapacityAdapter extends CapacityAdapter {
+  model = "model-v1";
+  readonly startedInputs: unknown[] = [];
+  private markFirstRunStarted!: () => void;
+  private releaseFirst!: () => void;
+  readonly firstRunStarted = new Promise<void>((resolve) => { this.markFirstRunStarted = resolve; });
+  private readonly firstRunRelease = new Promise<void>((resolve) => { this.releaseFirst = resolve; });
+
+  prepareInput({ request }: { runId: string; target: { ref: string }; request: RunRequest }): unknown {
+    const input = request.input as Record<string, unknown>;
+    return { ...input, model_snapshot: { model: this.model } };
+  }
+
+  override async *start(_context: RunContext, input: unknown) {
+    this.startedInputs.push(input);
+    if ((input as Record<string, unknown>)?.hold === true) {
+      this.markFirstRunStarted();
+      await this.firstRunRelease;
+    }
+    yield { type: "agent.run.finished", data: { output: input }, terminal: "succeeded" as const };
+  }
+
+  releaseFirstRun(): void { this.releaseFirst(); }
 }
 
 class RetiredPresetAdapter implements ExecutionRuntimeAdapter {

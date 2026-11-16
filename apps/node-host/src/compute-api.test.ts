@@ -8,7 +8,7 @@ import { RunController } from "./controller.js";
 import { AgentRuntimeAdapter } from "./agent-runtime-adapter.js";
 import { RuntimeCatalog } from "./runtime-catalog.js";
 import { RunControl } from "./run-control.js";
-import { ReplayModelAdapter, type ReplayStep } from "./model.js";
+import { ReplayModelAdapter, type ModelAdapter, type ModelRequest, type ModelStreamEvent, type ReplayStep } from "./model.js";
 import { SqlitePresetModelRegistry } from "./preset-models.js";
 import { InMemorySessionAdapter } from "./session.js";
 import { buildNodeHost } from "./host.js";
@@ -259,7 +259,8 @@ describe("OpenAI-compatible compute API", () => {
     expect(first.json()).toMatchObject({ session_id: "native-session", events: expect.arrayContaining([expect.objectContaining({ type: "run.finished" })]) });
 
     const stored = database.prepare("SELECT input_json FROM execution_runs WHERE run_id = ?").get(first.json().run_id) as { input_json: string };
-    expect(JSON.parse(stored.input_json)).toEqual({ message: "run", resume: false, session_id: "native-session" });
+    expect(JSON.parse(stored.input_json)).toMatchObject({ message: "run", resume: false, session_id: "native-session" });
+    expect(JSON.parse(stored.input_json).model_binding).toMatchObject({ model: "luna-provider", id: "legacy:luna@1" });
 
     const replay = await app.inject(request);
     expect(replay.statusCode).toBe(200);
@@ -383,6 +384,77 @@ describe("OpenAI-compatible compute API", () => {
     store.close();
   });
 
+  it("keeps the queued catalog model for an in-flight run and reports it in usage", async () => {
+    const registry = new SqlitePresetModelRegistry(":memory:");
+    registries.push(registry);
+    registry.createDraft({
+      name: "luna",
+      version: 1,
+      description: "Coding preset",
+      provider: { adapter: "openai-compatible", model: "legacy-provider", tool_protocol: "auto" },
+      plugins: { fixed: [] },
+    });
+    registry.publish("luna@1");
+    const catalogModel = registry.modelCatalog.createModel({
+      id: "catalog-runtime-model",
+      name: "Runtime model",
+      adapter: "openai-compatible",
+      model: "catalog-model-v1",
+      toolProtocol: "auto",
+    });
+    registry.modelCatalog.bindPreset("luna@1", catalogModel.id);
+
+    const usage = new InMemoryUsageRepository();
+    const model = new DeferredModelAdapter();
+    const sessions = new InMemorySessionAdapter();
+    const controller = new RunController(new AgentCore({ model, tools: new DeterministicToolRuntime([]), sessions }));
+    const database = new DatabaseSync(":memory:");
+    databases.push(database);
+    const catalog = new RuntimeCatalog();
+    catalog.register(new AgentRuntimeAdapter({ registry, controller }));
+    const runControl = new RunControl(database, catalog);
+    const app = await buildNodeHost({
+      sessions,
+      model: "legacy-provider",
+      presetModels: registry,
+      defaultPresetModel: "luna@1",
+      runControl,
+      compute: {
+        auth: new ServiceAuth({ clients: [{ id: "luna-client", token: "luna-token" }] }),
+        usage,
+        runControl,
+      },
+    });
+    apps.push(app);
+
+    const firstResponse = app.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      headers: { authorization: "Bearer luna-token" },
+      payload: { model: "luna@1", messages: [{ role: "user", content: "first" }] },
+    });
+    await model.firstRequestStarted;
+    registry.modelCatalog.updateModel(catalogModel.id, {
+      expectedRevision: catalogModel.revision,
+      model: "catalog-model-v2",
+    });
+    model.releaseFirstRequest();
+    expect((await firstResponse).statusCode).toBe(200);
+
+    const secondResponse = await app.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      headers: { authorization: "Bearer luna-token" },
+      payload: { model: "luna@1", messages: [{ role: "user", content: "second" }] },
+    });
+    expect(secondResponse.statusCode).toBe(200);
+    expect(model.requests.map((request) => request.model)).toEqual(["catalog-model-v1", "catalog-model-v2"]);
+    await expect(usage.list()).resolves.toEqual([
+      expect.objectContaining({ providerModel: "catalog-model-v2", status: "completed" }),
+      expect.objectContaining({ providerModel: "catalog-model-v1", status: "completed" }),
+    ]);
+  });
+
   it("atomically reserves idempotency keys before provider execution", async () => {
     const store = new SqliteComputeStore(":memory:");
     await expect(store.reserve("client-1", "same-key", "hash-1", "2026-08-22T00:00:00.000Z"))
@@ -460,6 +532,34 @@ async function makeApp(
     },
   });
   return app;
+}
+
+class DeferredModelAdapter implements ModelAdapter {
+  readonly model = "deferred-model";
+  readonly requests: ModelRequest[] = [];
+  private markFirstRequestStarted!: () => void;
+  private releaseFirst!: () => void;
+  readonly firstRequestStarted = new Promise<void>((resolve) => { this.markFirstRequestStarted = resolve; });
+  private readonly firstRequestRelease = new Promise<void>((resolve) => { this.releaseFirst = resolve; });
+  private requestCount = 0;
+
+  async *stream(request: ModelRequest): AsyncIterable<ModelStreamEvent> {
+    this.requests.push(structuredClone(request));
+    if (this.requestCount++ === 0) {
+      this.markFirstRequestStarted();
+      await this.firstRequestRelease;
+    }
+    yield { type: "text.delta", text: "answer" };
+    yield { type: "done" };
+  }
+
+  async complete(): Promise<string> {
+    return "answer";
+  }
+
+  releaseFirstRequest(): void {
+    this.releaseFirst();
+  }
 }
 
 async function makeUnifiedApp(steps: ReplayStep[], database: DatabaseSync) {

@@ -1,5 +1,4 @@
 import { BuddyAgentToolAdapter } from "./buddy-agent.js";
-import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,7 +11,6 @@ import { AgentCore } from "./core.js";
 import { ResourceContextBuilder } from "./context.js";
 import { BuddyDashboardClient } from "./buddy-dashboard.js";
 import { buildNodeHost } from "./host.js";
-import { OpenAICompatibleAdapter, ProviderUnavailableError, type ModelAdapter, type ModelCompletion, type ModelRequest, type ModelStreamEvent } from "./model.js";
 import { BrowserToolBridge, BrowserToolRuntime } from "./browser.js";
 import { FileResourceLoader } from "./resources.js";
 import { ChildProcessPluginBackend, PiPluginHost, readPluginLoadConfig } from "./plugins.js";
@@ -33,6 +31,8 @@ import { AgentRuntimeAdapter } from "./agent-runtime-adapter.js";
 import { RuntimeCatalog } from "./runtime-catalog.js";
 import { RunControl } from "./run-control.js";
 import { WorkflowRuntimeAdapter } from "./workflow-runtime-adapter.js";
+import type { ModelBindingSnapshot } from "./types.js";
+import { PresetModelAdapter } from "./preset-model-adapter.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..", "..");
 loadHostEnvironment(repoRoot);
@@ -129,6 +129,7 @@ const presetModels = new SqlitePresetModelRegistry(presetModelDatabasePath, {
   catalog: pluginCatalog,
   resolvePrompt: (profile) => resources.promptText(profile),
   bundledSkillSnapshot,
+  defaultPresetModelRef,
 });
 const serviceClients = parseServiceClients(env("ANOMALOHARIS_SERVICE_TOKENS"), env("ANOMALOHARIS_SERVICE_TOKEN"));
 if (hasPublicBinding && serviceClients.length === 0) {
@@ -147,6 +148,9 @@ presetModels.ensureBuiltinDefault({
   promptProfile: env("ANOMALOHARIS_AGENT_PROMPT_PROFILE") ?? "agent",
 });
 presetModels.ensureBuiltinUrusScheduledEvent({ model: modelName });
+presetModels.seedModelCatalogBindings({ defaultModel: modelName, researchModel: subagentModel });
+const defaultModelBinding = presetModels.getDefaultModelBinding("default");
+const researchModelBinding = presetModels.getDefaultModelBinding("research");
 const defaultPresetModel = presetModels.resolve(defaultPresetModelRef);
 
 const browserBridge = new BrowserToolBridge(Number(process.env.BROWSER_TOOL_TIMEOUT_SECONDS ?? "60") * 1000);
@@ -219,61 +223,12 @@ const workflowRuntime = new WorkflowRuntime({
   },
 });
 
-class PresetModelAdapter implements ModelAdapter {
-  readonly model: string;
-  private readonly adapters = new Map<string, ModelAdapter>();
-
-  constructor(private readonly options: {
-    registry: SqlitePresetModelRegistry;
-    model: string;
-    baseUrl: string;
-    apiKey?: string;
-  }) {
-    this.model = options.model;
-  }
-
-  async *stream(request: ModelRequest, signal: AbortSignal): AsyncIterable<ModelStreamEvent> {
-    yield* this.adapterFor(request).stream(request, signal);
-  }
-
-  async complete(request: ModelRequest, signal: AbortSignal): Promise<string | ModelCompletion> {
-    return this.adapterFor(request).complete(request, signal);
-  }
-
-  private adapterFor(request: ModelRequest): ModelAdapter {
-    if (!request.presetModelRef) throw new Error("preset_model_required");
-    const compiled = this.options.registry.resolveForBoundSession(request.presetModelRef);
-    const provider = providerConfig(compiled, this.options);
-    const cacheKey = [
-      compiled.ref,
-      provider.model,
-      provider.baseUrl,
-      compiled.credentialRef ?? "default",
-      provider.toolProtocol,
-      provider.apiKey ? createHash("sha256").update(provider.apiKey).digest("hex") : "missing",
-    ].join("\u0000");
-    const cached = this.adapters.get(cacheKey);
-    if (cached) return cached;
-    if (!provider.apiKey) {
-      throw new ProviderUnavailableError(`No credential is configured for Preset Model ${compiled.ref}.`);
-    }
-    const adapter = new OpenAICompatibleAdapter({
-      model: provider.model,
-      baseUrl: provider.baseUrl,
-      apiKey: provider.apiKey,
-      toolProtocol: provider.toolProtocol,
-    });
-    this.adapters.set(cacheKey, adapter);
-    return adapter;
-  }
-}
-
 function providerConfig(
-  model: CompiledPresetModel,
+  model: ModelBindingSnapshot,
   options: { baseUrl: string; apiKey?: string },
 ): { model: string; baseUrl: string; apiKey?: string; credentialRef?: string; toolProtocol: "openai" | "dsml" | "auto" | "none" } {
-  if (model.definition.provider.adapter !== "openai-compatible") {
-    throw new Error(`provider_adapter_unsupported:${model.definition.provider.adapter}`);
+  if (model.adapter !== "openai-compatible") {
+    throw new Error(`provider_adapter_unsupported:${model.adapter}`);
   }
   const credentialRef = model.credentialRef;
   const envPrefix = credentialRef
@@ -284,19 +239,35 @@ function providerConfig(
   const apiKey = credentialApiKey ?? (credentialRef === "openrouter-primary" || !credentialRef ? options.apiKey : undefined);
   const baseUrl = credentialBaseUrl ?? options.baseUrl;
   return {
-    model: model.providerModel,
+    model: model.model,
     baseUrl,
     ...(credentialRef ? { credentialRef } : {}),
     ...(apiKey ? { apiKey } : {}),
+    toolProtocol: model.toolProtocol ?? "auto",
+  };
+}
+
+function bindingFromPreset(model: CompiledPresetModel): ModelBindingSnapshot {
+  return {
+    id: `legacy:${model.ref}`,
+    adapter: model.definition.provider.adapter,
+    model: model.providerModel,
+    ...(model.credentialRef ? { credentialRef: model.credentialRef } : {}),
     toolProtocol: model.toolProtocol,
+    revision: 0,
+    active: true,
   };
 }
 
 const model = new PresetModelAdapter({
   registry: presetModels,
-  model: defaultPresetModel.providerModel,
+  model: defaultModelBinding?.model ?? defaultPresetModel.providerModel,
   baseUrl,
   ...(apiKey ? { apiKey } : {}),
+  resolveProvider: (binding) => {
+    const provider = providerConfig(binding, { baseUrl, ...(apiKey ? { apiKey } : {}) });
+    return { baseUrl: provider.baseUrl, ...(provider.apiKey ? { apiKey: provider.apiKey } : {}) };
+  },
 });
 let bot!: BotService;
 const tools = new CompositeToolRuntime([
@@ -313,13 +284,18 @@ const tools = new CompositeToolRuntime([
   asToolAdapter("web", 81, new ResponsesSearchRuntime({
     ...(apiKey ? { apiKey } : {}),
     baseUrl,
-    subagentModel,
+    subagentModel: researchModelBinding?.model ?? subagentModel,
     timeoutMs: searchTimeoutMs,
-    resolveProvider: (context) => {
-      if (!context.presetModelRef) return undefined;
+    resolveProvider: (context, selectedBinding) => {
       try {
-        const compiled = presetModels.resolveForBoundSession(context.presetModelRef);
-        const provider = providerConfig(compiled, { baseUrl, ...(apiKey ? { apiKey } : {}) });
+        const binding = selectedBinding
+          ?? context.modelBinding
+          ?? (context.presetModelRef
+            ? presetModels.resolvePresetBinding(context.presetModelRef)
+              ?? bindingFromPreset(presetModels.resolveForBoundSession(context.presetModelRef))
+            : undefined);
+        if (!binding || !binding.active) return { baseUrl: "", apiKey: "" };
+        const provider = providerConfig(binding, { baseUrl, ...(apiKey ? { apiKey } : {}) });
         return {
           baseUrl: provider.baseUrl,
           ...(provider.apiKey ? { apiKey: provider.apiKey } : {}),
@@ -347,7 +323,7 @@ const core = new AgentCore({
 const controller = new RunController(core);
 const workflowRunStore = new WorkflowRunStore(workflowRuntime.registry.db);
 const runtimeCatalog = new RuntimeCatalog();
-const agentRuntimeAdapter = new AgentRuntimeAdapter({ registry: presetModels, controller, prepareInput: (context, input) => bot.prepareInput(context, input) });
+const agentRuntimeAdapter = new AgentRuntimeAdapter({ registry: presetModels, controller, defaultPresetModelRef, prepareInput: (context, input) => bot.prepareInput(context, input) });
 let runControl!: RunControl;
 const workflowRuntimeAdapter = new WorkflowRuntimeAdapter({
   runtime: workflowRuntime,
@@ -384,7 +360,7 @@ const managementToken = env("ANOMALOHARIS_ADMIN_TOKEN");
 const app = await buildNodeHost({
   sessions,
   bot,
-  model: modelName,
+  model: defaultModelBinding?.model ?? modelName,
   presetModels,
   defaultPresetModel: defaultPresetModel.ref,
   browserBridge,
@@ -396,7 +372,7 @@ const app = await buildNodeHost({
   pluginCatalog,
   ...(buddyDashboard ? { buddy: buddyDashboard } : {}),
   ...(providerCredits ? { providerCredits } : {}),
-  subagentModel,
+  subagentModel: researchModelBinding?.model ?? subagentModel,
   pythonSandbox,
   ...(managementToken ? { managementToken } : {}),
   workflowManagement: workflowRuntime,

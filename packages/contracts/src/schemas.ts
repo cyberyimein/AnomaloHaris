@@ -176,6 +176,28 @@ export const PresetModelSummarySchema = Type.Object({
   compiled_hash: Type.String({ minLength: 1 }),
 });
 
+export const ModelCatalogEntrySchema = Type.Object({
+  id: Type.String({ minLength: 1, maxLength: 64 }),
+  name: Type.String({ minLength: 1, maxLength: 120 }),
+  adapter: Type.String({ minLength: 1, maxLength: 80 }),
+  model: Type.String({ minLength: 1, maxLength: 200 }),
+  credential_ref: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+  tool_protocol: Type.Optional(Type.Union([Type.Literal("openai"), Type.Literal("dsml"), Type.Literal("auto"), Type.Literal("none")])),
+  capabilities: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+  active: Type.Boolean(),
+  revision: Type.Integer({ minimum: 1 }),
+  created_at: Type.String(),
+  updated_at: Type.String(),
+  usage_count: Type.Integer({ minimum: 0 }),
+}, { additionalProperties: false, $id: "https://anomaloharis.dev/schemas/model-catalog-entry.schema.json" });
+
+export const ModelCatalogDefaultsSchema = Type.Object({
+  default_model_id: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
+  research_model_id: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
+  revision: Type.Integer({ minimum: 0 }),
+  updated_at: Type.String(),
+}, { additionalProperties: false, $id: "https://anomaloharis.dev/schemas/model-catalog-defaults.schema.json" });
+
 export const RunRequestSchema = Type.Object(
   {
     message: Type.Union([Type.String(), Type.Null()]),

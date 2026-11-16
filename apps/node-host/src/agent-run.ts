@@ -186,6 +186,12 @@ export class AgentRun {
       promptProfile: input.promptProfile,
     };
     if (input.presetModelRef) config.model_ref = input.presetModelRef;
+    if (input.modelBinding) {
+      config.model_binding = input.modelBinding;
+      config.model_id = input.modelBinding.id;
+      config.model_revision = input.modelBinding.revision;
+    }
+    if (input.researchModelBinding) config.research_model_binding = input.researchModelBinding;
     if (input.compiledHash) config.compiled_hash = input.compiledHash;
     if (input.temperature !== undefined) config.temperature = input.temperature;
     if (input.allowedPluginIds) config.plugin_ids = [...input.allowedPluginIds].sort();
@@ -299,6 +305,7 @@ export class AgentRun {
     }
     this.pendingImages.clear();
     const request: ModelRequest = { model: this.input.model, messages: [...messages, ...frames], tools };
+    if (this.input.modelBinding) request.modelBinding = structuredClone(this.input.modelBinding);
     if (this.input.presetModelRef) request.presetModelRef = this.input.presetModelRef;
     if (this.input.toolProtocol) request.toolProtocol = this.input.toolProtocol;
     if (this.input.temperature !== undefined) request.temperature = this.input.temperature;
@@ -330,6 +337,10 @@ export class AgentRun {
         profile: this.input.promptProfile,
       },
     };
+    if (this.input.modelBinding) {
+      data.model_id = this.input.modelBinding.id;
+      data.model_revision = this.input.modelBinding.revision;
+    }
     if (attempt !== undefined) data.attempt = attempt;
     return this.event("llm.request", data);
   }
@@ -342,6 +353,8 @@ export class AgentRun {
       model: this.input.model,
       ...resources,
     };
+    if (this.input.modelBinding) context.modelBinding = this.input.modelBinding;
+    if (this.input.researchModelBinding) context.researchModelBinding = this.input.researchModelBinding;
     if (toolCallId) context.toolCallId = toolCallId;
     if (this.input.presetModelRef) context.presetModelRef = this.input.presetModelRef;
     if (this.input.skillSnapshot !== undefined) context.skillSnapshot = structuredClone(this.input.skillSnapshot);
@@ -407,6 +420,8 @@ export class AgentRun {
       model: input.model,
       searchMode: input.searchMode,
     };
+    if (input.modelBinding) saved.modelBinding = structuredClone(input.modelBinding);
+    if (input.researchModelBinding) saved.researchModelBinding = structuredClone(input.researchModelBinding);
     if (input.systemPrompt !== undefined) saved.systemPrompt = input.systemPrompt;
     if (input.responseFormat !== undefined) saved.responseFormat = input.responseFormat;
     if (input.allowedToolNames !== undefined) saved.allowedToolNames = [...input.allowedToolNames].sort();
@@ -529,6 +544,10 @@ function resolveRunInput(
     searchMode: saved?.searchMode ?? input.searchMode,
     policy: structuredClone(saved?.policy ?? input.policy ?? fallbackPolicy),
   };
+  const modelBinding = saved?.modelBinding ?? input.modelBinding;
+  if (modelBinding !== undefined) config.modelBinding = structuredClone(modelBinding);
+  const researchModelBinding = saved?.researchModelBinding ?? input.researchModelBinding;
+  if (researchModelBinding !== undefined) config.researchModelBinding = structuredClone(researchModelBinding);
   // Test presence explicitly: zero temperature and empty allowlists are valid values.
   const temperature = saved?.temperature ?? input.temperature ?? input.policy?.temperature;
   if (temperature !== undefined) config.temperature = temperature;

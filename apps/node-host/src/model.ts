@@ -1,11 +1,12 @@
 import type { ToolCall } from "@anomaloharis/contracts";
 
 import { DsmlProtocolError, DsmlToolCallParser } from "./dsml.js";
-import type { ModelMessage, ResponseFormat, ToolDefinition } from "./types.js";
+import type { ModelBindingSnapshot, ModelMessage, ResponseFormat, ToolDefinition } from "./types.js";
 
 export type ModelRequest = {
   model: string;
   maxTokens?: number;
+  modelBinding?: ModelBindingSnapshot | undefined;
   presetModelRef?: string | undefined;
   toolProtocol?: "openai" | "dsml" | "auto" | "none" | undefined;
   temperature?: number | undefined;

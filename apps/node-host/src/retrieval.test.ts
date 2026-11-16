@@ -180,6 +180,54 @@ describe("ResponsesSearchRuntime", () => {
     expect((await runtime.list({ ...context, searchMode: "subagent" }))[0]?.timeout_ms).toBe(180_000);
   });
 
+  it("uses the research model binding frozen on the parent run", async () => {
+    const requests: Array<{ url: string; init: RequestInit | undefined }> = [];
+    const runtime = new ResponsesSearchRuntime({
+      apiKey: "global-key",
+      baseUrl: "https://global.test/v1",
+      resolveProvider: (_context, binding) => binding?.id === "research-v1"
+        ? { baseUrl: "https://research.test/v1", apiKey: "research-key" }
+        : undefined,
+      fetchImpl: async (url, init) => {
+        const requestUrl = String(url);
+        requests.push({ url: requestUrl, init });
+        if (requestUrl.endsWith("/chat/completions")) {
+          const chatRequests = requests.filter((item) => item.url.endsWith("/chat/completions"));
+          return sseResponse(chatRequests.length === 1
+            ? [{ choices: [{ delta: { tool_calls: [{ index: 0, id: "research-call", function: { name: "web_search", arguments: JSON.stringify({ query: "research" }) } }] } }] }, "[DONE]"]
+            : [{ choices: [{ delta: { content: "research answer" } }] }, "[DONE]"]);
+        }
+        return new Response(JSON.stringify({ id: "research-response", output: [{ type: "message", content: [{ type: "output_text", text: "source" }] }] }), { status: 200 });
+      },
+    });
+    const researchModelBinding = {
+      id: "research-v1",
+      adapter: "openai-compatible",
+      model: "deepseek/research-v1",
+      credentialRef: "research-provider",
+      toolProtocol: "auto" as const,
+      revision: 2,
+      active: true,
+    };
+
+    const result = await runtime.call(
+      { id: "call-research", name: "web_search", arguments: { query: "research" } },
+      { ...context, searchMode: "subagent", researchModelBinding },
+      new AbortController().signal,
+    );
+
+    expect(result.ok).toBe(true);
+    const chatRequests = requests.filter((item) => item.url.endsWith("/chat/completions"));
+    expect(chatRequests).toHaveLength(2);
+    expect(chatRequests.map((item) => JSON.parse(String(item.init?.body)).model)).toEqual([
+      "deepseek/research-v1",
+      "deepseek/research-v1",
+    ]);
+    expect(chatRequests.every((item) => new Headers(item.init?.headers).get("Authorization") === "Bearer research-key")).toBe(true);
+    const webRequest = requests.find((item) => item.url.endsWith("/responses"));
+    expect(JSON.parse(String(webRequest?.init?.body)).model).toBe("deepseek/research-v1");
+  });
+
   it("returns a capability error without making a request when credentials are missing", async () => {
     let requests = 0;
     const runtime = new ResponsesSearchRuntime({

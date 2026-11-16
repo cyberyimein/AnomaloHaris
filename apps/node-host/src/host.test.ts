@@ -400,6 +400,132 @@ describe("Node Host", () => {
     ]);
   });
 
+  it("manages model catalog revisions, preset bindings, and defaults without exposing secrets or changing preset hashes", async () => {
+    const registry = new SqlitePresetModelRegistry(":memory:");
+    registries.push(registry);
+    const defaultPreset = registry.ensureBuiltinDefault({ model: "deepseek/original" });
+    registry.seedModelCatalogBindings({ defaultModel: "deepseek/original", researchModel: "deepseek/research" });
+    const hashBefore = defaultPreset.compiledHash;
+    const app = await makeApp([], undefined, registry, undefined, undefined, "catalog-admin");
+    apps.push(app);
+    const headers = { "x-anomaloharis-admin-token": "catalog-admin" };
+
+    expect((await app.inject({ method: "GET", url: "/api/manage/model-catalog" })).statusCode).toBe(403);
+    const initial = await app.inject({ method: "GET", url: "/api/manage/model-catalog", headers });
+    expect(initial.statusCode).toBe(200);
+    expect(initial.json().models[0]).toHaveProperty("credential_ref", "openrouter-primary");
+    expect(JSON.stringify(initial.json())).not.toContain("api_key");
+
+    const unsupported = await app.inject({
+      method: "POST",
+      url: "/api/manage/model-catalog",
+      headers,
+      payload: { id: "unsupported", name: "Unsupported", adapter: "anthropic", model: "provider/model" },
+    });
+    expect(unsupported.statusCode).toBe(400);
+    expect(unsupported.json().error_code).toBe("model_catalog_adapter_unsupported");
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/manage/model-catalog",
+      headers,
+      payload: { id: "catalog-alt", name: "Alternate", adapter: "openai-compatible", model: "deepseek/alternate", credential_ref: "openrouter-primary" },
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json().model).toMatchObject({ id: "catalog-alt", revision: 1, active: true, model: "deepseek/alternate" });
+
+    const presetModel = await app.inject({
+      method: "PUT",
+      url: "/api/manage/preset-models/anomaloharis/versions/1",
+      headers,
+      payload: { ...defaultPreset.definition, provider: { ...defaultPreset.definition.provider, model: "ui-model-value" }, provider_model_id: "catalog-alt" },
+    });
+    expect(presetModel.statusCode).toBe(200);
+    expect(presetModel.json().preset_model).toMatchObject({
+      ref: "anomaloharis@1",
+      provider_model_id: "catalog-alt",
+      provider_model: "deepseek/alternate",
+    });
+    expect(registry.resolve("anomaloharis@1").compiledHash).toBe(hashBefore);
+
+    const changed = await app.inject({
+      method: "PUT",
+      url: "/api/manage/model-catalog/catalog-alt",
+      headers,
+      payload: { expected_revision: 1, model: "deepseek/alternate-v2" },
+    });
+    expect(changed.statusCode).toBe(200);
+    expect(changed.json().model).toMatchObject({ revision: 2, model: "deepseek/alternate-v2" });
+    const conflict = await app.inject({
+      method: "PUT",
+      url: "/api/manage/model-catalog/catalog-alt",
+      headers,
+      payload: { expected_revision: 1, model: "deepseek/stale" },
+    });
+    expect(conflict.statusCode).toBe(409);
+    expect(conflict.json().error_code).toBe("model_catalog_revision_conflict");
+
+    const impact = await app.inject({ method: "GET", url: "/api/manage/model-catalog/catalog-alt/impact", headers });
+    expect(impact.json()).toMatchObject({
+      model_id: "catalog-alt",
+      preset_refs: ["anomaloharis@1"],
+      default_keys: ["default_model_id"],
+    });
+    const defaults = (await app.inject({ method: "GET", url: "/api/manage/model-catalog/defaults", headers })).json().defaults;
+    const savedDefaults = await app.inject({
+      method: "PUT",
+      url: "/api/manage/model-catalog/defaults",
+      headers,
+      payload: { default_model_id: "catalog-alt", research_model_id: defaults.research_model_id, expected_revision: defaults.revision },
+    });
+    expect(savedDefaults.statusCode).toBe(200);
+    expect(savedDefaults.json().defaults).toMatchObject({ default_model_id: "catalog-alt", revision: defaults.revision + 1 });
+
+    const target = await app.inject({
+      method: "POST",
+      url: "/api/manage/model-catalog",
+      headers,
+      payload: { id: "catalog-target", name: "Target", adapter: "openai-compatible", model: "deepseek/target" },
+    });
+    expect(target.statusCode).toBe(201);
+    const replaced = await app.inject({
+      method: "POST",
+      url: "/api/manage/model-catalog/catalog-alt/replace",
+      headers,
+      payload: {
+        target_model_id: "catalog-target",
+        include_defaults: true,
+        expected_revision: changed.json().model.revision,
+      },
+    });
+    expect(replaced.statusCode).toBe(200);
+    expect(replaced.json()).toMatchObject({
+      updated_preset_refs: ["anomaloharis@1"],
+      updated_default_keys: ["default_model_id"],
+    });
+    expect(registry.resolvePresetBinding("anomaloharis@1")?.id).toBe("catalog-target");
+    expect(registry.getDefaultModelBinding("default")?.id).toBe("catalog-target");
+
+    const history = await app.inject({ method: "GET", url: "/api/manage/model-catalog/catalog-alt/history", headers });
+    expect(history.statusCode).toBe(200);
+    expect(history.json().history.map((entry: { revision: number }) => entry.revision)).toEqual([2, 1]);
+    const restored = await app.inject({
+      method: "POST",
+      url: "/api/manage/model-catalog/catalog-alt/restore",
+      headers,
+      payload: { revision: 1, expected_revision: changed.json().model.revision },
+    });
+    expect(restored.statusCode).toBe(200);
+    expect(restored.json().model).toMatchObject({ revision: 3, model: "deepseek/alternate" });
+    const deleted = await app.inject({
+      method: "DELETE",
+      url: "/api/manage/model-catalog/catalog-alt?expected_revision=3",
+      headers,
+    });
+    expect(deleted.statusCode).toBe(200);
+    expect(registry.resolve("anomaloharis@1").compiledHash).toBe(hashBefore);
+  });
+
   it("authorizes same-version updates and rejects mismatched identities", async () => {
     const registry = new SqlitePresetModelRegistry(":memory:");
     registries.push(registry);

@@ -7,11 +7,12 @@ import type { CompiledPresetModel, SqlitePresetModelRegistry } from "./preset-mo
 import type {
   ExecutionRuntimeAdapter,
   ResolvedExecutionTarget,
+  RunRequest,
   RunContext,
   RuntimeEvent,
   RuntimeResolveOptions,
 } from "./run-control.js";
-import type { AgentRunInput, AgentPolicy } from "./types.js";
+import type { AgentRunInput, AgentPolicy, ModelBindingSnapshot } from "./types.js";
 import { SKILL_ACTIVATE_TOOL_NAME } from "./skills.js";
 
 export type AgentInvocation = {
@@ -19,8 +20,15 @@ export type AgentInvocation = {
   session_id?: string;
   resume?: boolean;
   response_format?: AgentRunInput["responseFormat"];
+  model_binding?: ModelBindingSnapshot;
+  research_model_binding?: ModelBindingSnapshot;
   /** Internal callers can provide the full legacy input to preserve behavior. */
   agent_input?: AgentRunInput;
+};
+
+type ModelBindingRegistry = {
+  resolvePresetBinding(ref: string): ModelBindingSnapshot | undefined;
+  getDefaultModelBinding(kind: "default" | "research"): ModelBindingSnapshot | undefined;
 };
 
 /**
@@ -39,8 +47,36 @@ export class AgentRuntimeAdapter implements ExecutionRuntimeAdapter {
   constructor(private readonly options: {
     registry: SqlitePresetModelRegistry;
     controller: RunController;
+    defaultPresetModelRef?: string;
     prepareInput?: (context: RunContext, input: AgentRunInput) => AgentRunInput;
   }) {}
+
+  prepareInput({ target, request }: { runId: string; target: ResolvedExecutionTarget; request: RunRequest }): unknown {
+    const model = resolvePublished(this.options.registry, target.ref, target.allowRetired === true);
+    const registry = this.options.registry as SqlitePresetModelRegistry & ModelBindingRegistry;
+    const presetBinding = registry.resolvePresetBinding(model.ref);
+    const configuredDefault = model.ref === this.options.defaultPresetModelRef
+      ? registry.getDefaultModelBinding("default")
+      : undefined;
+    const modelBinding = snapshotBinding(presetBinding ?? configuredDefault ?? bindingFromPreset(model));
+    if (!modelBinding.active) throw new Error(`model_catalog_binding_inactive:${modelBinding.id}`);
+    const researchBinding = registry.getDefaultModelBinding("research");
+    const invocation = withoutCallerBindings(toInvocation(request.input));
+    return {
+      ...invocation,
+      model_binding: modelBinding,
+      ...(researchBinding ? { research_model_binding: snapshotBinding(researchBinding) } : {}),
+      ...(invocation.agent_input ? {
+        agent_input: {
+          ...invocation.agent_input,
+          model: modelBinding.model,
+          modelBinding,
+          toolProtocol: modelBinding.toolProtocol ?? model.toolProtocol,
+          ...(researchBinding ? { researchModelBinding: snapshotBinding(researchBinding) } : {}),
+        },
+      } : {}),
+    };
+  }
 
   isHealthy(): boolean {
     return this.options.registry.db.isOpen;
@@ -63,7 +99,22 @@ export class AgentRuntimeAdapter implements ExecutionRuntimeAdapter {
     }
     const invocation = toInvocation(input);
     const baseInput = invocation.agent_input ?? buildAgentInput(context, model, invocation);
-    const agentInput = this.options.prepareInput ? this.options.prepareInput(context, baseInput) : baseInput;
+    const registry = this.options.registry as SqlitePresetModelRegistry & ModelBindingRegistry;
+    const presetBinding = registry.resolvePresetBinding(model.ref);
+    const configuredDefault = model.ref === this.options.defaultPresetModelRef
+      ? registry.getDefaultModelBinding("default")
+      : undefined;
+    const modelBinding = snapshotBinding(invocation.model_binding ?? baseInput.modelBinding ?? presetBinding ?? configuredDefault ?? bindingFromPreset(model));
+    if (!modelBinding.active) throw new Error(`model_catalog_binding_inactive:${modelBinding.id}`);
+    const researchModelBinding = invocation.research_model_binding ?? baseInput.researchModelBinding ?? registry.getDefaultModelBinding("research");
+    const withBindings: AgentRunInput = {
+      ...baseInput,
+      model: modelBinding.model,
+      modelBinding,
+      toolProtocol: modelBinding.toolProtocol ?? baseInput.toolProtocol,
+      ...(researchModelBinding ? { researchModelBinding: snapshotBinding(researchModelBinding) } : {}),
+    };
+    const agentInput = this.options.prepareInput ? this.options.prepareInput(context, withBindings) : withBindings;
     this.sessions.set(context.runId, agentInput.sessionId);
     try {
       for await (const event of this.options.controller.start({ ...agentInput, runId: context.runId as RunId }, context.signal)) {
@@ -89,6 +140,18 @@ function resolvePublished(registry: SqlitePresetModelRegistry, ref: string, allo
 function toInvocation(value: unknown): AgentInvocation {
   if (value && typeof value === "object" && !Array.isArray(value)) return value as AgentInvocation;
   return { message: typeof value === "string" ? value : JSON.stringify(value) };
+}
+
+function withoutCallerBindings(invocation: AgentInvocation): AgentInvocation {
+  const sanitized: AgentInvocation = { ...invocation };
+  delete sanitized.model_binding;
+  delete sanitized.research_model_binding;
+  if (sanitized.agent_input) {
+    sanitized.agent_input = { ...sanitized.agent_input };
+    delete sanitized.agent_input.modelBinding;
+    delete sanitized.agent_input.researchModelBinding;
+  }
+  return sanitized;
 }
 
 function buildAgentInput(
@@ -125,6 +188,22 @@ function buildAgentInput(
     ...(model.bootstrapTools ? { bootstrapTools: structuredClone(model.bootstrapTools) } : {}),
     ...(invocation.response_format ? { responseFormat: structuredClone(invocation.response_format) } : model.policy.responseFormat ? { responseFormat: structuredClone(model.policy.responseFormat) } : {}),
     ...(model.policy.temperature === undefined ? {} : { temperature: model.policy.temperature }),
+  };
+}
+
+function snapshotBinding(binding: ModelBindingSnapshot): ModelBindingSnapshot {
+  return structuredClone(binding);
+}
+
+function bindingFromPreset(model: CompiledPresetModel): ModelBindingSnapshot {
+  return {
+    id: `legacy:${model.ref}`,
+    adapter: model.definition.provider.adapter,
+    model: model.providerModel,
+    ...(model.credentialRef ? { credentialRef: model.credentialRef } : {}),
+    toolProtocol: model.toolProtocol,
+    revision: 0,
+    active: true,
   };
 }
 

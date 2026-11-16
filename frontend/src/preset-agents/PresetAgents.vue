@@ -103,7 +103,6 @@
             <span>System prompt</span>
             <textarea
               v-model="form.system_prompt"
-              required
               rows="10"
               placeholder="You are a focused research analyst…"
             ></textarea>
@@ -130,10 +129,32 @@
               ></textarea>
             </article>
           </div>
-          <label class="preset-field preset-field-model">
-            <span>LLM model</span>
-            <input v-model="form.model" required placeholder="deepseek/deepseek-v4-flash" />
-          </label>
+          <div class="preset-field preset-field-model">
+            <span>Model</span>
+            <input v-model.trim="modelSearch" type="search" aria-label="Filter model catalog" placeholder="Filter models" :disabled="!modelCatalogLoaded" />
+            <select
+              v-model="form.provider_model_id"
+              :required="!form.id"
+              :disabled="!modelCatalogLoaded"
+              aria-label="Select model catalog entry"
+              @change="applySelectedCatalogModel"
+            >
+              <option value="" disabled>Choose a model</option>
+              <option
+                v-for="model in filteredCatalogModels"
+                :key="model.id"
+                :value="model.id"
+                :disabled="!model.active && model.id !== form.provider_model_id"
+              >
+                {{ model.name }} · {{ model.model }}{{ model.active ? "" : " · Disabled" }}
+              </option>
+              <option v-if="form.provider_model_id && !modelCatalogModels.some((model) => model.id === form.provider_model_id)" :value="form.provider_model_id" disabled>
+                Unavailable · {{ form.provider_model_id }}
+              </option>
+            </select>
+            <small v-if="form.model">Current provider model: {{ form.model }}</small>
+            <small v-if="modelCatalogError" class="preset-model-catalog-error">{{ modelCatalogError }} The existing model value is preserved.</small>
+          </div>
           <label class="preset-field preset-field-temperature">
             <span>Temperature</span>
             <input v-model.number="form.temperature" type="number" min="0" max="2" step="0.1" />
@@ -249,7 +270,14 @@ const saving = ref(false);
 const editing = ref(false);
 const notice = ref("");
 const noticeIsError = ref(false);
-const defaults = reactive({ model: "deepseek/deepseek-v4.1-flash-1017", temperature: 0.4 });
+const defaults = reactive({ temperature: 0.4 });
+const modelCatalogModels = ref([]);
+const modelCatalogDefaults = ref({ default_model_id: "" });
+const modelCatalogLoaded = ref(false);
+const modelCatalogError = ref("");
+const modelSearch = ref("");
+const originalDefinition = ref(null);
+const originalFormFields = ref(null);
 const searchModeOptions = ref(fallbackSearchModeOptions());
 const form = reactive(emptyForm());
 const MAX_SKILL_FILE_BYTES = 256 * 1024;
@@ -270,12 +298,17 @@ function emptyForm() {
     system_prompt: "",
     skill_files: [],
     skill_format: "skills",
-    model: defaults?.model || "deepseek/deepseek-v4.1-flash-1017",
+    model: "",
+    provider_model_id: "",
+    adapter: "openai-compatible",
+    tool_protocol: "auto",
+    credential_ref: "",
     temperature: defaults?.temperature ?? 0.4,
     tool_names: [],
     search_mode: "diy",
     bootstrap_tools: [],
     fixed_plugins: ["host-core"],
+    definition_snapshot: null,
   };
 }
 
@@ -292,12 +325,65 @@ function replaceForm(value) {
   });
 }
 
+function editableFormFields(source) {
+  return {
+    id: source.id,
+    version: source.version,
+    name: source.name,
+    description: source.description,
+    ghost: source.ghost,
+    system_prompt: source.system_prompt,
+    skill_files: source.skill_files,
+    skill_format: source.skill_format,
+    prompt_profile: source.prompt_profile,
+    temperature: source.temperature,
+    tool_names: source.tool_names,
+    search_mode: source.search_mode,
+    bootstrap_tools: source.bootstrap_tools,
+    fixed_plugins: source.fixed_plugins,
+  };
+}
+
+function cloneJson(value) {
+  return value == null ? value : JSON.parse(JSON.stringify(value));
+}
+
 const retrievalToolSelected = computed(() => form.tool_names.includes("web_search"));
+const filteredCatalogModels = computed(() => {
+  const query = modelSearch.value.trim().toLowerCase();
+  const models = modelCatalogModels.value.filter((model) => model.active || model.id === form.provider_model_id);
+  return query
+    ? models.filter((model) => model.id === form.provider_model_id || `${model.name} ${model.id} ${model.model} ${model.adapter}`.toLowerCase().includes(query))
+    : models;
+});
 
 function beginCreate() {
+  if (!modelCatalogLoaded.value) {
+    showNotice(modelCatalogError.value || "Load the model catalog before creating a preset.", true);
+    return;
+  }
   replaceForm({});
+  originalDefinition.value = null;
+  originalFormFields.value = null;
+  const defaultModel = modelCatalogModels.value.find((model) => model.id === modelCatalogDefaults.value.default_model_id && model.active)
+    || modelCatalogModels.value.find((model) => model.active);
+  if (!defaultModel) {
+    showNotice("Add or activate a model in the Model Catalog first.", true);
+    return;
+  }
+  form.provider_model_id = defaultModel.id;
+  form.model = defaultModel.model;
   editing.value = true;
   notice.value = "";
+}
+
+function applySelectedCatalogModel() {
+  const selected = modelCatalogModels.value.find((model) => model.id === form.provider_model_id);
+  if (!selected) return;
+  form.model = selected.model;
+  form.adapter = selected.adapter;
+  form.tool_protocol = selected.tool_protocol || "auto";
+  form.credential_ref = selected.credential_ref || "";
 }
 
 function editAgent(agent) {
@@ -307,6 +393,8 @@ function editAgent(agent) {
     return;
   }
   replaceForm(agent);
+  originalDefinition.value = cloneJson(agent.definition_snapshot);
+  originalFormFields.value = cloneJson(editableFormFields(form));
   editing.value = true;
   notice.value = "";
 }
@@ -334,6 +422,8 @@ function setBootstrapClock(clock, enabled) {
 function closeEditor() {
   editing.value = false;
   replaceForm({});
+  originalDefinition.value = null;
+  originalFormFields.value = null;
 }
 
 async function load() {
@@ -344,6 +434,17 @@ async function load() {
       props.management.requestJson("/api/preset-models"),
       props.management.requestJson("/api/tools"),
     ]);
+    try {
+      const catalog = await props.management.requestJson("/api/manage/model-catalog");
+      modelCatalogModels.value = Array.isArray(catalog.models) ? catalog.models : [];
+      modelCatalogDefaults.value = catalog.defaults || { default_model_id: "" };
+      modelCatalogLoaded.value = true;
+      modelCatalogError.value = "";
+    } catch (error) {
+      modelCatalogLoaded.value = false;
+      modelCatalogError.value = `Model catalog unavailable: ${error.message || String(error)}.`;
+      props.management.markError(error);
+    }
     let modelRecords = publicModelData.preset_models || [];
     if (props.management.state.token.value) {
       try {
@@ -387,6 +488,7 @@ function toAgentForm(model) {
     id: model.ref,
     ref: model.ref,
     editable: Boolean(model?.definition),
+    definition_snapshot: structuredClone(definition),
     version: Number(model.version || 1),
     name: model.name,
     description: model.description || "",
@@ -395,7 +497,11 @@ function toAgentForm(model) {
     skill_files: skillFiles,
     skill_format: skillFormat,
     prompt_profile: definition.prompt?.profile || "agent",
-    model: provider.model || model.provider_model || defaults.model,
+    model: model.provider_model || provider.model || "",
+    provider_model_id: model.provider_model_id || "",
+    adapter: provider.adapter || "openai-compatible",
+    tool_protocol: provider.tool_protocol || "auto",
+    credential_ref: provider.credential_ref || "",
     temperature: Number(policy.temperature ?? defaults.temperature),
     tool_names: [...(plugins.allowed_tools || model.allowed_tools || model.tool_catalog || [])],
     search_mode: policy.search_mode || policy.searchMode || model.policy?.search_mode || model.policy?.searchMode || "diy",
@@ -519,14 +625,20 @@ async function saveAgent() {
     showNotice(error.message || String(error), true);
     return;
   }
-  const payload = {
+  let payload = {
     name: form.name.trim().toLowerCase(),
     version: nextVersion,
     description: form.description,
-    provider: { adapter: "openai-compatible", model: form.model, tool_protocol: "auto" },
+    provider: {
+      adapter: form.adapter || "openai-compatible",
+      model: form.model,
+      tool_protocol: form.tool_protocol || "auto",
+      ...(form.credential_ref ? { credential_ref: form.credential_ref } : {}),
+    },
+    ...(form.provider_model_id ? { provider_model_id: form.provider_model_id } : {}),
     prompt: {
       profile: form.prompt_profile || "agent",
-      system: form.system_prompt,
+      ...(form.system_prompt ? { system: form.system_prompt } : {}),
       ...skillPayload,
     },
     plugins: {
@@ -543,6 +655,13 @@ async function saveAgent() {
   try {
     const originalRef = splitModelRef(form.id);
     const updating = originalRef?.name === payload.name && originalRef.version === nextVersion;
+    const onlyCatalogBindingChanged = updating
+      && originalDefinition.value
+      && originalFormFields.value
+      && JSON.stringify(editableFormFields(form)) === JSON.stringify(originalFormFields.value);
+    if (onlyCatalogBindingChanged) {
+      payload = { ...cloneJson(originalDefinition.value), ...(form.provider_model_id ? { provider_model_id: form.provider_model_id } : {}) };
+    }
     const created = await props.management.requestJson(updating
       ? `/api/manage/preset-models/${encodeURIComponent(payload.name)}/versions/${nextVersion}`
       : "/api/manage/preset-models", {
@@ -659,6 +778,7 @@ defineExpose({ refresh: load });
 .preset-field > small { color: var(--muted); font-size: 11px; line-height: 1.4; }
 .preset-field-wide { grid-column: 1 / -1; }
 .preset-field-model { grid-column: 1 / 3; }
+.preset-model-catalog-error { color: #a13a35; }
 .preset-field textarea { resize: vertical; line-height: 1.5; }
 .preset-skill-list { display: grid; gap: 10px; }
 .preset-skill-card { border: 1px solid var(--line); border-radius: 10px; padding: 12px; }

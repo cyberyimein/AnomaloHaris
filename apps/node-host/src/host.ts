@@ -23,6 +23,8 @@ import { BuddyDashboardError, type BuddyDashboardClient } from "./buddy-dashboar
 import { projectNativeEvent, registerComputeRoutes, type ComputeApiOptions } from "./compute-api.js";
 import { randomIds } from "./ids.js";
 import { DEFAULT_PRESET_MODEL_REF, type CompiledPresetModel, SqlitePresetModelRegistry } from "./preset-models.js";
+import type { ModelBinding, ModelCatalogEntry, ModelCatalogDefaults, ModelCatalogProvider } from "./model-catalog.js";
+import { ModelCatalogRevisionConflictError } from "./model-catalog.js";
 import type { SessionRepository } from "./session.js";
 import type { SessionSnapshot, SessionSummary, ToolContext } from "./types.js";
 import type { ToolRuntime } from "./tools.js";
@@ -89,7 +91,8 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
   app.get("/api/runtime", async () => ({
     runtime: "node",
     session_schema: 2,
-    model: options.model,
+    model: currentDefaultModel(options),
+    default_model_id: options.presetModels?.modelCatalog.getDefaults().defaultModelId ?? null,
     default_preset_model: options.defaultPresetModel,
   }));
 
@@ -141,7 +144,7 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
 
   app.get<{ Params: { sessionId: string } }>("/api/sessions/:sessionId/search-mode", async (request, reply) => {
     const snapshot = await options.sessions.open(request.params.sessionId as SessionId);
-    return reply.send(searchModePayload(request.params.sessionId, snapshot.searchMode, options.model, options.subagentModel));
+    return reply.send(searchModePayload(request.params.sessionId, snapshot.searchMode, currentDefaultModel(options), currentResearchModel(options)));
   });
 
   app.patch<{ Params: { sessionId: string }; Body: unknown }>("/api/sessions/:sessionId/search-mode", async (request, reply) => {
@@ -153,7 +156,7 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
     if (!isSearchMode(mode)) return reply.code(400).send({ error: "Invalid search mode.", error_code: "invalid_search_mode" });
     if (!options.sessions.setSearchMode) return reply.code(501).send({ error: "Search mode persistence is not supported." });
     await options.sessions.setSearchMode(sessionId, mode);
-    return reply.send(searchModePayload(sessionId, mode, options.model, options.subagentModel));
+    return reply.send(searchModePayload(sessionId, mode, currentDefaultModel(options), currentResearchModel(options)));
   });
 
   app.get<{ Params: { sessionId: string } }>("/api/sessions/:sessionId/skills", async (request, reply) => {
@@ -205,12 +208,15 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
     return reply.send({ session_id: sessionId, active_servers: [...new Set(active)].sort(), servers: options.resources?.mcpServers(new Set(active)) ?? [] });
   });
 
-  app.get("/api/models", async () => ({ models: [{ id: options.model, model: options.model, object: "model", owned_by: "anomaloharis" }] }));
+  app.get("/api/models", async () => {
+    const model = currentDefaultModel(options);
+    return { models: [{ id: model, model, object: "model", owned_by: "anomaloharis" }] };
+  });
 
   app.get("/api/manage/providers", async (request, reply) => {
     try {
       requireManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
-      return reply.send({ providers: [{ id: "default", adapter: "openai-compatible", model: options.model }] });
+      return reply.send({ providers: [{ id: "default", adapter: "openai-compatible", model: currentDefaultModel(options) }] });
     } catch (error) {
       return sendHostError(reply, error);
     }
@@ -236,7 +242,7 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
         ...(includeHistory ? { includeRetired: true, includeHistory: true } : {}),
       }) ?? []).map((summary) => {
         const model = options.presetModels!.resolve(summary.ref, { allowDraft: true, allowRetired: true });
-        return serializePresetModel(model, true);
+        return serializePresetModel(model, true, options.presetModels!.resolvePresetBinding(model.ref));
       });
       return reply.send({ preset_models: models });
     } catch (error) {
@@ -248,8 +254,9 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
     try {
       requireManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
       if (!options.presetModels) throw new HostRequestError(503, "preset_model_unavailable", "Preset Model registry is not configured.");
-      const created = options.presetModels.createDraft(request.body as any);
-      return reply.code(201).send({ preset_model: serializePresetModel(created, true) });
+      const { definition, providerModelId } = readPresetModelMutation(request.body);
+      const created = options.presetModels.createDraft(definition as any, { modelId: providerModelId });
+      return reply.code(201).send({ preset_model: serializePresetModel(created, true, options.presetModels.resolvePresetBinding(created.ref)) });
     } catch (error) {
       return sendHostError(reply, error);
     }
@@ -259,8 +266,14 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
     try {
       requireManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
       if (!options.presetModels) throw new HostRequestError(503, "preset_model_unavailable", "Preset Model registry is not configured.");
-      const updated = options.presetModels.update(`${request.params.name}@${request.params.version}`, request.body as any);
-      return reply.send({ preset_model: serializePresetModel(updated, true) });
+      const { definition, providerModelId } = readPresetModelMutation(request.body);
+      const ref = `${request.params.name}@${request.params.version}`;
+      if (providerModelId !== undefined) {
+        const current = options.presetModels.resolve(ref, { allowDraft: true });
+        definition.provider = structuredClone(current.definition.provider);
+      }
+      const updated = options.presetModels.update(ref, definition as any, { modelId: providerModelId });
+      return reply.send({ preset_model: serializePresetModel(updated, true, options.presetModels.resolvePresetBinding(updated.ref)) });
     } catch (error) {
       return sendHostError(reply, error);
     }
@@ -274,7 +287,7 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
       const published = options.defaultPresetModel
         ? options.presetModels.publish(ref, { defaultRef: options.defaultPresetModel })
         : options.presetModels.publish(ref);
-      return reply.send({ preset_model: serializePresetModel(published, true) });
+      return reply.send({ preset_model: serializePresetModel(published, true, options.presetModels.resolvePresetBinding(published.ref)) });
     } catch (error) {
       return sendHostError(reply, error);
     }
@@ -288,7 +301,7 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
       const retired = options.defaultPresetModel
         ? options.presetModels.retire(ref, { defaultRef: options.defaultPresetModel })
         : options.presetModels.retire(ref);
-      return reply.send({ preset_model: serializePresetModel(retired, true) });
+      return reply.send({ preset_model: serializePresetModel(retired, true, options.presetModels.resolvePresetBinding(retired.ref)) });
     } catch (error) {
       return sendHostError(reply, error);
     }
@@ -299,7 +312,148 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
       requireManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
       if (!options.presetModels) throw new HostRequestError(503, "preset_model_unavailable", "Preset Model registry is not configured.");
       const model = options.presetModels.resolve(`${request.params.name}@${request.params.version}`, { allowDraft: true });
-      return reply.send({ valid: true, preset_model: serializePresetModel(model, true) });
+      return reply.send({ valid: true, preset_model: serializePresetModel(model, true, options.presetModels.resolvePresetBinding(model.ref)) });
+    } catch (error) {
+      return sendHostError(reply, error);
+    }
+  });
+
+  app.get("/api/manage/model-catalog", async (request, reply) => {
+    try {
+      requireManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
+      const catalog = requireModelCatalog(options.presetModels);
+      return reply.send({
+        models: catalog.listModels().map(serializeModelCatalogEntry),
+        defaults: serializeModelCatalogDefaults(catalog.getDefaults()),
+      });
+    } catch (error) {
+      return sendHostError(reply, error);
+    }
+  });
+
+  app.get("/api/manage/model-catalog/defaults", async (request, reply) => {
+    try {
+      requireManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
+      return reply.send({ defaults: serializeModelCatalogDefaults(requireModelCatalog(options.presetModels).getDefaults()) });
+    } catch (error) {
+      return sendHostError(reply, error);
+    }
+  });
+
+  app.put<{ Body: unknown }>("/api/manage/model-catalog/defaults", async (request, reply) => {
+    try {
+      requireManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
+      const body = asObject(request.body);
+      const defaultModelId = requiredString(body.default_model_id, "default_model_id");
+      const researchModelId = requiredString(body.research_model_id, "research_model_id");
+      const defaults = requireModelCatalog(options.presetModels).setDefaults({
+        defaultModelId,
+        researchModelId,
+        expectedRevision: requiredRevision(body.expected_revision),
+      });
+      return reply.send({ defaults: serializeModelCatalogDefaults(defaults) });
+    } catch (error) {
+      return sendHostError(reply, error);
+    }
+  });
+
+  app.post<{ Body: unknown }>("/api/manage/model-catalog", async (request, reply) => {
+    try {
+      requireManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
+      const body = asObject(request.body);
+      const model = requireModelCatalog(options.presetModels).createModel(readModelCatalogProvider(body));
+      return reply.code(201).send({ model: serializeModelCatalogEntry(model) });
+    } catch (error) {
+      return sendHostError(reply, error);
+    }
+  });
+
+  app.put<{ Params: { id: string }; Body: unknown }>("/api/manage/model-catalog/:id", async (request, reply) => {
+    try {
+      requireManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
+      const body = asObject(request.body);
+      const model = requireModelCatalog(options.presetModels).updateModel(request.params.id, {
+        ...readModelCatalogProviderPatch(body),
+        expectedRevision: requiredRevision(body.expected_revision),
+      });
+      return reply.send({ model: serializeModelCatalogEntry(model) });
+    } catch (error) {
+      return sendHostError(reply, error);
+    }
+  });
+
+  app.post<{ Params: { id: string }; Body: unknown }>("/api/manage/model-catalog/:id/activate", async (request, reply) => {
+    return setModelCatalogActive(request, reply, options, true);
+  });
+
+  app.post<{ Params: { id: string }; Body: unknown }>("/api/manage/model-catalog/:id/deactivate", async (request, reply) => {
+    return setModelCatalogActive(request, reply, options, false);
+  });
+
+  app.delete<{ Params: { id: string }; Querystring: { expected_revision?: string } }>("/api/manage/model-catalog/:id", async (request, reply) => {
+    try {
+      requireManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
+      const expectedRevision = Number((request.query as { expected_revision?: string }).expected_revision);
+      if (!Number.isInteger(expectedRevision) || expectedRevision < 1) throw new HostRequestError(400, "invalid_request", "expected_revision must be a positive integer.");
+      requireModelCatalog(options.presetModels).deleteModel(request.params.id, expectedRevision);
+      return reply.send({ deleted: true, model_id: request.params.id });
+    } catch (error) {
+      return sendHostError(reply, error);
+    }
+  });
+
+  app.get<{ Params: { id: string } }>("/api/manage/model-catalog/:id/history", async (request, reply) => {
+    try {
+      requireManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
+      const history = requireModelCatalog(options.presetModels).getModelHistory(request.params.id).map(serializeModelCatalogEntry);
+      return reply.send({ history });
+    } catch (error) {
+      return sendHostError(reply, error);
+    }
+  });
+
+  app.post<{ Params: { id: string }; Body: unknown }>("/api/manage/model-catalog/:id/restore", async (request, reply) => {
+    try {
+      requireManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
+      const body = asObject(request.body);
+      const model = requireModelCatalog(options.presetModels).restoreModelRevision(
+        request.params.id,
+        requiredRevision(body.revision),
+        requiredRevision(body.expected_revision),
+      );
+      return reply.send({ model: serializeModelCatalogEntry(model) });
+    } catch (error) {
+      return sendHostError(reply, error);
+    }
+  });
+
+  app.get<{ Params: { id: string } }>("/api/manage/model-catalog/:id/impact", async (request, reply) => {
+    try {
+      requireManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
+      const impact = requireModelCatalog(options.presetModels).listModelImpact(request.params.id);
+      return reply.send({ model_id: impact.modelId, preset_refs: impact.presetRefs, default_keys: impact.defaultKeys });
+    } catch (error) {
+      return sendHostError(reply, error);
+    }
+  });
+
+  app.post<{ Params: { id: string }; Body: unknown }>("/api/manage/model-catalog/:id/replace", async (request, reply) => {
+    try {
+      requireManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
+      const body = asObject(request.body);
+      const presetRefs = body.preset_refs === undefined ? undefined : readStringArray(body.preset_refs);
+      const result = requireModelCatalog(options.presetModels).replaceModelReferences(request.params.id, {
+        targetModelId: requiredString(body.target_model_id, "target_model_id"),
+        ...(presetRefs ? { presetRefs } : {}),
+        includeDefaults: body.include_defaults === true,
+        expectedRevision: requiredRevision(body.expected_revision),
+      });
+      return reply.send({
+        source_model_id: request.params.id,
+        target_model_id: body.target_model_id,
+        updated_preset_refs: result.updatedPresetRefs,
+        updated_default_keys: result.updatedDefaultKeys,
+      });
     } catch (error) {
       return sendHostError(reply, error);
     }
@@ -317,7 +471,8 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
   app.get("/api/preset-models", async () => ({
     preset_models: (options.presetModels?.list() ?? []).map((summary) => {
       try {
-        return serializePresetModel(options.presetModels!.resolve(summary.ref));
+        const model = options.presetModels!.resolve(summary.ref);
+        return serializePresetModel(model, false, options.presetModels!.resolvePresetBinding(model.ref));
       } catch (error) {
         return {
           ...summary,
@@ -334,7 +489,8 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
   app.get<{ Params: { modelRef: string } }>("/api/preset-models/:modelRef", async (request, reply) => {
     if (!options.presetModels) return reply.code(404).send({ error: "Preset Model registry is not configured." });
     try {
-      return reply.send(serializePresetModel(options.presetModels.resolve(request.params.modelRef)));
+      const model = options.presetModels.resolve(request.params.modelRef);
+      return reply.send(serializePresetModel(model, false, options.presetModels.resolvePresetBinding(model.ref)));
     } catch (error) {
       return sendHostError(reply, error);
     }
@@ -343,7 +499,8 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
   app.get<{ Params: { name: string; version: string } }>("/api/preset-models/:name/versions/:version", async (request, reply) => {
     if (!options.presetModels) return reply.code(404).send({ error: "Preset Model registry is not configured." });
     try {
-      return reply.send(serializePresetModel(options.presetModels.resolve(`${request.params.name}@${request.params.version}`)));
+      const model = options.presetModels.resolve(`${request.params.name}@${request.params.version}`);
+      return reply.send(serializePresetModel(model, false, options.presetModels.resolvePresetBinding(model.ref)));
     } catch (error) {
       return sendHostError(reply, error);
     }
@@ -380,6 +537,12 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
         ? new Set(preset.toolCatalog)
         : undefined;
     const skillSnapshot = preset ? preset.skillSnapshot : options.skillSnapshot;
+    const providerBinding = requestedRef && options.presetModels
+      ? interactiveDefault
+        ? options.presetModels.getDefaultModelBinding("default")
+        : options.presetModels.resolvePresetBinding(requestedRef)
+      : undefined;
+    const providerModel = providerBinding?.model ?? preset?.providerModel ?? currentDefaultModel(options);
     if (skillSnapshot?.skills.length && allowedToolNames) allowedToolNames.add(SKILL_ACTIVATE_TOOL_NAME);
     if (interactiveDefault && options.pythonSandbox && allowedToolNames) allowedToolNames.add(PYTHON_SANDBOX_TOOL_NAME);
     const allowedPluginIds = preset ? new Set(preset.fixedPlugins.map((selector) => selector.split("@")[0]!)) : undefined;
@@ -388,7 +551,7 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
       sessionId,
       runId: randomIds.runId(),
       searchMode: interactiveDefault ? snapshot?.searchMode ?? "diy" : preset?.policy.searchMode ?? snapshot?.searchMode ?? "diy",
-      model: preset?.providerModel ?? options.model,
+      model: providerModel,
       activeSkills: new Set(snapshot?.activeSkills ?? []),
       activeMcpServers: new Set(snapshot?.activeMcpServers ?? []),
       ...(skillSnapshot ? { skillSnapshot } : {}),
@@ -398,7 +561,7 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
     const tools = await options.tools.list(context);
     return {
       model_ref: preset?.ref,
-      provider_model: preset?.providerModel ?? options.model,
+      provider_model: providerModel,
       tools: allowedToolNames ? tools.filter((tool) => allowedToolNames.has(tool.name)) : tools,
       providers: await options.tools.status(context),
     };
@@ -865,15 +1028,18 @@ async function bindPresetModel(input: StartRunRequest, options: NodeHostOptions)
   if (!bound) await options.sessions.setPresetModel(input.sessionId, input.presetModelRef);
 }
 
-function serializePresetModel(model: CompiledPresetModel, includeDefinition = false): Record<string, unknown> {
+function serializePresetModel(model: CompiledPresetModel, includeDefinition = false, binding?: ModelBinding): Record<string, unknown> {
   return {
     ref: model.ref,
     name: model.name,
     version: model.version,
     description: model.description,
     status: model.status,
-    provider_model: model.providerModel,
-    tool_protocol: model.toolProtocol,
+    provider_model: binding?.model ?? model.providerModel,
+    provider_model_id: binding?.id ?? null,
+    provider_model_active: binding?.active ?? null,
+    provider_model_revision: binding?.revision ?? null,
+    tool_protocol: binding?.toolProtocol ?? model.toolProtocol,
     prompt_profile: model.promptProfile,
     skills: model.skillSnapshot?.skills.map(({ name, description, contentHash }) => ({ name, description, content_hash: contentHash })) ?? [],
     fixed_plugins: model.fixedPlugins,
@@ -886,6 +1052,120 @@ function serializePresetModel(model: CompiledPresetModel, includeDefinition = fa
     compiled_hash: model.compiledHash,
     ...(includeDefinition ? { definition: structuredClone(model.definition) } : {}),
   };
+}
+
+function serializeModelCatalogEntry(model: ModelCatalogEntry & { updatedAt?: string }): Record<string, unknown> {
+  return {
+    id: model.id,
+    name: model.name,
+    adapter: model.adapter,
+    model: model.model,
+    ...(model.credentialRef ? { credential_ref: model.credentialRef } : {}),
+    ...(model.toolProtocol ? { tool_protocol: model.toolProtocol } : {}),
+    ...(model.capabilities ? { capabilities: structuredClone(model.capabilities) } : {}),
+    active: model.active,
+    revision: model.revision,
+    created_at: model.createdAt,
+    updated_at: model.updatedAt,
+    usage_count: model.usageCount,
+  };
+}
+
+function serializeModelCatalogDefaults(defaults: ModelCatalogDefaults): Record<string, unknown> {
+  return {
+    ...(defaults.defaultModelId ? { default_model_id: defaults.defaultModelId } : {}),
+    ...(defaults.researchModelId ? { research_model_id: defaults.researchModelId } : {}),
+    revision: defaults.revision,
+    updated_at: defaults.updatedAt,
+  };
+}
+
+function requireModelCatalog(registry: SqlitePresetModelRegistry | undefined) {
+  if (!registry) throw new HostRequestError(503, "model_catalog_unavailable", "Model catalog is not configured.");
+  return registry.modelCatalog;
+}
+
+function requiredString(value: unknown, field: string): string {
+  if (typeof value !== "string" || !value.trim()) throw new HostRequestError(400, "invalid_request", `${field} is required.`);
+  return value.trim();
+}
+
+function requiredRevision(value: unknown): number {
+  if (!Number.isInteger(value) || Number(value) < 0) throw new HostRequestError(400, "invalid_request", "expected_revision must be a non-negative integer.");
+  return Number(value);
+}
+
+function readModelCatalogProvider(body: Record<string, unknown>): {
+  id: string;
+  name: string;
+  adapter: string;
+  model: string;
+  credentialRef?: string;
+  toolProtocol?: ModelCatalogProvider["toolProtocol"];
+  capabilities?: Record<string, unknown>;
+} {
+  const provider = readModelCatalogProviderPatch(body);
+  return {
+    id: requiredString(body.id, "id"),
+    name: requiredString(body.name, "name"),
+    adapter: provider.adapter ?? requiredString(body.adapter, "adapter"),
+    model: provider.model ?? requiredString(body.model, "model"),
+    ...(provider.credentialRef ? { credentialRef: provider.credentialRef } : {}),
+    ...(provider.toolProtocol ? { toolProtocol: provider.toolProtocol } : {}),
+    ...(provider.capabilities ? { capabilities: provider.capabilities } : {}),
+  };
+}
+
+function readModelCatalogProviderPatch(body: Record<string, unknown>): {
+  name?: string;
+  adapter?: string;
+  model?: string;
+  credentialRef?: string | null;
+  toolProtocol?: ModelCatalogProvider["toolProtocol"] | null;
+  capabilities?: Record<string, unknown> | null;
+} {
+  const patch: ReturnType<typeof readModelCatalogProviderPatch> = {};
+  if (Object.hasOwn(body, "name")) patch.name = requiredString(body.name, "name");
+  if (Object.hasOwn(body, "adapter")) patch.adapter = requiredString(body.adapter, "adapter");
+  if (Object.hasOwn(body, "model")) patch.model = requiredString(body.model, "model");
+  if (Object.hasOwn(body, "credential_ref")) {
+    patch.credentialRef = body.credential_ref === null ? null : requiredString(body.credential_ref, "credential_ref");
+  }
+  if (Object.hasOwn(body, "tool_protocol")) {
+    patch.toolProtocol = body.tool_protocol === null ? null : requiredString(body.tool_protocol, "tool_protocol") as ModelCatalogProvider["toolProtocol"];
+  }
+  if (Object.hasOwn(body, "capabilities")) {
+    if (body.capabilities !== null && (typeof body.capabilities !== "object" || Array.isArray(body.capabilities))) {
+      throw new HostRequestError(400, "invalid_request", "capabilities must be an object or null.");
+    }
+    patch.capabilities = body.capabilities as Record<string, unknown> | null;
+  }
+  return patch;
+}
+
+function readPresetModelMutation(bodyValue: unknown): { definition: Record<string, any>; providerModelId?: string } {
+  const body = asObject(bodyValue);
+  const definition = { ...body } as Record<string, any>;
+  const providerModelId = typeof definition.provider_model_id === "string" ? definition.provider_model_id : undefined;
+  delete definition.provider_model_id;
+  if (!definition.provider || typeof definition.provider !== "object") throw new HostRequestError(400, "invalid_request", "provider is required.");
+  return { definition, ...(providerModelId ? { providerModelId } : {}) };
+}
+
+async function setModelCatalogActive(
+  request: { headers: Record<string, unknown>; params: { id: string }; body: unknown },
+  reply: FastifyReply,
+  options: NodeHostOptions,
+  active: boolean,
+): Promise<FastifyReply> {
+  try {
+    requireManagementAccess(request.headers, options.managementToken);
+    const expectedRevision = requiredRevision(asObject(request.body).expected_revision);
+    const model = requireModelCatalog(options.presetModels).setModelActive(request.params.id, active, expectedRevision);
+    return reply.send({ model: serializeModelCatalogEntry(model) });
+  } catch (error) {
+    return sendHostError(reply, error);
+  }
 }
 
 class HostRequestError extends Error {
@@ -913,14 +1193,17 @@ function hostErrorStatus(error: unknown): number {
   if (error instanceof HostRequestError) return error.statusCode;
   const code = hostErrorCode(error);
   if (code === "preset_model_not_found") return 404;
-  if (["session_model_mismatch", "preset_model_default_cannot_retire", "preset_model_version_not_monotonic"].includes(code)) return 409;
-  if (code === "invalid_preset_model_definition") return 400;
+  if (["session_model_mismatch", "preset_model_default_cannot_retire", "preset_model_version_not_monotonic", "model_catalog_revision_conflict", "model_catalog_model_exists", "model_catalog_model_referenced", "model_catalog_model_disabled", "model_catalog_preset_binding_conflict", "model_catalog_default_preset_binding_required"].includes(code)) return 409;
+  if (["invalid_preset_model_definition", "invalid_request", "model_catalog_invalid_request", "model_catalog_adapter_unsupported", "model_catalog_same_replacement"].includes(code) || code.startsWith("model_catalog_invalid_")) return 400;
+  if (code === "model_catalog_model_not_found" || code === "model_catalog_revision_not_found") return 404;
   return 500;
 }
 
 function hostErrorCode(error: unknown): string {
   if (error instanceof HostRequestError) return error.errorCode;
+  if (error instanceof ModelCatalogRevisionConflictError) return "model_catalog_revision_conflict";
   if (error instanceof Error) {
+    if (error.message.startsWith("model_catalog_")) return error.message;
     if (error.message === "preset_model_not_found" || error.message === "preset_model_not_published") return "preset_model_not_found";
     if (error.message === "invalid_preset_model_ref") return "invalid_request";
     if (error.message === "preset_model_retired") return "preset_model_not_found";
@@ -978,6 +1261,14 @@ function pluginStatuses(catalog: PluginCatalog | undefined, plugins: PluginHost 
       ...(status?.error ? { error: status.error } : {}),
     };
   });
+}
+
+function currentDefaultModel(options: NodeHostOptions): string {
+  return options.presetModels?.getDefaultModelBinding("default")?.model ?? options.model;
+}
+
+function currentResearchModel(options: NodeHostOptions): string {
+  return options.presetModels?.getDefaultModelBinding("research")?.model ?? options.subagentModel ?? DEFAULT_SUBAGENT_MODEL;
 }
 
 function searchModePayload(sessionId: string, mode: string, model: string, subagentModel = DEFAULT_SUBAGENT_MODEL): Record<string, unknown> {

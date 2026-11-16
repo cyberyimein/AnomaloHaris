@@ -13,6 +13,7 @@ import { canonicalizePresetModelName, canonicalizePresetModelRef, validateContra
 import type { AgentPolicy, BootstrapToolRequest } from "./types.js";
 import type { ResponseFormat } from "@anomaloharis/contracts";
 import { PluginCatalog, type PluginLock } from "./plugin-catalog.js";
+import { ModelCatalog, type ModelBinding } from "./model-catalog.js";
 import { filterSkillSnapshot, mergeSkillSnapshots, SKILL_ACTIVATE_TOOL_NAME, SkillRuntime, type CompiledSkillSnapshot } from "./skills.js";
 
 export const DEFAULT_PRESET_MODEL_REF = "anomaloharis@1" as PresetModelRef;
@@ -125,12 +126,14 @@ CREATE TABLE IF NOT EXISTS preset_model_plugin_locks (
 
 export class SqlitePresetModelRegistry {
   readonly db: DatabaseSync;
+  readonly modelCatalog: ModelCatalog;
   private readonly ownsDatabase: boolean;
   private readonly now: () => string;
   private readonly catalog: PluginCatalog | undefined;
   private readonly resolvePrompt: ((profile: string) => string) | undefined;
   private readonly bundledSkillSnapshot: CompiledSkillSnapshot | undefined;
   private readonly allowLegacySnapshotRecompile: boolean;
+  readonly defaultPresetModelRef: string;
 
   constructor(
     dbPath: string,
@@ -141,6 +144,7 @@ export class SqlitePresetModelRegistry {
       resolvePrompt?: (profile: string) => string;
       bundledSkillSnapshot?: CompiledSkillSnapshot | undefined;
       allowLegacySnapshotRecompile?: boolean;
+      defaultPresetModelRef?: string | undefined;
     } = {},
   ) {
     this.now = options.now ?? (() => new Date().toISOString());
@@ -148,6 +152,7 @@ export class SqlitePresetModelRegistry {
     this.resolvePrompt = options.resolvePrompt;
     this.bundledSkillSnapshot = options.bundledSkillSnapshot;
     this.allowLegacySnapshotRecompile = options.allowLegacySnapshotRecompile === true;
+    this.defaultPresetModelRef = options.defaultPresetModelRef ?? DEFAULT_PRESET_MODEL_REF;
     if (options.database) {
       this.db = options.database;
       this.ownsDatabase = false;
@@ -158,59 +163,129 @@ export class SqlitePresetModelRegistry {
     }
     this.db.exec("PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;");
     this.db.exec(REGISTRY_SCHEMA);
+    this.modelCatalog = new ModelCatalog(this.db, { now: this.now, defaultPresetRef: this.defaultPresetModelRef });
     this.migrateLegacyPromptSnapshots();
   }
 
-  createDraft(definition: PresetModelDefinition): CompiledPresetModel {
+  seedModelCatalogBindings(options: { defaultModel: string; researchModel: string }): void {
+    const providers = this.list().map((summary) => {
+      const preset = this.resolve(summary.ref);
+      return {
+        ref: summary.ref,
+        status: summary.status,
+        adapter: preset.definition.provider.adapter,
+        model: preset.definition.provider.model,
+        credentialRef: preset.definition.provider.credential_ref,
+        toolProtocol: preset.definition.provider.tool_protocol,
+        capabilities: preset.definition.provider.capabilities,
+      };
+    });
+    this.modelCatalog.seedPresetBindings(providers);
+    if (this.modelCatalog.getDefaults().revision > 0) return;
+    const defaultModelId = this.modelCatalog.ensureModel(options.defaultModel, {
+      adapter: "openai-compatible",
+      model: options.defaultModel,
+      credentialRef: "openrouter-primary",
+      toolProtocol: "auto",
+    });
+    const researchModelId = this.modelCatalog.ensureModel(options.researchModel, {
+      adapter: "openai-compatible",
+      model: options.researchModel,
+      credentialRef: "openrouter-primary",
+      toolProtocol: "auto",
+    });
+    this.modelCatalog.seedDefaults(defaultModelId, researchModelId);
+  }
+
+  resolvePresetBinding(ref: string): ModelBinding | undefined {
+    return this.modelCatalog.resolvePresetBinding(canonicalizePresetModelRef(ref));
+  }
+
+  getDefaultModelBinding(kind: "default" | "research"): ModelBinding | undefined {
+    return this.modelCatalog.getDefaultModelBinding(kind);
+  }
+
+  bindPresetModel(ref: string, modelId: string | undefined): number {
+    return this.modelCatalog.bindPreset(canonicalizePresetModelRef(ref), modelId);
+  }
+
+  ensurePresetModelBinding(ref: string, model: string, provider: PresetModelDefinition["provider"]): number {
+    const modelId = this.modelCatalog.ensureModel(model, {
+      adapter: provider.adapter,
+      model,
+      credentialRef: provider.credential_ref,
+      toolProtocol: provider.tool_protocol,
+      capabilities: provider.capabilities,
+    });
+    return this.bindPresetModel(ref, modelId);
+  }
+
+  private bindModelForPreset(ref: string, definition: PresetModelDefinition, modelId: string | undefined): void {
+    if (modelId) {
+      this.bindPresetModel(ref, modelId);
+      return;
+    }
+    this.ensurePresetModelBinding(ref, definition.provider.model, definition.provider);
+  }
+
+  createDraft(definition: PresetModelDefinition, binding?: { modelId?: string | undefined }): CompiledPresetModel {
     const canonicalDefinition = canonicalizeDefinition(definition);
     validateDefinition(canonicalDefinition);
-    const existing = this.db.prepare(
-      "SELECT 1 FROM preset_model_versions WHERE name = ? AND version = ?",
-    ).get(canonicalDefinition.name, canonicalDefinition.version);
-    if (existing) throw new Error("preset_model_version_exists");
-    const latest = this.db.prepare(
-      "SELECT MAX(version) AS version FROM preset_model_versions WHERE name = ?",
-    ).get(canonicalDefinition.name) as { version?: number | null } | undefined;
-    if (latest?.version !== undefined && latest.version !== null && canonicalDefinition.version <= Number(latest.version)) {
-      throw new Error("preset_model_version_not_monotonic");
-    }
-
     const createdAt = this.now();
     const compiled = compileDefinition(canonicalDefinition, "draft", this.catalog, this.resolvePrompt, this.bundledSkillSnapshot);
-    this.db.prepare(
-      "INSERT OR IGNORE INTO preset_models(name, description, created_at, updated_at) VALUES (?, ?, ?, ?)",
-    ).run(canonicalDefinition.name, canonicalDefinition.description, createdAt, createdAt);
-    this.db.prepare(`
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const existing = this.db.prepare(
+        "SELECT 1 FROM preset_model_versions WHERE name = ? AND version = ?",
+      ).get(canonicalDefinition.name, canonicalDefinition.version);
+      if (existing) throw new Error("preset_model_version_exists");
+      const latest = this.db.prepare(
+        "SELECT MAX(version) AS version FROM preset_model_versions WHERE name = ?",
+      ).get(canonicalDefinition.name) as { version?: number | null } | undefined;
+      if (latest?.version !== undefined && latest.version !== null && canonicalDefinition.version <= Number(latest.version)) {
+        throw new Error("preset_model_version_not_monotonic");
+      }
+
+      this.db.prepare(
+        "INSERT OR IGNORE INTO preset_models(name, description, created_at, updated_at) VALUES (?, ?, ?, ?)",
+      ).run(canonicalDefinition.name, canonicalDefinition.description, createdAt, createdAt);
+      this.db.prepare(`
       INSERT INTO preset_model_versions(
         name, version, status, description, definition_json, compiled_snapshot_json,
         prompt_hash, plugin_lock_hash, compiled_hash, created_at
       ) VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      canonicalDefinition.name,
-      canonicalDefinition.version,
-      canonicalDefinition.description,
-      JSON.stringify(canonicalDefinition),
-      JSON.stringify(compiled),
-      compiled.promptHash,
-      compiled.pluginLockHash,
-      compiled.compiledHash,
-      createdAt,
-    );
-    this.persistPluginLocks(compiled);
+      `).run(
+        canonicalDefinition.name,
+        canonicalDefinition.version,
+        canonicalDefinition.description,
+        JSON.stringify(canonicalDefinition),
+        JSON.stringify(compiled),
+        compiled.promptHash,
+        compiled.pluginLockHash,
+        compiled.compiledHash,
+        createdAt,
+      );
+      this.persistPluginLocks(compiled);
+      if (binding) this.bindModelForPreset(compiled.ref, canonicalDefinition, binding.modelId);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
     return compiled;
   }
 
-  update(ref: string, definition: PresetModelDefinition): CompiledPresetModel {
+  update(ref: string, definition: PresetModelDefinition, binding?: { modelId?: string | undefined }): CompiledPresetModel {
     const canonicalDefinition = canonicalizeDefinition(definition);
     validateDefinition(canonicalDefinition);
-    const record = this.read(ref, { includeDraft: true });
-    if (record.status === "retired") throw new Error("preset_model_retired");
-    if (canonicalDefinition.name !== record.name || canonicalDefinition.version !== record.version) {
-      throw new Error("invalid_preset_model_definition: identity_mismatch");
-    }
-    const compiled = compileDefinition(canonicalDefinition, record.status, this.catalog, this.resolvePrompt, this.bundledSkillSnapshot);
     this.db.exec("BEGIN IMMEDIATE");
     try {
+      const record = this.read(ref, { includeDraft: true });
+      if (record.status === "retired") throw new Error("preset_model_retired");
+      if (canonicalDefinition.name !== record.name || canonicalDefinition.version !== record.version) {
+        throw new Error("invalid_preset_model_definition: identity_mismatch");
+      }
+      const compiled = compileDefinition(canonicalDefinition, record.status, this.catalog, this.resolvePrompt, this.bundledSkillSnapshot);
       this.db.prepare(`
         UPDATE preset_model_versions
         SET description = ?, definition_json = ?, compiled_snapshot_json = ?,
@@ -224,12 +299,13 @@ export class SqlitePresetModelRegistry {
       this.persistPluginLocks(compiled);
       this.db.prepare("UPDATE preset_models SET description = ?, updated_at = ? WHERE name = ?")
         .run(canonicalDefinition.description, this.now(), record.name);
+      if (binding) this.bindModelForPreset(compiled.ref, canonicalDefinition, binding.modelId);
       this.db.exec("COMMIT");
+      return compiled;
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;
     }
-    return compiled;
   }
 
   publish(ref: string, options: { defaultRef?: string } = {}): CompiledPresetModel {
@@ -248,6 +324,11 @@ export class SqlitePresetModelRegistry {
         // or become the target of a new unversioned lookup. Keep a configured
         // default alive until the caller explicitly switches that default.
         const protectedDefaultRef = options.defaultRef ? normalizeRef(options.defaultRef) : undefined;
+        const previousRefs = this.db.prepare(`
+          SELECT name || '@' || version AS ref FROM preset_model_versions
+          WHERE name = ? AND status = 'published' AND version <> ?
+            AND (? IS NULL OR name || '@' || version <> ?)
+        `).all(record.name, record.version, protectedDefaultRef ?? null, protectedDefaultRef ?? null) as Array<{ ref: string }>;
         this.db.prepare(`
           UPDATE preset_model_versions
           SET status = 'retired', retired_at = ?
@@ -259,6 +340,7 @@ export class SqlitePresetModelRegistry {
           SET status = 'published', published_at = ?, retired_at = NULL
           WHERE name = ? AND version = ?
         `).run(publishedAt, record.name, record.version);
+        for (const previous of previousRefs) this.modelCatalog.bindPreset(previous.ref, undefined);
         this.db.exec("COMMIT");
       } catch (error) {
         this.db.exec("ROLLBACK");
@@ -275,11 +357,19 @@ export class SqlitePresetModelRegistry {
     if (options.defaultRef && normalizeRef(options.defaultRef) === normalizeRef(record.ref)) {
       throw new Error("preset_model_default_cannot_retire");
     }
-    this.db.prepare(`
-      UPDATE preset_model_versions
-      SET status = 'retired', retired_at = ?
-      WHERE name = ? AND version = ?
-    `).run(this.now(), record.name, record.version);
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare(`
+        UPDATE preset_model_versions
+        SET status = 'retired', retired_at = ?
+        WHERE name = ? AND version = ?
+      `).run(this.now(), record.name, record.version);
+      this.modelCatalog.bindPreset(record.ref, undefined);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
     return this.read(`${record.name}@${record.version}`, { includeDraft: true });
   }
 

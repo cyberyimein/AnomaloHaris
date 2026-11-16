@@ -924,11 +924,18 @@ async function executeWithUsage(
       { allowRetiredTarget: prepared.input.allowRetiredPresetModel === true },
     );
     begin.runId = handle.runId;
-    await usage.begin(begin);
     const run = options.runControl.get(handle.runId);
+    begin.providerModel = providerModelFromRunInput(run.input) ?? begin.providerModel;
+    await usage.begin(begin);
     for await (const unifiedEvent of handle) {
       const event = projectNativeEvent(run, unifiedEvent);
       if (!event) continue;
+      if (event.type === "run.started" && typeof event.data.model === "string") {
+        begin.providerModel = event.data.model;
+      }
+      if (event.type === "llm.request" && typeof event.data.provider_model === "string") {
+        begin.providerModel = event.data.provider_model;
+      }
       events.push(event);
       await onEvent?.(event);
     }
@@ -958,6 +965,23 @@ async function executeWithUsage(
     }
     throw error;
   }
+}
+
+function providerModelFromRunInput(input: unknown): string | undefined {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return undefined;
+  const root = input as Record<string, unknown>;
+  const binding = root.model_binding && typeof root.model_binding === "object" && !Array.isArray(root.model_binding)
+    ? root.model_binding as Record<string, unknown>
+    : undefined;
+  if (typeof binding?.model === "string" && binding.model) return binding.model;
+  const agentInput = root.agent_input && typeof root.agent_input === "object" && !Array.isArray(root.agent_input)
+    ? root.agent_input as Record<string, unknown>
+    : undefined;
+  const nestedBinding = agentInput?.modelBinding && typeof agentInput.modelBinding === "object" && !Array.isArray(agentInput.modelBinding)
+    ? agentInput.modelBinding as Record<string, unknown>
+    : undefined;
+  if (typeof nestedBinding?.model === "string" && nestedBinding.model) return nestedBinding.model;
+  return typeof agentInput?.model === "string" && agentInput.model ? agentInput.model : undefined;
 }
 
 function completionResponse(prepared: PreparedChat, events: AgentEvent[]): Record<string, unknown> {

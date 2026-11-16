@@ -689,6 +689,26 @@ button {
   background: var(--subtle);
 }
 
+@media (min-width: 821px) and (max-width: 1300px) {
+  .chat-topbar {
+    grid-template-columns: minmax(190px, 0.8fr) minmax(0, 2fr) max-content;
+    gap: 12px;
+  }
+
+  .app-nav {
+    min-width: 0;
+    max-width: 100%;
+    gap: 2px;
+  }
+
+  .nav-tab {
+    padding-right: 9px;
+    padding-left: 9px;
+    font-size: 14px;
+    white-space: nowrap;
+  }
+}
+
 .toolbar-button,
 .icon-button,
 .mini-icon-button,
@@ -3208,6 +3228,26 @@ button:disabled,
     align-items: stretch;
     gap: 18px;
   }
+}
+
+@media (min-width: 821px) and (max-width: 1100px) {
+  .chat-topbar {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "brand actions"
+      "nav nav";
+    gap: 8px 12px;
+    padding: 10px 12px;
+  }
+
+  .brand { grid-area: brand; }
+  .app-nav {
+    grid-area: nav;
+    justify-self: stretch;
+    justify-content: center;
+  }
+  .nav-tab { min-height: 34px; padding: 0 12px; font-size: 13px; }
+  .header-actions { grid-area: actions; gap: 8px; }
 }
 
 @media (max-width: 720px) {

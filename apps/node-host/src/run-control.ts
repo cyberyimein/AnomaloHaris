@@ -67,6 +67,8 @@ export interface ExecutionRuntimeAdapter {
   readonly consumesHostSlot: boolean;
   isHealthy(): boolean;
   resolve(ref: string, options?: RuntimeResolveOptions): ResolvedExecutionTarget;
+  /** Resolve mutable runtime settings once before persisting a new queued run. */
+  prepareInput?(context: { runId: string; target: ResolvedExecutionTarget; request: RunRequest }): unknown;
   /** Called while the top-level execution row is in the same transaction. */
   prepareRun?(context: { runId: string; target: ResolvedExecutionTarget; request: RunRequest }): void;
   start(context: RunContext, input: unknown): AsyncIterable<RuntimeEvent>;
@@ -216,11 +218,19 @@ export class RunControl {
       if (existing.request_hash !== requestHash) {
         throw new RunControlError(409, "idempotency_key_reused", "The idempotency key was already used with a different run request.");
       }
-      if (existing.status === "queued" && !this.active.has(existing.run_id)) this.launch(existing.run_id, resolved.adapter, resolved.target, request);
+      if (existing.status === "queued" && !this.active.has(existing.run_id)) {
+        this.launch(existing.run_id, resolved.adapter, resolved.target, { ...request, input: existing.input });
+      }
       return this.handle(existing.run_id, true);
     }
 
     const runId = this.ids.runId();
+    const preparedInput = resolved.adapter.prepareInput?.({
+      runId,
+      target: resolved.target,
+      request: { ...request, input: structuredClone(request.input) },
+    }) ?? request.input;
+    const preparedRequest = { ...request, input: preparedInput };
     const createdAt = this.now();
     this.db.exec("BEGIN IMMEDIATE");
     try {
@@ -240,14 +250,14 @@ export class RunControl {
         resolved.adapter.version,
         resolved.adapter.packageHash,
         request.clientId,
-        JSON.stringify(request.input),
+        JSON.stringify(preparedInput),
         JSON.stringify(request.metadata ?? {}),
         JSON.stringify(permissions),
         request.idempotency_key ?? null,
         requestHash,
         createdAt,
       );
-      resolved.adapter.prepareRun?.({ runId, target: resolved.target, request });
+      resolved.adapter.prepareRun?.({ runId, target: resolved.target, request: preparedRequest });
       this.appendEventTx(runId, resolved.target, request.parentRunId, "run.queued", { status: "queued" }, createdAt);
       this.db.exec("COMMIT");
     } catch (error) {
@@ -258,14 +268,16 @@ export class RunControl {
           if (duplicate.request_hash !== requestHash) {
             throw new RunControlError(409, "idempotency_key_reused", "The idempotency key was already used with a different run request.");
           }
-          if (duplicate.status === "queued" && !this.active.has(duplicate.run_id)) this.launch(duplicate.run_id, resolved.adapter, resolved.target, request);
+          if (duplicate.status === "queued" && !this.active.has(duplicate.run_id)) {
+            this.launch(duplicate.run_id, resolved.adapter, resolved.target, { ...request, input: duplicate.input });
+          }
           return this.handle(duplicate.run_id, true);
         }
       }
       throw error;
     }
     this.notify(runId);
-    this.launch(runId, resolved.adapter, resolved.target, request);
+    this.launch(runId, resolved.adapter, resolved.target, preparedRequest);
     return this.handle(runId, false);
   }
 

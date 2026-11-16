@@ -6,7 +6,7 @@ import { randomIds } from "./ids.js";
 import { OpenAICompatibleAdapter } from "./model.js";
 import { InMemorySessionAdapter } from "./session.js";
 import type { ToolRuntime } from "./tools.js";
-import type { AgentEvent, AgentPolicy, AgentRunInput, ToolContext } from "./types.js";
+import type { AgentEvent, AgentPolicy, AgentRunInput, ModelBindingSnapshot, ToolContext } from "./types.js";
 
 const WEB_SEARCH_TOOL_NAME = "web_search";
 const DEFAULT_MAX_TOOL_ITERATIONS = 6;
@@ -19,6 +19,7 @@ export type WebResearchSubagentOptions = {
   webSearch: ToolRuntime;
   timeoutMs: number;
   toolTimeoutMs?: number;
+  modelBinding?: ModelBindingSnapshot;
   fetchImpl?: typeof fetch;
   maxToolIterations?: number;
   toolProtocol?: "auto" | "openai" | "dsml" | "none";
@@ -38,6 +39,7 @@ export class WebResearchSubagent {
   private readonly fetchImpl: typeof fetch;
   private readonly maxToolIterations: number;
   private readonly toolProtocol: "auto" | "openai" | "dsml" | "none";
+  private readonly modelBinding: ModelBindingSnapshot | undefined;
 
   constructor(options: WebResearchSubagentOptions) {
     this.model = options.model;
@@ -49,6 +51,7 @@ export class WebResearchSubagent {
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.maxToolIterations = clampInteger(options.maxToolIterations, DEFAULT_MAX_TOOL_ITERATIONS, 1, 20);
     this.toolProtocol = options.toolProtocol ?? DEFAULT_TOOL_PROTOCOL;
+    this.modelBinding = options.modelBinding ? structuredClone(options.modelBinding) : undefined;
   }
 
   async run(call: ToolCall, parentContext: ToolContext, signal: AbortSignal): Promise<ToolResult> {
@@ -119,6 +122,7 @@ export class WebResearchSubagent {
       ].join("\n"),
       model: this.model,
       toolProtocol: this.toolProtocol,
+      ...(this.modelBinding ? { modelBinding: structuredClone(this.modelBinding) } : {}),
       searchMode: "native",
       allowedToolNames: new Set([WEB_SEARCH_TOOL_NAME]),
       policy: this.policy(),

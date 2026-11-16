@@ -26,6 +26,18 @@ export type ModelMessage = {
 
 export type SearchMode = string;
 
+/** Non-secret provider selection frozen for one run. */
+export type ModelBindingSnapshot = {
+  id: string;
+  adapter: string;
+  model: string;
+  capabilities?: Record<string, unknown> | undefined;
+  credentialRef?: string | undefined;
+  toolProtocol?: "openai" | "dsml" | "auto" | "none" | undefined;
+  revision: number;
+  active: boolean;
+};
+
 export type BootstrapToolRequest = {
   name: string;
   resultKey?: string;
@@ -43,6 +55,8 @@ export type AgentRunInput = {
   promptProfile: string;
   systemPrompt?: string | undefined;
   model: string;
+  modelBinding?: ModelBindingSnapshot | undefined;
+  researchModelBinding?: ModelBindingSnapshot | undefined;
   presetModelRef?: PresetModelRef | undefined;
   compiledHash?: string | undefined;
   skillSnapshot?: CompiledSkillSnapshot | undefined;
@@ -92,6 +106,8 @@ export type ToolContext = {
   toolCallId?: string | undefined;
   searchMode: SearchMode;
   model: string;
+  modelBinding?: ModelBindingSnapshot | undefined;
+  researchModelBinding?: ModelBindingSnapshot | undefined;
   presetModelRef?: PresetModelRef | undefined;
   activeSkills: ReadonlySet<string>;
   activeMcpServers: ReadonlySet<string>;
@@ -129,6 +145,8 @@ export type SessionCheckpoint = {
     responseFormat?: ResponseFormat | undefined;
     allowedToolNames?: string[] | undefined;
     model?: string;
+    modelBinding?: ModelBindingSnapshot | undefined;
+    researchModelBinding?: ModelBindingSnapshot | undefined;
     presetModelRef?: PresetModelRef | undefined;
     compiledHash?: string | undefined;
     skillSnapshot?: CompiledSkillSnapshot | undefined;

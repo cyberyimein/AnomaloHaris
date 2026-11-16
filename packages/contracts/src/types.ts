@@ -5,6 +5,8 @@ import type {
   AgentEventTypeSchema,
   ConnectionMessageSchema,
   LlmRequestEventDataSchema,
+  ModelCatalogDefaultsSchema,
+  ModelCatalogEntrySchema,
   PresetModelDefinitionSchema,
   PresetModelRefSchema,
   PresetModelSummarySchema,
@@ -42,6 +44,8 @@ export type ResponseFormat = Static<typeof ResponseFormatSchema>;
 export type PresetModelRef = Static<typeof PresetModelRefSchema>;
 export type PresetModelDefinition = Static<typeof PresetModelDefinitionSchema>;
 export type PresetModelSummary = Static<typeof PresetModelSummarySchema>;
+export type ModelCatalogEntry = Static<typeof ModelCatalogEntrySchema>;
+export type ModelCatalogDefaults = Static<typeof ModelCatalogDefaultsSchema>;
 export type RunRequest = Static<typeof RunRequestSchema>;
 export type ToolCall = Static<typeof ToolCallSchema>;
 export type ToolDefinition = Static<typeof ToolDefinitionSchema>;
