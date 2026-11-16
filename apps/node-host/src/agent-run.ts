@@ -65,6 +65,7 @@ export class AgentRun {
   readonly signal: AbortSignal;
   readonly policy: AgentPolicy;
   readonly initialResources: ActiveResources;
+  private readonly pendingImages = new Map<string, NonNullable<ToolResult["image"]>>();
   private readonly historyMessages: ModelMessage[];
   private readonly resumedFromRunId: RunId | undefined;
   private readonly pluginContext: PluginContext;
@@ -283,8 +284,21 @@ export class AgentRun {
     return { context, resources };
   }
 
+  attachToolImage(callId: string, image: NonNullable<ToolResult["image"]>): void {
+    this.pendingImages.set(callId, image);
+  }
+
   modelRequest(messages: ModelMessage[], tools: BuiltContext["tools"]): ModelRequest {
-    const request: ModelRequest = { model: this.input.model, messages, tools };
+    // Supply images after all tool responses in the batch. Bytes stay out of
+    // the session journal, run events and subsequent unrelated model turns.
+    const frames: ModelMessage[] = [];
+    for (const message of messages) {
+      if (message.role !== "tool" || !message.tool_call_id) continue;
+      const image = this.pendingImages.get(message.tool_call_id);
+      if (image) frames.push({ role: "user", content: `Observation from tool call ${message.tool_call_id}`, image });
+    }
+    this.pendingImages.clear();
+    const request: ModelRequest = { model: this.input.model, messages: [...messages, ...frames], tools };
     if (this.input.presetModelRef) request.presetModelRef = this.input.presetModelRef;
     if (this.input.toolProtocol) request.toolProtocol = this.input.toolProtocol;
     if (this.input.temperature !== undefined) request.temperature = this.input.temperature;

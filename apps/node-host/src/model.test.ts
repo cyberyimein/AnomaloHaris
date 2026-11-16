@@ -91,7 +91,7 @@ describe("OpenAICompatibleAdapter", () => {
     await collect(adapter.stream({
       model: "native-model",
       messages: [
-        { role: "user", content: "What time is it?" },
+        { role: "user", content: "What time is it?", image: { mimeType: "image/png", data: "YWJj" } },
         { role: "assistant", content: "", tool_calls: [{ id: "call-1", name: "time_now", arguments: {} }] },
         { role: "tool", content: "2026-08-22T00:00:00.000Z", tool_call_id: "call-1", name: "time_now" },
       ],
@@ -103,7 +103,7 @@ describe("OpenAICompatibleAdapter", () => {
       function: { name: "time_now", description: "Read UTC time", parameters: { type: "object" } },
     }]);
     expect(body?.messages).toEqual([
-      { role: "user", content: "What time is it?" },
+      { role: "user", content: [{ type: "text", text: "What time is it?" }, { type: "image_url", image_url: { url: "data:image/png;base64,YWJj" } }] },
       { role: "assistant", content: null, tool_calls: [{ id: "call-1", type: "function", function: { name: "time_now", arguments: "{}" } }] },
       { role: "tool", tool_call_id: "call-1", name: "time_now", content: "2026-08-22T00:00:00.000Z" },
     ]);

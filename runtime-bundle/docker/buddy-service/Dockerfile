@@ -20,7 +20,8 @@ FROM node:22-bookworm-slim AS runtime
 
 ENV NODE_ENV=production \
     BUDDY_HOST=0.0.0.0 \
-    BUDDY_PORT=8765
+    BUDDY_PORT=8765 \
+    BUDDY_PERMISSIONS_FILE=/data/buddy/permissions.json
 
 WORKDIR /app
 
@@ -29,6 +30,6 @@ COPY --from=build /src/node_modules ./node_modules
 COPY --from=build /src/apps/buddy-service/package.json ./apps/buddy-service/package.json
 COPY --from=build /src/apps/buddy-service/dist ./apps/buddy-service/dist
 
-EXPOSE 8765 8787
+EXPOSE 8765
 
 CMD ["node", "apps/buddy-service/dist/main.js"]

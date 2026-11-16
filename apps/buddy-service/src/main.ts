@@ -5,7 +5,7 @@ const { service, server } = await startBuddyService(settings);
 console.info(`Buddy Node service listening on http://${settings.host}:${settings.port}`);
 
 const shutdown = async () => {
-  await service.gateway.disconnect();
+  service.stop();
   await new Promise<void>((resolve) => server.close(() => resolve()));
 };
 

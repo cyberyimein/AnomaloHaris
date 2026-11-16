@@ -1,5 +1,7 @@
 # Buddy 设备协议与迁移参考
 
+> 历史设计：独立转台固件和能力授权已取代本文的宠物与 Hook 接口。当前启动方式见仓库 README 的 Optional capability plugins。
+
 > 状态：设备/协议参考；活动服务位于 `apps/buddy-service`，当前不由 AnomaloHaris 默认加载。
 > 目的：由独立 Node Buddy 服务拥有设备控制、Hook Relay 和审批状态机，再通过 Node bridge plugin 向 Agent 暴露能力。
 

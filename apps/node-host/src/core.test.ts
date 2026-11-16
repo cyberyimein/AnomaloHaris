@@ -64,6 +64,41 @@ describe("AgentCore", () => {
     ]);
   });
 
+  it("runs dashboard-activated robot tools outside the preset allowlist", async () => {
+    const tools = new DeterministicToolRuntime(
+      [{ name: "buddy_invoke", description: "Robot", parameters: {}, source: "buddy-runtime" }],
+      { buddy_invoke: () => ({ name: "buddy_invoke", ok: true, content: "Captured", data: {} }) },
+    );
+    const model = new ReplayModelAdapter([
+      [{ type: "tool.calls", calls: [{ id: "robot-1", name: "buddy_invoke", arguments: {} }] }],
+      [{ type: "text.delta", text: "Done." }, { type: "done" }],
+    ]);
+    const core = new AgentCore({ model, tools, sessions: new InMemorySessionAdapter() });
+    const events = [];
+    for await (const event of core.execute({ ...input, allowedToolNames: new Set(["time_now"]) }, new AbortController().signal)) events.push(event);
+    expect(model.streamCalls[0]?.tools.map(tool => tool.name)).toContain("buddy_invoke");
+    expect(events.find(event => event.type === "tool.finished")?.data.ok).toBe(true);
+  });
+
+  it("delivers tool images to the following model turn without journaling image bytes", async () => {
+    const image = { mimeType: "image/png" as const, data: "aW1hZ2U=" };
+    const tools = new DeterministicToolRuntime(
+      [{ name: "camera", description: "Capture", parameters: {}, source: "test" }],
+      { camera: () => ({ name: "camera", ok: true, content: "Captured", data: {}, image }) },
+    );
+    const model = new ReplayModelAdapter([
+      [{ type: "tool.calls", calls: [{ id: "frame-1", name: "camera", arguments: {} }] }],
+      [{ type: "text.delta", text: "I see a cup." }, { type: "done" }],
+    ]);
+    const sessions = new InMemorySessionAdapter();
+    const core = new AgentCore({ model, tools, sessions });
+    const events = [];
+    for await (const event of core.execute(input, new AbortController().signal)) events.push(event);
+    expect(model.streamCalls[1]?.messages.at(-1)).toMatchObject({ role: "user", image });
+    expect(JSON.stringify(events)).not.toContain(image.data);
+    expect(JSON.stringify(await sessions.open(input.sessionId))).not.toContain(image.data);
+  });
+
   it("honors a tool-declared timeout above the model policy timeout", async () => {
     const tools = new DeterministicToolRuntime(
       [{ name: "slow", description: "Slow", parameters: { type: "object" }, source: "test", timeout_ms: 80 }],

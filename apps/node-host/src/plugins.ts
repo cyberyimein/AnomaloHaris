@@ -716,7 +716,7 @@ function forwardedPluginEnvironment(names: readonly string[] | undefined): Recor
 }
 
 function normalizeToolResult(result: ToolResult, name: string): ToolResult {
-  return { name, ok: result.ok, content: result.content, data: result.data ?? {} };
+  return { name, ok: result.ok, content: result.content, data: result.data ?? {}, ...(result.image ? { image: result.image } : {}) };
 }
 
 function isWorkflowCallableCapability(capability: PluginCapabilityDeclaration): capability is PluginCapabilityDeclaration & {

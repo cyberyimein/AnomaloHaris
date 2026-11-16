@@ -319,6 +319,15 @@ function requestPayload(request: ModelRequest, toolProtocol = request.toolProtoc
 }
 
 function toProviderMessage(message: ModelMessage): Record<string, unknown> {
+  if (message.role === "user" && message.image) {
+    return {
+      role: "user",
+      content: [
+        { type: "text", text: message.content },
+        { type: "image_url", image_url: { url: `data:${message.image.mimeType};base64,${message.image.data}` } },
+      ],
+    };
+  }
   if (message.role === "assistant" && Array.isArray(message.tool_calls)) {
     return {
       role: "assistant",

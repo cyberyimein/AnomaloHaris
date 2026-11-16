@@ -1,5 +1,7 @@
 # Buddy Backend Relay 与 Node Bridge 设计
 
+> 历史设计：独立转台固件和能力授权已取代本文的宠物与 Hook 接口。当前启动方式见仓库 README 的 Optional capability plugins。
+
 > 状态：Implemented as an optional Node integration on `codex/buddy-bridge`
 >
 > 目标：让 Buddy 后端拥有设备与 Hook Relay，Node Agent 通过固定插件和 Skill 使用 Buddy。

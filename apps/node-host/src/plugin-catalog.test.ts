@@ -57,7 +57,7 @@ describe("PluginCatalog", () => {
       package: "@anomaloharis/buddy-bridge",
       packageRoot: expect.stringMatching(/[\\/]apps[\\/]buddy-bridge[\\/]dist$/),
       capabilities: ["buddy"],
-      toolNames: expect.arrayContaining(["buddy_status", "buddy_set_state"]),
+      toolNames: expect.arrayContaining(["buddy_capabilities", "buddy_invoke"]),
     });
   });
 

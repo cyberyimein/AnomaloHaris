@@ -1,3 +1,4 @@
+import { BuddyAgentToolAdapter } from "./buddy-agent.js";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -161,11 +162,13 @@ const pythonSandbox = new PythonSandboxRuntime({
 });
 const buddyServiceUrl = env("ANOMALOHARIS_BUDDY_SERVICE_URL")?.trim();
 const buddyServiceToken = env("ANOMALOHARIS_BUDDY_SERVICE_TOKEN");
+const buddyAdminToken = env("BUDDY_ADMIN_TOKEN");
 const buddyDashboard = buddyServiceUrl
   ? new BuddyDashboardClient({
     baseUrl: buddyServiceUrl,
     ...(buddyServiceToken ? { token: buddyServiceToken } : {}),
-    timeoutMs: Number(env("ANOMALOHARIS_BUDDY_REQUEST_TIMEOUT_MS") ?? "1500"),
+    ...(buddyAdminToken ? { adminToken: buddyAdminToken } : {}),
+    timeoutMs: Number(env("ANOMALOHARIS_BUDDY_REQUEST_TIMEOUT_MS") ?? "29000"),
   })
   : undefined;
 
@@ -297,6 +300,7 @@ const model = new PresetModelAdapter({
 });
 let bot!: BotService;
 const tools = new CompositeToolRuntime([
+  ...(buddyDashboard ? [new BuddyAgentToolAdapter(buddyDashboard)] : []),
   asToolAdapter("bot-tools", 100, new BotToolRuntime(() => bot)),
   asToolAdapter("agent-skills", 110, new SkillToolRuntime(skillRuntime, bundledSkillSnapshot), { alwaysAvailable: true }),
   asToolAdapter("host-core", 100, new CoreToolRuntime()),

@@ -207,6 +207,10 @@ export const ToolCallSchema = Type.Object({
 });
 
 export const ToolResultSchema = Type.Object({
+  image: Type.Optional(Type.Object({
+    mimeType: Type.Union([Type.Literal("image/png"), Type.Literal("image/jpeg")]),
+    data: Type.String({ minLength: 1, maxLength: 4194304 }),
+  })),
   name: Type.String({ minLength: 1 }),
   ok: Type.Boolean(),
   content: Type.String(),

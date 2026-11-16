@@ -1,6 +1,7 @@
+import type { PluginHost } from "./plugins.js";
 import { describe, expect, it } from "vitest";
 
-import { CoreToolRuntime, TimeZoneToolRuntime } from "./tools.js";
+import { CompositeToolRuntime, CoreToolRuntime, PluginToolAdapter, TimeZoneToolRuntime } from "./tools.js";
 import type { ToolContext } from "./types.js";
 
 const context: ToolContext = {
@@ -68,5 +69,18 @@ describe("time tools", () => {
 
     expect(result.ok).toBe(false);
     expect(result.content).toContain("does not exist");
+  });
+});
+
+describe("scoped plugin adapter", () => {
+  it("discovers Buddy through the Host composite when the preset binds the device plugin alone", async () => {
+    const definition = { name: "buddy_invoke", description: "Use robot", parameters: {}, source: "buddy-bridge" };
+    const plugins = {
+      tools: async (_context: unknown, scope: { pluginIds: ReadonlySet<string> }) =>
+        scope.pluginIds.has("buddy-bridge") ? [definition] : [],
+    } as unknown as PluginHost;
+    const runtime = new CompositeToolRuntime([new PluginToolAdapter(plugins)]);
+    expect(await runtime.list({ ...context, allowedPluginIds: new Set(["buddy-bridge"]) })).toEqual([definition]);
+    expect(await runtime.list({ ...context, allowedPluginIds: new Set(["host-core"]) })).toEqual([]);
   });
 });

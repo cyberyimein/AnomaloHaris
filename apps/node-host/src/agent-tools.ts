@@ -1,3 +1,4 @@
+import { isDashboardBuddyTool } from "./buddy-tool-policy.js";
 import type { ToolCall, ToolDefinition, ToolResult } from "@anomaloharis/contracts";
 
 import type { ActiveResources, AgentRun } from "./agent-run.js";
@@ -90,7 +91,8 @@ export async function* executeToolCalls(
         name: effectiveCall.name, ok: false, content: "Plugin policy denied this tool call.",
         data: { error_code: "plugin_failed" },
       };
-    } else if (run.input.allowedToolNames && !run.input.allowedToolNames.has(effectiveCall.name)) {
+    } else if (run.input.allowedToolNames && !run.input.allowedToolNames.has(effectiveCall.name)
+      && !definitions.some(tool => tool.name === effectiveCall.name && isDashboardBuddyTool(tool))) {
       result = {
         name: effectiveCall.name, ok: false,
         content: `Tool is not enabled for this run: ${effectiveCall.name}`,
@@ -111,6 +113,7 @@ export async function* executeToolCalls(
     const resultHook = await run.toolResultHook(effectiveCall, result);
     if (resultHook?.result) result = resultHook.result;
     await run.applyResourceAction(result);
+    if (result.ok && result.image) run.attachToolImage(effectiveCall.id, result.image);
     run.state.loopMessages.push({
       role: "tool", tool_call_id: effectiveCall.id, name: effectiveCall.name, content: result.content,
     });

@@ -1,0 +1,12 @@
+{
+  "name": "@anomaloharis/buddy-cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "buddy": "./src/cli.js"
+  },
+  "scripts": {
+    "test": "vitest run"
+  }
+}

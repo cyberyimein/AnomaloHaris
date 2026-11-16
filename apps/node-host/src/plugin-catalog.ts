@@ -289,16 +289,8 @@ export function builtinPluginCatalog(): PluginCatalog {
       // this directory is copied byte-for-byte into the runtime image.
       packageRoot: resolve(REPOSITORY_ROOT, "apps/buddy-bridge/dist"),
       compatibility: "L2",
-      permissions: ["tools.register", "lifecycle.run"],
-      toolNames: [
-        "buddy_status",
-        "buddy_recent_events",
-        "buddy_set_state",
-        "buddy_set_text",
-        "buddy_look",
-        "buddy_set_led",
-        "buddy_request_approval",
-      ],
+      permissions: ["tools.register"],
+      toolNames: ["buddy_capabilities", "buddy_invoke"],
       capabilities: ["buddy"],
     }),
   ]);

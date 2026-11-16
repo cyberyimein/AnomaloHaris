@@ -70,6 +70,7 @@ export class DeterministicToolRuntime implements ToolRuntime {
         ok: result.ok,
         content: result.content,
         data: result.data ?? {},
+        ...(result.image ? { image: result.image } : {}),
       };
     } catch (error) {
       return {
@@ -440,6 +441,8 @@ export function resolveLocalDateTime(value: string, timezone: string, fold: 0 | 
 }
 
 export class PluginToolAdapter implements ToolAdapter {
+  // The adapter dispatches by installed plugin ID and verifies the preset scope itself.
+  readonly alwaysAvailable = true;
   readonly id = "pi-plugin-host";
   readonly priority = 20;
 

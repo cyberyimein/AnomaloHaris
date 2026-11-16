@@ -1,6 +1,7 @@
 export type BuddyDashboardClientOptions = {
   baseUrl: string;
   token?: string;
+  adminToken?: string;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
 };
@@ -25,42 +26,43 @@ export class BuddyDashboardError extends Error {
 export class BuddyDashboardClient {
   private readonly baseUrl: string;
   private readonly token: string;
+  private readonly adminToken: string;
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
 
   constructor(options: BuddyDashboardClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/$/, "");
     this.token = options.token?.trim() ?? "";
-    this.timeoutMs = Math.max(100, options.timeoutMs ?? 1_500);
+    this.adminToken = options.adminToken?.trim() ?? "";
+    this.timeoutMs = Math.max(100, options.timeoutMs ?? 29_000);
     this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
   async status(): Promise<Record<string, unknown>> {
-    const payload = await this.request("/v1/buddy/status");
-    return unwrapStatus(payload);
+    return this.request("/v1/buddy/status");
   }
 
-  async events(limit = 30): Promise<Record<string, unknown>> {
-    const boundedLimit = Math.max(1, Math.min(Math.trunc(limit), 200));
-    return this.request(`/v1/buddy/events?limit=${boundedLimit}`);
+  async observation(): Promise<Record<string, unknown>> {
+    return this.request("/v1/buddy/observation", "GET", undefined, this.adminToken);
   }
 
-  async connect(): Promise<Record<string, unknown>> {
-    return unwrapStatus(await this.request("/v1/buddy/connect", "POST", {}));
+  async invoke(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.request("/v1/buddy/manual", "POST", body, this.adminToken);
   }
 
-  async disconnect(): Promise<Record<string, unknown>> {
-    return unwrapStatus(await this.request("/v1/buddy/disconnect", "POST", {}));
+  async setAgentEnabled(enabled: boolean): Promise<Record<string, unknown>> {
+    return this.request("/v1/buddy/agent", "POST", { enabled }, this.adminToken);
   }
 
-  async setState(body: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return unwrapStatus(await this.request("/v1/buddy/state", "POST", body));
+  async setPermission(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.request("/v1/buddy/permissions", "POST", body, this.adminToken);
   }
 
   private async request(
     path: string,
     method: "GET" | "POST" = "GET",
     body?: Record<string, unknown>,
+    token = this.token,
   ): Promise<Record<string, unknown>> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
@@ -70,7 +72,7 @@ export class BuddyDashboardClient {
         headers: {
           Accept: "application/json",
           ...(body ? { "Content-Type": "application/json" } : {}),
-          ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         ...(body ? { body: JSON.stringify(body) } : {}),
         signal: controller.signal,
@@ -106,11 +108,4 @@ async function readPayload(response: Response): Promise<Record<string, unknown>>
   } catch {
     return { error: text.slice(0, 500) };
   }
-}
-
-function unwrapStatus(payload: Record<string, unknown>): Record<string, unknown> {
-  const status = payload.status;
-  return status && typeof status === "object" && !Array.isArray(status)
-    ? status as Record<string, unknown>
-    : payload;
 }

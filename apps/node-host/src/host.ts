@@ -425,45 +425,49 @@ export async function buildNodeHost(options: NodeHostOptions): Promise<FastifyIn
     }
   });
 
-  app.get("/api/buddy/events", async (request, reply) => {
+  app.get("/api/buddy/observation", async (request, reply) => {
     try {
-      requireManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
+      requireConfiguredBuddyManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
       if (!options.buddy) throw new HostRequestError(503, "buddy_unavailable", "Buddy dashboard is not configured.");
-      const query = request.query as { limit?: string };
-      return reply.send(await options.buddy.events(Number(query.limit ?? "30")));
+      return reply.send(await options.buddy.observation());
     } catch (error) {
       return sendBuddyError(reply, error);
     }
   });
 
-  app.post("/api/buddy/connect", async (request, reply) => {
+  app.post<{ Body: unknown }>("/api/buddy/invoke", async (request, reply) => {
     try {
-      requireManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
-      if (!options.buddy) throw new HostRequestError(503, "buddy_unavailable", "Buddy dashboard is not configured.");
-      return reply.send(await options.buddy.connect());
-    } catch (error) {
-      return sendBuddyError(reply, error);
-    }
-  });
-
-  app.post("/api/buddy/disconnect", async (request, reply) => {
-    try {
-      requireManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
-      if (!options.buddy) throw new HostRequestError(503, "buddy_unavailable", "Buddy dashboard is not configured.");
-      return reply.send(await options.buddy.disconnect());
-    } catch (error) {
-      return sendBuddyError(reply, error);
-    }
-  });
-
-  app.post<{ Body: unknown }>("/api/buddy/state", async (request, reply) => {
-    try {
-      requireManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
+      requireConfiguredBuddyManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
       if (!options.buddy) throw new HostRequestError(503, "buddy_unavailable", "Buddy dashboard is not configured.");
       const body = request.body && typeof request.body === "object" && !Array.isArray(request.body)
         ? request.body as Record<string, unknown>
         : {};
-      return reply.send(await options.buddy.setState(body));
+      return reply.send(await options.buddy.invoke(body));
+    } catch (error) {
+      return sendBuddyError(reply, error);
+    }
+  });
+
+  app.post<{ Body: unknown }>("/api/buddy/agent", async (request, reply) => {
+    try {
+      requireConfiguredBuddyManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
+      if (!options.buddy) throw new HostRequestError(503, "buddy_unavailable", "Buddy dashboard is not configured.");
+      const body = asObject(request.body);
+      if (typeof body.enabled !== "boolean") throw new HostRequestError(400, "invalid_request", "enabled must be a boolean.");
+      return reply.send(await options.buddy.setAgentEnabled(body.enabled));
+    } catch (error) {
+      return sendBuddyError(reply, error);
+    }
+  });
+
+  app.post<{ Body: unknown }>("/api/buddy/permissions", async (request, reply) => {
+    try {
+      requireConfiguredBuddyManagementAccess(request.headers as Record<string, unknown>, options.managementToken);
+      if (!options.buddy) throw new HostRequestError(503, "buddy_unavailable", "Buddy dashboard is not configured.");
+      const body = request.body && typeof request.body === "object" && !Array.isArray(request.body)
+        ? request.body as Record<string, unknown>
+        : {};
+      return reply.send(await options.buddy.setPermission(body));
     } catch (error) {
       return sendBuddyError(reply, error);
     }
@@ -941,6 +945,17 @@ function requireManagementAccess(headers: Record<string, unknown>, configuredTok
   if (!provided || !timingSafeEqual(expectedHash, providedHash)) {
     throw new HostRequestError(403, "forbidden", "Management API requires X-AnomaloHaris-Admin-Token.");
   }
+}
+
+function requireConfiguredBuddyManagementAccess(headers: Record<string, unknown>, configuredToken: string | undefined): void {
+  if (!configuredToken) {
+    throw new HostRequestError(
+      403,
+      "forbidden",
+      "Management API requires ANOMALOHARIS_ADMIN_TOKEN to be configured for Buddy controls.",
+    );
+  }
+  requireManagementAccess(headers, configuredToken);
 }
 
 function pluginStatuses(catalog: PluginCatalog | undefined, plugins: PluginHost | undefined): Array<Record<string, unknown>> {

@@ -1,3 +1,4 @@
+import { isDashboardBuddyTool } from "./buddy-tool-policy.js";
 import type { ToolDefinition } from "@anomaloharis/contracts";
 
 import type { ResourceLoader, ResourceSnapshot } from "./resources.js";
@@ -29,7 +30,7 @@ export class ReplayContextBuilder implements ContextBuilder {
   async build(request: ContextRequest): Promise<BuiltContext> {
     const listed = await this.tools.list(request.toolContext);
     const definitions = request.allowedToolNames
-      ? listed.filter((tool) => request.allowedToolNames?.has(tool.name))
+      ? listed.filter((tool) => request.allowedToolNames?.has(tool.name) || isDashboardBuddyTool(tool))
       : listed;
     const resourceMessages = request.resourceSnapshot
       ? activeResourceMessages(request.resourceSnapshot, request.toolContext, request.bootstrapMessages ?? [])
@@ -195,5 +196,5 @@ export function filterToolDefinitions(
   tools: ToolDefinition[],
   allowedToolNames?: ReadonlySet<string>,
 ): ToolDefinition[] {
-  return allowedToolNames ? tools.filter((tool) => allowedToolNames.has(tool.name)) : tools;
+  return allowedToolNames ? tools.filter((tool) => allowedToolNames.has(tool.name) || isDashboardBuddyTool(tool)) : tools;
 }

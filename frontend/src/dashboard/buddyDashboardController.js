@@ -1,15 +1,6 @@
 import { computed, ref } from "vue";
 
-const POLL_INTERVAL_MS = 10000;
-
-export const BUDDY_STATE_ACTIONS = [
-  { state: "idle", label: "Idle" },
-  { state: "listening", label: "Listen" },
-  { state: "thinking", label: "Think" },
-  { state: "speaking", label: "Speak" },
-  { state: "done", label: "Done" },
-  { state: "stop", label: "Stop" },
-];
+const POLL_INTERVAL_MS = 5000;
 
 export function createBuddyDashboardController({
   requestJson,
@@ -19,65 +10,44 @@ export function createBuddyDashboardController({
   scheduler = globalThis,
 } = {}) {
   const buddyStatus = ref(null);
-  const buddyEvents = ref([]);
-  const eventFilter = ref("");
-  const dashboardStatus = ref("Dashboard idle.");
+  const observation = ref(null);
+  const lastAction = ref(null);
+  const dashboardStatus = ref("Waiting for Buddy.");
   const actionInFlight = ref(false);
+  const statusFresh = ref(false);
   let pollTimer = null;
+  let snapshotSequence = 0;
+  let activeDeviceId;
+  let pollInFlight = false;
 
   const statusLabel = computed(() => {
-    if (!buddyStatus.value) return "Unknown";
-    if (buddyStatus.value.connected) return "Connected";
-    if (buddyStatus.value.listening) return "Listening";
-    return "Offline";
+    if (!buddyStatus.value || !statusFresh.value) return "Unknown";
+    return buddyStatus.value.connected ? "Online" : "Offline";
   });
-  const statusCards = computed(() => {
-    const status = buddyStatus.value || {};
-    return [
-      { label: "Connection", value: statusLabel.value },
-      { label: "Transport", value: status.transport || "none" },
-      { label: "Client", value: status.client_address || status.tcp_client_ip || "none" },
-      { label: "Audio", value: status.audio_input_active ? "active" : "idle" },
-      { label: "Queued", value: String(status.queued_audio_turns ?? 0) },
-      { label: "Events", value: String(status.recent_event_count ?? buddyEvents.value.length) },
-    ];
-  });
-  const filteredEvents = computed(() => {
-    const query = eventFilter.value.trim().toLowerCase();
-    if (!query) return buddyEvents.value;
-    return buddyEvents.value.filter((event) =>
-      [event?.type, event?.raw, event?.received_at, JSON.stringify(event?.payload || {})]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase()
-        .includes(query),
-    );
-  });
+  const capabilities = computed(() => buddyStatus.value?.capabilities || []);
 
   async function refresh() {
+    if (actionInFlight.value) return;
     actionInFlight.value = true;
-    dashboardStatus.value = "Refreshing Buddy dashboard...";
+    dashboardStatus.value = "Checking Buddy...";
     try {
-      await loadSnapshot();
-      clearAccessError();
-      dashboardStatus.value = updatedMessage(now());
+      reportSnapshotResult(await loadSnapshot());
     } catch (error) {
-      markAccessError(error);
-      dashboardStatus.value = `Dashboard refresh failed: ${formatError(error)}`;
+      markSnapshotUnavailable(error);
     } finally {
       actionInFlight.value = false;
     }
   }
 
   async function poll() {
-    if (actionInFlight.value) return;
+    if (actionInFlight.value || pollInFlight) return;
+    pollInFlight = true;
     try {
-      await loadSnapshot();
-      clearAccessError();
-      dashboardStatus.value = updatedMessage(now());
+      reportSnapshotResult(await loadSnapshot());
     } catch (error) {
-      markAccessError(error);
-      dashboardStatus.value = `Dashboard refresh failed: ${formatError(error)}`;
+      markSnapshotUnavailable(error);
+    } finally {
+      pollInFlight = false;
     }
   }
 
@@ -90,31 +60,57 @@ export function createBuddyDashboardController({
     if (pollTimer === null) return;
     scheduler.clearInterval(pollTimer);
     pollTimer = null;
+    snapshotSequence += 1;
   }
 
-  async function connect() {
-    await runAction("Connecting Buddy...", async () => {
-      buddyStatus.value = await requestJson("/api/buddy/connect", {
+  async function setPermission(capability, allowed) {
+    const deviceId = buddyStatus.value?.deviceId;
+    if (!deviceId || actionInFlight.value) return;
+    await runAction(`${allowed ? "Allowing" : "Revoking"} ${capability}...`, async () => {
+      const response = await requestJson("/api/buddy/permissions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ deviceId, capability, allowed }),
       });
+      if (buddyStatus.value?.deviceId !== deviceId) return;
+      if (Array.isArray(response.capabilities)) {
+        buddyStatus.value = { ...buddyStatus.value, capabilities: response.capabilities };
+      }
+      if (!allowed && ["camera.capture", "head.observe"].includes(capability)) {
+        observation.value = null;
+        if (lastAction.value?.result?.image) lastAction.value = null;
+      }
     });
   }
 
-  async function disconnect() {
-    await runAction("Disconnecting Buddy...", async () => {
-      buddyStatus.value = await requestJson("/api/buddy/disconnect", { method: "POST" });
+  async function setAgentEnabled(enabled) {
+    if (actionInFlight.value) return;
+    await runAction(`${enabled ? "Starting" : "Stopping"} Buddy agent...`, async () => {
+      const response = await requestJson("/api/buddy/agent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
+      });
+      if (typeof response.agentEnabled !== "boolean") {
+        throw new Error("Buddy agent response did not include agentEnabled.");
+      }
+      if (buddyStatus.value) {
+        buddyStatus.value = { ...buddyStatus.value, agentEnabled: response.agentEnabled };
+      }
     });
   }
 
-  async function sendState(state) {
-    await runAction(`Sending ${state} state...`, async () => {
-      buddyStatus.value = await requestJson("/api/buddy/state", {
+  async function invoke(capability, args = {}) {
+    const deviceId = buddyStatus.value?.deviceId;
+    if (!deviceId || actionInFlight.value) return;
+    await runAction(`Running ${capability}...`, async () => {
+      const response = await requestJson("/api/buddy/invoke", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ state }),
+        body: JSON.stringify({ deviceId, capability, args }),
       });
+      if (buddyStatus.value?.deviceId !== deviceId) return;
+      lastAction.value = { capability, requestId: response.requestId, result: response.result };
     });
   }
 
@@ -123,28 +119,70 @@ export function createBuddyDashboardController({
   }
 
   async function loadSnapshot() {
-    const [status, events] = await Promise.all([
-      requestJson("/api/buddy/status"),
-      requestJson("/api/buddy/events?limit=30"),
-    ]);
+    const sequence = ++snapshotSequence;
+    let status;
+    try {
+      status = await requestJson("/api/buddy/status");
+    } catch (error) {
+      return { sequence, error };
+    }
+    if (sequence !== snapshotSequence) return { sequence, stale: true };
+
+    statusFresh.value = true;
     buddyStatus.value = status;
-    buddyEvents.value = events.events || [];
+    const deviceId = status.deviceId;
+    if (activeDeviceId !== deviceId) {
+      observation.value = null;
+      lastAction.value = null;
+      activeDeviceId = deviceId;
+    }
+    if (!deviceId) {
+      observation.value = null;
+      return { sequence };
+    }
+
+    try {
+      const response = await requestJson("/api/buddy/observation");
+      if (sequence !== snapshotSequence || buddyStatus.value?.deviceId !== deviceId) return { sequence, stale: true };
+      const candidate = response.observation;
+      observation.value = candidate?.deviceId === deviceId ? candidate : null;
+    } catch {
+      if (sequence === snapshotSequence && buddyStatus.value?.deviceId === deviceId) observation.value = null;
+    }
+    return { sequence };
   }
 
-  async function loadEvents() {
-    const payload = await requestJson("/api/buddy/events?limit=30");
-    buddyEvents.value = payload.events || [];
+  function reportSnapshotResult(result) {
+    if (result.sequence !== snapshotSequence) return false;
+    if (result.error) {
+      markSnapshotUnavailable(result.error);
+      return false;
+    }
+    clearAccessError();
+    dashboardStatus.value = updatedMessage(now());
+    return true;
+  }
+
+  function markSnapshotUnavailable(error) {
+    statusFresh.value = false;
+    observation.value = null;
+    lastAction.value = null;
+    markAccessError(error);
+    dashboardStatus.value = `Refresh failed: ${formatError(error)}`;
   }
 
   async function runAction(progressMessage, action) {
+    if (actionInFlight.value) return;
     actionInFlight.value = true;
     dashboardStatus.value = progressMessage;
     try {
       await action();
-      await loadEvents();
-      clearAccessError();
-      dashboardStatus.value = updatedMessage(now());
+      reportSnapshotResult(await loadSnapshot());
     } catch (error) {
+      const snapshot = await loadSnapshot();
+      if (snapshot.sequence === snapshotSequence && snapshot.error) {
+        markSnapshotUnavailable(snapshot.error);
+      }
       markAccessError(error);
       dashboardStatus.value = formatError(error);
     } finally {
@@ -155,110 +193,27 @@ export function createBuddyDashboardController({
   return {
     state: {
       buddyStatus,
-      buddyEvents,
-      eventFilter,
+      observation,
+      lastAction,
       dashboardStatus,
       actionInFlight,
+      statusFresh,
       statusLabel,
-      statusCards,
-      filteredEvents,
+      capabilities,
     },
     refresh,
     poll,
     startPolling,
     stopPolling,
-    connect,
-    disconnect,
-    sendState,
+    setPermission,
+    setAgentEnabled,
+    invoke,
     notify,
   };
 }
 
-export function buddyEventDetails(event) {
-  return flattenEventDetails(event?.payload || {});
-}
-
-export function flattenEventDetails(value, path = [], details = []) {
-  if (details.length >= 48) return details;
-  if (Array.isArray(value)) {
-    if (!value.length) {
-      details.push({ label: eventDetailLabel(path), value: "None" });
-    } else if (value.every((item) => item === null || typeof item !== "object")) {
-      details.push({ label: eventDetailLabel(path), value: value.map(formatEventDetailValue).join(", ") });
-    } else {
-      value.forEach((item, index) => flattenEventDetails(item, [...path, String(index + 1)], details));
-    }
-    return details;
-  }
-  if (value && typeof value === "object") {
-    const entries = Object.entries(value);
-    if (!entries.length && path.length) details.push({ label: eventDetailLabel(path), value: "None" });
-    entries.forEach(([key, item]) => flattenEventDetails(item, [...path, key], details));
-    return details;
-  }
-  details.push({ label: eventDetailLabel(path), value: formatEventDetailValue(value) });
-  return details;
-}
-
-export function formatBuddyEventTime(value, currentTime = Date.now()) {
-  if (!value) return "Unknown time";
-  const absolute = formatDateTime(value);
-  const relative = formatRelativeTime(value, currentTime);
-  return relative ? `${absolute} · ${relative}` : absolute;
-}
-
-function eventDetailLabel(path) {
-  if (!path.length) return "Detail";
-  return path
-    .map((part) =>
-      /^\d+$/.test(part)
-        ? `Item ${part}`
-        : String(part).replaceAll("_", " ").replace(/\b\w/g, (char) => char.toUpperCase()),
-    )
-    .join(" › ");
-}
-
-function formatEventDetailValue(value) {
-  if (isIsoDateTime(value)) return formatDateTime(value);
-  if (typeof value === "boolean") return value ? "Yes" : "No";
-  if (value === null || value === undefined || value === "") return "—";
-  return String(value);
-}
-
-function isIsoDateTime(value) {
-  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value);
-}
-
-function formatDateTime(value) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value);
-  return date.toLocaleString([], {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    timeZoneName: "short",
-  });
-}
-
-function formatRelativeTime(value, currentTime) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  const deltaSeconds = Math.round((date.getTime() - currentTime) / 1000);
-  const absoluteSeconds = Math.abs(deltaSeconds);
-  if (absoluteSeconds < 45) return "just now";
-  const units = [["day", 86400], ["hour", 3600], ["minute", 60]];
-  const [unit, seconds] = units.find(([, size]) => absoluteSeconds >= size) || ["minute", 60];
-  return new Intl.RelativeTimeFormat(undefined, { numeric: "auto" }).format(
-    Math.round(deltaSeconds / seconds),
-    unit,
-  );
-}
-
 function updatedMessage(date) {
-  return `Updated ${date.toLocaleTimeString()}`;
+  return `Updated ${date.toLocaleTimeString()}.`;
 }
 
 function formatError(error) {

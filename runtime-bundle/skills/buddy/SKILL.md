@@ -1,25 +1,12 @@
 ---
 name: buddy
-description: Control the optional Buddy device through the isolated Buddy backend.
-requires_plugins: buddy-bridge
+description: Observe the room and operate the user's independent LAN robot.
 ---
 
-# Buddy Control
+The Buddy page must have Agent access started before tools are available.
 
-Use this skill only when the current Preset Model includes the `buddy-bridge`
-plugin and the user asks for device presence, short status, movement, LEDs,
-recent device events, or an explicit approval prompt.
+Call `buddy_capabilities` to discover the connected device, installed actions, input schemas, `state.lighting`, and dashboard grants. Only call `buddy_invoke` when that capability has both `allowed: true` and `effectiveAllowed: true`; declared dependencies need grants too. A permission denial is authoritative: do not retry, substitute another route, or bypass it. Tell the user which grant they can enable on the Buddy page.
 
-The tools are a remote control surface, not direct hardware access:
+When `led.express` is present and granted, use the rear light bars as one preferred, low-key feedback channel for meaningful moments. Choose `listening`, `thinking`, or `speaking` for the corresponding conversational intent; choose `happy`, `curious`, `concerned`, or `calm` when that emotion fits. Respect the discovered schema and defaults. Check `state.lighting` first and preserve an existing user-set manual override. Do not call the light tool on every turn. If `led.resume` is separately granted, use its zero-argument call to return to automatic lifecycle lighting after your own temporary cue; otherwise let the cue expire; do not clear a pre-existing user override. Buddy body feedback is independent behavior; do not automatically mirror generic Agent or Codex thinking/speaking hooks.
 
-- `buddy_status` checks whether the independent Buddy backend and device are available.
-- `buddy_recent_events` reads sanitized touch, heartbeat, connection, and approval events.
-- `buddy_set_state` and `buddy_set_text` update the device's visual status.
-- `buddy_look` and `buddy_set_led` control lightweight physical cues only.
-- `buddy_request_approval` waits for an explicit user decision when approval is enabled.
-
-Do not claim that a device action succeeded until the tool returns success. If
-the backend is unavailable, continue the Agent task without repeatedly retrying
-and explain the limitation briefly. Never request or expose serial details,
-service tokens, full prompts, tool arguments, or raw device logs. Audio,
-vision, camera, and media processing are not part of this skill.
+For questions about the room, request a fresh observation. Answer from the returned image and specify when framing or detail is insufficient. A movement receipt alone provides no visual evidence. Report disconnection, denied actions and ambiguous timeouts accurately. A timed-out physical action may already have occurred.

@@ -21,9 +21,7 @@ Environment:
   CONTAINER_NAME          Remote container name. Default: buddy-service
   HOST_PORT               Host port for the Buddy HTTP API. Default: 8765
   APP_PORT                Container Buddy HTTP port. Default: 8765
-  DEVICE_HOST_PORT        Host port for the device TCP listener. Default: 8787
-  DEVICE_APP_PORT         Container device TCP port. Default: 8787
-  PUBLISH_DEVICE_PORT     Publish the device port. Default: 1
+  REMOTE_DATA_DIR         Persistent host directory for capability permissions. Default: REMOTE_DIR/data
   START_CONTAINER_SYSTEM  Start Apple container system before deploy. Default: 1
   REMOTE_CONTAINER_CLI    Remote Apple container CLI path. Default: container
   CONTAINER_NETWORK       Shared network with AnomaloHaris. Default: anomaloharis-external
@@ -88,9 +86,7 @@ REMOTE_CONTAINER_CLI="${REMOTE_CONTAINER_CLI:-container}"
 CONTAINER_NAME="${CONTAINER_NAME:-buddy-service}"
 HOST_PORT="${HOST_PORT:-8765}"
 APP_PORT="${APP_PORT:-8765}"
-DEVICE_HOST_PORT="${DEVICE_HOST_PORT:-8787}"
-DEVICE_APP_PORT="${DEVICE_APP_PORT:-8787}"
-PUBLISH_DEVICE_PORT="${PUBLISH_DEVICE_PORT:-1}"
+REMOTE_DATA_DIR="${REMOTE_DATA_DIR:-}"
 START_CONTAINER_SYSTEM="${START_CONTAINER_SYSTEM:-1}"
 CONTAINER_NETWORK="${CONTAINER_NETWORK:-anomaloharis-external}"
 ENV_FILE="${ENV_FILE:-$repo_root/runtime-bundle/deploy/buddy-service.container.env}"
@@ -123,12 +119,11 @@ ssh "${ssh_args[@]}" "$ssh_target" "bash -s" -- \
     "$CONTAINER_NAME" \
     "$HOST_PORT" \
     "$APP_PORT" \
-    "$DEVICE_HOST_PORT" \
-    "$DEVICE_APP_PORT" \
-    "$PUBLISH_DEVICE_PORT" \
     "$REMOTE_ENV_FILE" \
     "$START_CONTAINER_SYSTEM" \
-    "$CONTAINER_NETWORK" <<'REMOTE_SCRIPT'
+    "$CONTAINER_NETWORK" \
+    "$REMOTE_DATA_DIR" \
+    "$REMOTE_DIR" <<'REMOTE_SCRIPT'
 set -Eeuo pipefail
 
 container_cli="$1"
@@ -137,12 +132,19 @@ image_ref="$3"
 container_name="$4"
 host_port="$5"
 app_port="$6"
-device_host_port="$7"
-device_app_port="$8"
-publish_device_port="$9"
-remote_env_file="${10}"
-start_container_system="${11}"
-container_network="${12}"
+remote_env_file="$7"
+start_container_system="$8"
+container_network="$9"
+remote_data_dir="${10}"
+remote_dir="${11}"
+
+if [[ -z "$remote_data_dir" ]]; then
+    remote_data_dir="$(cd "$remote_dir" && pwd -P)/data"
+elif [[ "$remote_data_dir" != /* ]]; then
+    echo "REMOTE_DATA_DIR must be an absolute path on the remote host" >&2
+    exit 1
+fi
+mkdir -p "$remote_data_dir"
 
 if [[ "$start_container_system" == "1" ]]; then
     "$container_cli" system start >/dev/null 2>&1 || true
@@ -167,9 +169,7 @@ remove_existing_container() {
 
 run_args=(run --detach --name "$container_name" --network "$container_network")
 run_args+=(--publish "${host_port}:${app_port}")
-if [[ "$publish_device_port" == "1" ]]; then
-    run_args+=(--publish "${device_host_port}:${device_app_port}")
-fi
+run_args+=(--volume "${remote_data_dir}:/data")
 run_args+=(--env-file "$remote_env_file" "$image_ref")
 
 load_image

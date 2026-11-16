@@ -19,3 +19,5 @@ data/
 dist/
 build/
 *.log
+
+firmware/stackchan/config.py

@@ -20,6 +20,7 @@ export type ModelMessage = {
   name?: string;
   tool_call_id?: string;
   tool_calls?: ToolCall[];
+  image?: ToolResult["image"];
   [key: string]: unknown;
 };
 

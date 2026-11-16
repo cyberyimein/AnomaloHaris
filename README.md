@@ -33,7 +33,7 @@ These goals share one runtime: agent-harness experiments can be tested through t
 ├── apps/node-host/  Node.js Host, AgentCore, Provider, Session, and PluginHost
 ├── packages/        contracts and shared TypeScript packages
 ├── runtime-bundle/   runtime resources, deployment files, and the committed frontend bundle
-├── apps/buddy-service/ Node.js Buddy device service, Hook Relay, and approvals
+├── apps/buddy-service/ LAN robot gateway and persistent capability grants
 ├── buddy-backend/   firmware/protocol reference only
 ├── frontend/        Vue 3 and Vite source
 ├── .env.example     Shared runtime configuration template
@@ -62,7 +62,7 @@ Install the workspace dependencies and build the Node Host plus frontend:
 
 ```bash
 npm install
-npm run build --workspaces
+npm run build --workspaces --if-present
 ```
 
 Start the Node Host from the repository root:
@@ -136,7 +136,7 @@ All runtime configuration comes from the root `.env`. The most commonly used var
 | `ANOMALOHARIS_PLUGIN_TIMEOUT_MS` | Plugin hook/tool timeout | `30000` |
 | `ANOMALOHARIS_BUDDY_SERVICE_URL` | Optional Buddy backend URL used by the Buddy dashboard proxy and `buddy-bridge` | `http://127.0.0.1:8765` |
 | `ANOMALOHARIS_BUDDY_SERVICE_TOKEN` | Token forwarded to the independent Buddy service by the dashboard proxy and allowlisted child plugin | unset |
-| `ANOMALOHARIS_BUDDY_REQUEST_TIMEOUT_MS` | Buddy bridge request timeout | `1500` |
+| `ANOMALOHARIS_BUDDY_REQUEST_TIMEOUT_MS` | Buddy bridge request timeout | `29000` |
 | `ANOMALOHARIS_AGENT_PROMPT_PROFILE` | Default prompt profile | `agent` |
 | `WEB_TOOLS_ENABLED` | Publishes DuckDuckGo search and Markdown fetch tools | `true` |
 | `ANOMALOHARIS_DATA_DIR` | Persistent SQLite data directory | `./data` |
@@ -145,14 +145,29 @@ See [`.env.example`](.env.example) for the complete template. Empty optional val
 
 ### Optional capability plugins
 
-The Node Host does not embed Buddy hardware, audio, or vision runtimes. Buddy
-runs as an independent optional Node service in `apps/buddy-service/`. The UI's
-Buddy tab is an admin-only control-plane proxy for status, events, connection,
-and lightweight state commands; it is not a model-visible ToolRuntime. The
-Node Host uses the explicitly allowlisted `@anomaloharis/buddy-bridge` plugin and
-the `runtime-bundle/skills/buddy` Skill only when an Agent Preset Model binds
-that plugin.
-Audio, vision, camera, and media processing remain outside this integration.
+The StackChan runs [BuddyNeko Python firmware](https://github.com/cyberyimein/buddy-neko).
+Firmware is developed and released in that repository; AnomaloHaris retains a
+[pinned integration snapshot](firmware/stackchan/) whose upstream commit and
+runtime hashes are recorded in [UPSTREAM.json](firmware/stackchan/UPSTREAM.json).
+Configure its fixed LAN address and shared device credential on the independent Buddy service.
+Open the Buddy dashboard to check the handshake, manually operate the installed
+capabilities, inspect the latest observation and grant capabilities to the agent.
+Manual operations use the server-side administration credential and leave the
+agent grants unchanged.
+The robot reports an independent lifecycle through `state.mode`. The Buddy page
+shows its current mode and action, with direct wake/sleep controls. Software
+sleep keeps the network API available for remote wake while disabling servo
+power and dimming the display to show its sleeping state. Agent activation is a separate service setting.
+ Grants are stored per device and checked
+on every invocation. The [Buddy CLI](apps/buddy-cli/) uses the same service API.
+
+For chat, configure `ANOMALOHARIS_BUDDY_SERVICE_URL` and its service credential
+on the Node Host, then start Agent access on the Buddy page. The Host adds
+`buddy_capabilities` and `buddy_invoke` to ordinary preset chats while the
+service is enabled. Capability grants remain individually controlled on the
+page. Activation persists across service restarts and navigating away from the
+page. Stop blocks subsequent agent invocations. Models need image input for
+camera observations. Manual administration remains available independently.
 
 Start the Buddy service separately when a device is available:
 
@@ -164,8 +179,8 @@ npm run start --workspace @anomaloharis/buddy-service
 For an Apple Container deployment, build and deploy the independent service
 on the same `anomaloharis-external` network as AnomaloHaris. Copy
 `runtime-bundle/deploy/buddy-service.container.env.example` to the ignored
-`runtime-bundle/deploy/buddy-service.container.env`, set both service tokens
-and the device transport values, then run:
+`runtime-bundle/deploy/buddy-service.container.env`, set the device URL and distinct device, service
+and administration credentials, then run:
 
 ```bash
 IMAGE_NAME=buddy-service \
@@ -180,19 +195,10 @@ runtime-bundle/scripts/deploy_buddy_container.sh \
 The AnomaloHaris env file must use the `anomaloharis-external` network gateway for
 the published Buddy port (currently `ANOMALOHARIS_BUDDY_SERVICE_URL=http://192.168.67.1:8765`;
 confirm the gateway with `container network inspect anomaloharis-external`) and
-the matching `ANOMALOHARIS_BUDDY_SERVICE_TOKEN`. The Buddy deployment publishes TCP
-`8787` for a remote device by default.
-
-Set `ANOMALOHARIS_PI_EXTENSIONS_ENABLED=true` in the Node Host and keep the Buddy
-service on loopback for local development. Public Buddy deployments require
-separate `BUDDY_SERVICE_TOKEN` and `BUDDY_HOOK_TOKEN` values. The Node service
-owns Call Buddy transport, Hook Relay state, and approvals; the Agent Host only
-owns the versioned bridge plugin.
-
-The service auto-connects on startup. Without a serial port it opens a local
-Buddy TCP listener on `127.0.0.1:8766`; set `BUDDY_TCP_HOST` and
-`BUDDY_TCP_CLIENT_IP` explicitly for a remote device. A non-loopback TCP
-listener is rejected unless the client IP allowlist is configured.
+the matching `ANOMALOHARIS_BUDDY_SERVICE_TOKEN`. Configure the dashboard's
+separate `BUDDY_ADMIN_TOKEN` on the Node Host and the Buddy service. The robot accepts
+connections from the service over Wi-Fi. Enable
+`ANOMALOHARIS_PI_EXTENSIONS_ENABLED=true` for agent tool discovery.
 
 ## Agent runtime
 
@@ -426,7 +432,7 @@ removed. Python execution is available only through the explicitly configured ex
 service described above. The active Buddy service is Node-only under `apps/buddy-service/`; the root
 `buddy-backend/` directory is retained only for firmware/protocol notes. Neither is imported by
 the Node Host or copied into the Node production image. The optional Node bridge is allowlisted
-separately and fails open when the Buddy service is absent.
+separately and reports a tool error when the Buddy service is absent.
 
 ## Apple Container deployment
 
@@ -461,15 +467,16 @@ Run the Node workspace checks:
 
 ```bash
 npm install
-npm run build --workspaces
+npm run build --workspaces --if-present
 npm --prefix apps/node-host test
 npm --prefix frontend test
 ```
 
 The Node tests cover the agent lifecycle, API routes, provider tool serialization, Preset Models,
-plugin loading, browser bridge, resources, frontend projections, and the Buddy service/relay. The
-legacy Python and hardware files are historical reference material and are not required to start
-the Node production image.
+plugin loading, browser bridge, resources, frontend projections, and the Buddy service and CLI.
+The Buddy dashboard is checked with [Playwright scripts](scripts/qa/README.md).
+The pinned Python firmware has separate hardware-independent tests; the Node production image
+connects to the device over its API and does not run the firmware itself.
 
 ## Security notes
 

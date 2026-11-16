@@ -12,6 +12,7 @@
     "migrate:naming": "node dist/migrate-anomaloharis-naming.js"
   },
   "dependencies": {
+    "@anomaloharis/buddy-bridge": "0.1.0",
     "@anomaloharis/contracts": "0.1.0",
     "@anomaloharis/workflow-runtime": "0.1.0",
     "@fastify/static": "^10.1.3",

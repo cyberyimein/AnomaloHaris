@@ -1,5 +1,7 @@
 # Buddy / Codex 钩子状态机（Buddy 后端可选服务）
 
+> 历史设计：独立转台固件和能力授权已取代本文的宠物与 Hook 接口。当前启动方式见仓库 README 的 Optional capability plugins。
+
 > 状态：`Implemented in apps/buddy-service; optional`
 > 更新时间：2026-08-23  
 > 适用范围：Codex → Buddy 后端 Hook Relay → Buddy 的协议和状态机；Node Agent 通过独立 bridge plugin 使用同一服务。

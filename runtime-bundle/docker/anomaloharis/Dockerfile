@@ -12,6 +12,9 @@ COPY apps/workflow-runtime/package.json apps/workflow-runtime/tsconfig.json ./ap
 COPY apps/buddy-bridge/package.json apps/buddy-bridge/tsconfig.json ./apps/buddy-bridge/
 COPY apps/buddy-service/package.json apps/buddy-service/tsconfig.json ./apps/buddy-service/
 
+COPY apps/buddy-cli/package.json ./apps/buddy-cli/
+COPY apps/buddy-cli/src/cli.js ./apps/buddy-cli/src/cli.js
+
 RUN npm ci --ignore-scripts
 
 COPY packages/contracts ./packages/contracts
@@ -23,8 +26,8 @@ COPY runtime-bundle/config ./runtime-bundle/config
 COPY runtime-bundle/skills ./runtime-bundle/skills
 RUN npm run build --workspace @anomaloharis/contracts \
     && npm run build --workspace @anomaloharis/workflow-runtime \
-    && npm run build --workspace @anomaloharis/node-host \
     && npm run build --workspace @anomaloharis/buddy-bridge \
+    && npm run build --workspace @anomaloharis/node-host \
     && npm run build --workspace frontend
 
 FROM node:22-bookworm-slim AS runtime
@@ -47,6 +50,7 @@ COPY --from=frontend /src/apps/node-host/package.json ./apps/node-host/package.j
 COPY --from=frontend /src/apps/node-host/dist ./apps/node-host/dist
 COPY --from=frontend /src/apps/workflow-runtime/package.json ./apps/workflow-runtime/package.json
 COPY --from=frontend /src/apps/workflow-runtime/dist ./apps/workflow-runtime/dist
+COPY --from=frontend /src/apps/buddy-cli ./apps/buddy-cli
 COPY --from=frontend /src/apps/buddy-bridge/package.json ./apps/buddy-bridge/package.json
 COPY --from=frontend /src/apps/buddy-bridge/dist ./apps/buddy-bridge/dist
 COPY --from=frontend /src/apps/buddy-service/package.json ./apps/buddy-service/package.json

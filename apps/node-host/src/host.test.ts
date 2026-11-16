@@ -550,10 +550,10 @@ describe("Node Host", () => {
   it("keeps Buddy dashboard control behind management access and proxies only allowlisted operations", async () => {
     const buddy = {
       status: async () => ({ connected: true, transport: "tcp" }),
-      events: async () => ({ events: [] }),
-      connect: async () => ({ connected: true }),
-      disconnect: async () => ({ connected: false }),
-      setState: async (body: Record<string, unknown>) => ({ state: body.state }),
+      observation: async () => ({ observation: { requestId: "obs-1", result: { image: { mimeType: "image/jpeg", data: "abc" } } } }),
+      invoke: async (body: Record<string, unknown>) => ({ requestId: "req-1", capability: body.capability }),
+      setAgentEnabled: async (enabled: boolean) => ({ agentEnabled: enabled }),
+      setPermission: async (body: Record<string, unknown>) => ({ capability: body.capability, allowed: body.allowed }),
     } as unknown as BuddyDashboardClient;
     const app = await makeApp([], undefined, undefined, undefined, undefined, "secret", undefined, "anomaloharis@1", undefined, buddy);
     apps.push(app);
@@ -561,13 +561,53 @@ describe("Node Host", () => {
     expect((await app.inject({ method: "GET", url: "/api/buddy/status" })).statusCode).toBe(403);
     const status = await app.inject({ method: "GET", url: "/api/buddy/status", headers: { "x-anomaloharis-admin-token": "secret" } });
     expect(status.json()).toEqual({ connected: true, transport: "tcp" });
-    const state = await app.inject({
-      method: "POST",
-      url: "/api/buddy/state",
-      headers: { "x-anomaloharis-admin-token": "secret" },
-      payload: { state: "thinking" },
+    expect((await app.inject({ method: "POST", url: "/api/buddy/agent", payload: { enabled: true } })).statusCode).toBe(403);
+    const activation = await app.inject({
+      method: "POST", url: "/api/buddy/agent",
+      headers: { "x-anomaloharis-admin-token": "secret" }, payload: { enabled: true },
     });
-    expect(state.json()).toEqual({ state: "thinking" });
+    expect(activation.json()).toEqual({ agentEnabled: true });
+    expect((await app.inject({
+      method: "POST", url: "/api/buddy/agent",
+      headers: { "x-anomaloharis-admin-token": "secret" }, payload: { enabled: "yes" },
+    })).statusCode).toBe(400);
+    const legacyState = await app.inject({ method: "POST", url: "/api/buddy/state" });
+    expect(legacyState.statusCode).toBe(404);
+
+    const anonymousObservation = await app.inject({ method: "GET", url: "/api/buddy/observation" });
+    expect(anonymousObservation.statusCode).toBe(403);
+
+    const observation = await app.inject({
+      method: "GET",
+      url: "/api/buddy/observation",
+      headers: { "x-anomaloharis-admin-token": "secret" },
+    });
+    expect(observation.json()).toEqual({ observation: { requestId: "obs-1", result: { image: { mimeType: "image/jpeg", data: "abc" } } } });
+
+    const invoke = await app.inject({
+      method: "POST",
+      url: "/api/buddy/invoke",
+      headers: { "x-anomaloharis-admin-token": "secret" },
+      payload: { capability: "camera.capture", args: {} },
+    });
+    expect(invoke.json()).toEqual({ requestId: "req-1", capability: "camera.capture" });
+
+    const permission = await app.inject({
+      method: "POST",
+      url: "/api/buddy/permissions",
+      headers: { "x-anomaloharis-admin-token": "secret" },
+      payload: { capability: "camera.capture", allowed: true },
+    });
+    expect(permission.json()).toEqual({ capability: "camera.capture", allowed: true });
+
+    const unconfiguredApp = await makeApp([], undefined, undefined, undefined, undefined, undefined, undefined, "anomaloharis@1", undefined, buddy);
+    apps.push(unconfiguredApp);
+    const unconfiguredPermission = await unconfiguredApp.inject({
+      method: "POST",
+      url: "/api/buddy/permissions",
+      payload: { capability: "camera.capture", allowed: true },
+    });
+    expect(unconfiguredPermission.statusCode).toBe(403);
   });
 
   it("serves Python artifacts only through signed session-bound URLs", async () => {
